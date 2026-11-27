@@ -7,7 +7,7 @@ Three static Go binaries. rox and rix replace the Python `rox` script; rux runs 
 
 - **rux** is a multi-agent harness on rox and rix. `rux` opens it: you talk to a lead agent that starts sub-agents, each in its own rox guest, and every agent's conversation is live in one window. Agents run on Claude (Anthropic API) or any OpenAI-compatible model, and model keys stay with rix on your machine. `rux claude` makes Claude Code itself the lead, with sub-agents in Rex panes. `rux serve` runs threads you drive from your phone; a thread's guest is stopped when it's been idle and started again by the next message. rux stores no credentials: it gets every one from rix. See [docs/rux.md](docs/rux.md).
 
-rox works without rix. With rix on `PATH`, rox calls it at fixed points in a guest's life, and rix reaches guests only through `rox exec`.
+rox works without rix. With rix on `PATH`, rox calls it at fixed points in a guest's life, and rix reaches guests only through `rox exec`. The full rox reference is [docs/rox.md](docs/rox.md).
 
 ## Install
 
