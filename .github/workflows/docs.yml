@@ -1,4 +1,4 @@
-# Builds README.md and docs/*.md into a Starlight (Astro) site in site/. Pull requests that touch
+# Builds the landing page (site/src/landing) and docs/**/*.md into a Starlight (Astro) site in site/. Pull requests that touch
 # the docs only build it; a push to main also deploys it to GitHub Pages.
 # One-time setup: Settings -> Pages -> Source: GitHub Actions.
 name: Docs
@@ -6,9 +6,9 @@ name: Docs
 on:
   push:
     branches: [main]
-    paths: [README.md, docs/**, site/**, .github/workflows/docs.yml]
+    paths: [docs/**, site/**, .github/workflows/docs.yml]
   pull_request:
-    paths: [README.md, docs/**, site/**, .github/workflows/docs.yml]
+    paths: [docs/**, site/**, .github/workflows/docs.yml]
   workflow_dispatch:
 
 permissions:

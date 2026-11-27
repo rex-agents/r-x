@@ -1,0 +1,84 @@
+---
+title: r-x
+description: Isolated agent VMs, their credentials, and a multi-agent harness.
+template: splash
+editUrl: false
+hero:
+  tagline: Run coding agents in isolated VMs, keep their credentials off the guest, and orchestrate many of them from one window.
+  actions:
+    - text: Install
+      link: __BASE__/getting-started/installation/
+      icon: right-arrow
+    - text: Quick start
+      link: __BASE__/getting-started/quick-start/
+      variant: minimal
+---
+
+import { Icon } from '@astrojs/starlight/components';
+
+<div class="landing-cards">
+
+<div class="landing-card rux">
+<span class="icon"><Icon name="rocket" size="1.4rem" /></span>
+
+### [rux](__BASE__/rux/)
+A multi-agent harness. Talk to a lead agent that starts sub-agents, each in its own guest, with every conversation live in one window.
+
+- [Overview](__BASE__/rux/)
+- [Lead and sub-agents](__BASE__/rux/lead-and-sub-agents/)
+- [Models](__BASE__/rux/models/)
+- [rux claude](__BASE__/rux/rux-claude/)
+- [rux serve](__BASE__/rux/serve/)
+</div>
+
+<div class="landing-card rix">
+<span class="icon"><Icon name="seti:lock" size="1.4rem" /></span>
+
+### [rix](__BASE__/rix/)
+Secrets and settings for agents and Git. Credentials stay on your machine and reach a guest only when it needs them.
+
+- [Overview](__BASE__/rix/)
+- [Credentials](__BASE__/rix/credentials/)
+- [Git keys](__BASE__/rix/git-keys/)
+- [Agent setup sync](__BASE__/rix/agent-setup-sync/)
+- [Security model](__BASE__/rix/security-model/)
+</div>
+
+<div class="landing-card rox">
+<span class="icon"><Icon name="laptop" size="1.4rem" /></span>
+
+### [rox](__BASE__/rox/)
+Disposable guests on Apple container, Docker, Podman, Tart, Fly.io or Railway, wired to Rex and Tailscale.
+
+- [Overview](__BASE__/rox/)
+- [Creating guests](__BASE__/rox/creating-guests/)
+- [Guests and backends](__BASE__/rox/guests-and-backends/)
+- [Templates](__BASE__/rox/templates/)
+- [Remote hosts](__BASE__/rox/remote-hosts/)
+</div>
+
+<div class="landing-card start wide">
+<div>
+<span class="icon"><Icon name="terminal" size="1.4rem" /></span>
+
+
+### Get started
+Install the three binaries with Homebrew, sign Claude in with rix, and run `rux`. The [installation guide](__BASE__/getting-started/installation/) covers release archives and what each backend needs; the [quick start](__BASE__/getting-started/quick-start/) goes end to end.
+</div>
+<div class="term">
+
+```sh
+brew install rex-agents/tap/r-x
+rux
+```
+
+</div>
+</div>
+
+</div>
+
+<div class="landing-footer">
+  <a href="https://github.com/rex-agents/r-x">GitHub</a>
+  <a href="https://github.com/rex-agents/r-x/releases">Releases</a>
+  <a href="https://github.com/rex-agents/r-x/issues">Issues</a>
+</div>
