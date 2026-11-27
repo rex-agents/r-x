@@ -82,8 +82,8 @@ homebrew_casks:
     homepage: https://github.com/rex-agents/r-x
     description: Rex guests (rox), the vault for their secrets (rix), and agents on them (rux)
     caveats: |
-      To make every rox and rix command a Rex action, run:
-        rox rex install
+      To make every rox and rix command a Rex action, install rox-rex and run:
+        rox-rex install
       Moving from Python rox? Run rix migrate to bring over Git keys and agent credentials.
     hooks:
       post:
