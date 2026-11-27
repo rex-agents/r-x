@@ -281,6 +281,8 @@ footer { flex: none; padding: 10px 0 calc(env(safe-area-inset-bottom) + 12px); b
 .pack-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 10px 16px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
 .pack-bar b { color: var(--text); font-weight: 600; }
 .pack-bar .dot { display: inline-block; margin-right: 6px; }
+.pack-bar label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.pack-bar input[type=checkbox] { width: auto; margin: 0; }
 .pack-banner { padding: 8px 16px; font-size: 12px; border-bottom: 1px solid var(--line); }
 .pack-banner.warn { color: var(--warn); } .pack-banner.err { color: var(--err); }
 .pack-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 18px; padding: 14px 16px 24px; align-items: start; }

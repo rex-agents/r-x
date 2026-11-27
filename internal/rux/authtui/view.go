@@ -13,7 +13,7 @@ const (
 	cardH     = 5
 	gutterW   = 3
 	cardW     = 25
-	logoW     = 40
+	logoW     = 42
 	logoH     = 15
 	previewW  = 32
 	minPrevW  = 90 // narrower terminals drop the preview column
