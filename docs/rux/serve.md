@@ -3,9 +3,9 @@ sidebar:
   order: 12
 ---
 
-# Serve and threads
+# The authority, serve and threads
 
-`rux serve` runs Claude Code threads in guests and serves a web app (a PWA) you drive from your phone over Tailscale.
+The **authority** (`rux authority`, which grew out of `rux serve`) is the rux daemon on a host. It runs Claude Code threads in guests, serves a web app (a PWA) you drive from your phone over Tailscale, and serves the [model proxy](credentials.md#the-model-proxy) guests use instead of model keys. See the [design contract](authority.md) for how authorities form a pack.
 
 ## How threads work
 
@@ -42,10 +42,57 @@ phone (PWA) ──HTTPS (tailscale serve)──▶ rux serve        (Mac: web ap
 
 Threads are grouped in [projects with managers](projects-and-managers.md). In a thread, agents can [share screenshots and files](screenshots-and-files.md), show [rich UI](rich-ui.md) and trigger [actions](actions.md). GitHub access is described under [credentials](credentials.md#github-access).
 
+## The daemon
+
+| Command | Does |
+| --- | --- |
+| `rux authority start [--foreground] [FLAGS]` | start the daemon, detached (pidfile, log and socket in `~/.rux/`), and wait until it answers. `--foreground` runs it in this terminal. The flags are the ones below. |
+| `rux authority stop` | stop it |
+| `rux authority status` | pid, URL, and the pack summary (exit status 1 when it isn't running) |
+| `rux authority logs [-f]` | the last 200 lines of the log, and follow it with `-f` |
+| `rux serve [FLAGS]` | a hidden alias of `rux authority start --foreground` |
+
+| File | Holds |
+| --- | --- |
+| `~/.rux/authority.pid`, `authority.url` | the running daemon's pid and HTTP base URL |
+| `~/.rux/authority.sock` | the same HTTP API on a unix socket (mode 0600, trusted like loopback, so `--allow-user` doesn't apply) |
+| `~/.rux/authority.log` | output of a detached daemon |
+| `~/.rux/authority.json` | optional: `{"name": "mac-studio", "vault": "local"}`. The name defaults to the host name; `vault` is the default [vault source](credentials.md#the-model-proxy) |
+
+Go code (the TUI) calls `rux.EnsureAuthority()` to start the daemon if needed and get its base URL, or
+`rux.AuthorityClient()` for an HTTP client that dials the socket.
+
+### The pack API
+
+`GET /api/pack` returns `authapi.Pack` (leader, term, vault host, and each authority with its host's
+OS, CPUs, memory, load and guest slots, plus its threads). `GET /api/pack/stream` is the live feed
+(server-sent events: a `pack` snapshot, then `pack.delta`, `thread.event` and `thread.status`; each
+event's data is `{"type", "data"}`). Outside a quorum this is a pack of one: the leader is the
+authority itself, term 0. `started` on each authority is its start time (for uptime), and an archived
+thread has status `archived` (and `archived: true`). A thread's sub-agents are openable at
+`/api/threads/{thread}/subagents/{id}/events` (SSE) and `/events/page`; both are answered only for a
+sub-agent the thread started. A leader proxies all `/api/threads/{id}/...` requests for another
+authority's threads to that authority. `GET /api/threads` also returns `authority`, `placement`, `subagents`
+(a manager's workers) and `cost` for each thread; `?authority=NAME` or `?authority=all` lists another
+authority's or the whole pack's threads. The Go types are in `internal/rux/authapi`.
+
+### Placement
+
+`POST /api/threads` takes two more fields:
+
+```json
+{"prompt": "...", "placement": {"local": true, "authority": "mac-studio"}, "vault": "local"}
+```
+
+By default a thread runs in its own rox guest. `"local": true` runs its runner as a process on the host
+instead (unsandboxed, in `~/.rux/threads/ID/work`). `authority` pins to an authority; until the host is
+in a quorum only its own name is accepted. `vault` (`local` or `leader`) picks where the thread's model
+keys come from.
+
 ## Run it
 
 ```sh
-rux serve --allow-user you@example.com
+rux authority start --allow-user you@example.com   # or: rux serve --allow-user ... in the foreground
 tailscale serve --bg 7700       # HTTPS on your tailnet -> 127.0.0.1:7700
 ```
 
@@ -68,6 +115,8 @@ Open the `https://<machine>.<tailnet>.ts.net` URL on your phone, then Share → 
 | `--sleep-after DURATION` | `15m` | stop an idle thread's guest, and start it again on the next message; `0` keeps guests running |
 | `--runner-bin PATH` | | the Linux `rux` served to guests |
 | `--github` | on | GitHub access for guests and the repo picker |
+| `--model-proxy` | on | serve `/proxy/anthropic` and `/proxy/openai` on the runner listener, and give guests those instead of model keys |
+| `--vault local\|leader` | `authority.json`, else `local` | the default vault source for model keys |
 
 Guests run the Linux `rux` for their architecture. A release build downloads it from its own release
 the first time a guest asks, checks it against `checksums.txt`, and caches it in `~/.rux/runner/`.
@@ -92,7 +141,36 @@ own token.
 `rux serve --backend local` clones the repo on the host and runs the runner there. It is
 **unsandboxed** and only for exercising the app.
 
+## Threads are project agents
+
+Every thread can start sub-agents, whatever its engine. The authority's guest `/mcp` endpoint accepts
+any live thread's token and serves the same tools to all of them (`start_thread`, `list_threads`,
+`send_message`, `read_thread`, `view_file`, `interrupt_thread`, `remove_thread`, `thread_stats`,
+`get_project`, `update_notes`). A [project's manager](projects-and-managers.md) manages every worker in
+its project; any other thread manages the sub-agents it started. Sub-agents are threads too (own guest,
+repo checked out, `parent` set); they show up in the parent's `subagents` in `/api/pack`, the parent is
+woken when one finishes a turn, and they can nest three deep. A sub-agent inherits its parent's engine,
+model and vault.
+
+A thread's **engine** is chosen with `"engine"` on `POST /api/threads`:
+
+| Engine | Runs in the guest | Model |
+| --- | --- | --- |
+| `claude-code` (default) | `rux runner` → `claude -p`, with the authority's MCP server in its config | Claude Code's: aliases such as `opus`, subscription or API key through the proxy |
+| `harness` | `rux runner` → `rux headless`, rux's own agent loop (`internal/harness`) without a UI | `anthropic/MODEL` or `openai/MODEL`, through the [model proxy](credentials.md#the-model-proxy) |
+
+`rux headless` speaks claude's stream-json on stdin and stdout, so the runner, the thread store and the
+app need no changes. It has the harness's coding tools in the thread's directory plus the authority's MCP
+tools. It's what `rux agent --headless` should run too (the command is hidden for now).
+Limits: a restarted harness agent replays only the text of its last 20 turns, not its tool history;
+cost isn't tracked (`cost` stays 0); a model change on a running harness thread takes effect only on
+restart; other providers (OpenRouter, Ollama, …) aren't served by the proxy yet.
+
+Thread and sub-agent guests are launched with `rox up --credentials=false`, so rix pushes no Claude Code
+or Codex sign-in into them (Git agent and setup sync still apply); their models go through the proxy.
+
 ## Not yet
 
-For `rux serve` threads: push notifications, SQLite storage, multiple hosts and a scheduler. Tools are pre-allowed
+Pinning to other authorities, the pack-wide view and `vault: leader` need the quorum.
+For `rux serve` threads: push notifications, SQLite storage and a scheduler. Tools are pre-allowed
 (`--allowedTools`) and anything else is denied (`--permission-prompts none`), so a thread has no approval prompts.

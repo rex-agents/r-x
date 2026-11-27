@@ -35,6 +35,7 @@ session (kept open when it exits).
 | `--rebuild` | rebuild the project image before launching (an error when no image would be used) |
 | `--no-tailscale` | keep this guest off the tailnet even when tailscale is configured |
 | `--no-git-agent` | give the guest Git keys only while cloning, not for its whole life |
+| `--credentials=false` | keep Claude Code and Codex sign-in out of the guest: rix pushes no credentials (Git agent and setup sync still apply) |
 | `--git-key PATH` (repeatable), `--git-known-hosts FILE` | Git SSH identities and `known_hosts` for rix to use for this launch, replacing rix's configured ones |
 | `--boot-timeout SECONDS` | per readiness check (default 120) |
 | `--config FILE` | use this rox config instead of `~/.config/rox/config.json` (must exist) |

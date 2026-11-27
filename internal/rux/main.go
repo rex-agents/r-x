@@ -48,6 +48,10 @@ func Main(version string, args []string) int {
 		fmt.Println("rux", Version)
 	case "quorum":
 		runQuorum(os.Args[2:])
+	case "headless":
+		runHeadless(os.Args[2:])
+	case "authority":
+		runAuthority(os.Args[2:])
 	case "serve":
 		runServe(os.Args[2:])
 	case "runner":
@@ -119,8 +123,8 @@ func help(w io.Writer) {
 			{"rux skill install|show", "install or print the rux skill for Claude Code or Codex"},
 		}},
 		{"Threads from your phone", []cmd{
-			{"rux serve", "serve the rux web app and run threads in rox guests"},
 			{"rux quorum create|invite|join HOST CODE|leave|status|promote HOST|policy", "join authorities into a pack (see docs/rux/quorum.md)"},
+			{"rux authority start|stop|status|logs", "the daemon: web app, threads in rox guests, model proxy (rux serve is a hidden alias of start --foreground)"},
 		}},
 		{"Tools for agents", []cmd{
 			{"rux share FILE... [--caption TEXT]", "show files in the thread (images and videos inline)"},
