@@ -604,3 +604,28 @@ func TestStateSurvivesRestart(t *testing.T) {
 		t.Fatal("state lost")
 	}
 }
+
+func TestPackAdapter(t *testing.T) {
+	nodes := createPack(t, "a", "b")
+	ad := NewPackAdapter(nodes[0].n)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ev, _ := ad.Subscribe(ctx)
+	nodes[1].load = 3
+	nodes[1].n.NotifyChange()
+	waitFor(t, "b up", 10*time.Second, func() bool {
+		p, _ := ad.Pack(ctx)
+		return len(p.Authorities) == 2 && p.Authorities[1].Status == "up" && p.Leader == "a" && p.VaultHost == "a"
+	})
+	select {
+	case e := <-ev:
+		if e.Type != "pack" && e.Type != "pack.delta" {
+			t.Fatalf("event %q", e.Type)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no event")
+	}
+	if _, err := ad.Threads(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+}
