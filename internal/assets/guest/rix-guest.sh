@@ -22,29 +22,45 @@ safe_path() {
 
 work="$HOME/.rox/sync-work"
 
-# Put back what an interrupted or failed swap moved aside.
+# Put back what an interrupted or failed swap moved aside. It is safe to run again: each
+# step leaves the backup in place until its path is restored, and the journal (the plan)
+# stays until every path is. It fails, keeping both, when a path can't be restored.
 sync_rollback() {
     [ -f "$work/undo/plan" ] || return 0
+    failed=0
     while IFS= read -r line; do
         kind=${line%% *}
         p=${line#* }
         if [ "$kind" = A ]; then
-            rm -rf -- "$HOME/$p"
+            rm -rf -- "$HOME/$p" || failed=1
         elif [ -e "$work/undo/data/$p" ] || [ -L "$work/undo/data/$p" ]; then
-            rm -rf -- "$HOME/$p"
-            mv "$work/undo/data/$p" "$HOME/$p"
+            if rm -rf -- "$HOME/$p" && mv "$work/undo/data/$p" "$HOME/$p"; then
+                :
+            else
+                failed=1
+            fi
         fi
     done < "$work/undo/plan"
+    return "$failed"
 }
 
 sync_done() {
     status=$?
     trap - EXIT
-    if [ "$status" -ne 0 ]; then
-        sync_rollback || true
+    keep=0
+    if [ -f "$work/undo/plan" ] && [ "$status" -ne 0 ]; then
+        if ! sync_rollback; then
+            keep=1
+            echo "rix could not restore everything; the originals stay in ~/.rox/sync-work for the next sync" >&2
+            [ "$status" -ne 0 ] || status=1
+        fi
     fi
-    rm -rf "$work"
-    rm -rf "$HOME/.rox/sync.lock"
+    if [ "$keep" = 0 ]; then
+        rm -rf "$work"
+    fi
+    if [ "$(cat "$HOME/.rox/sync.lock/pid" 2>/dev/null || true)" = "$$" ]; then
+        rm -rf "$HOME/.rox/sync.lock"
+    fi
     exit "$status"
 }
 
@@ -93,20 +109,40 @@ case "$action" in
         # each path swap in, the old one kept aside so a failure puts it back.
         cd "$HOME"
         mkdir -p .rox
-        # One sync at a time. A lock whose owner died is taken over.
-        if ! mkdir .rox/sync.lock 2>/dev/null; then
+        # One sync at a time. A lock is stale when its owner is gone or it is older than any
+        # sync runs. A lock without an owner yet is just being made, so give it a moment.
+        tries=0
+        until mkdir .rox/sync.lock 2>/dev/null; do
             owner=$(cat .rox/sync.lock/pid 2>/dev/null || true)
-            if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
+            if [ -z "$owner" ] && [ "$tries" -lt 3 ]; then
+                tries=$((tries + 1))
+                sleep 1
+                continue
+            fi
+            if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null &&
+                [ -z "$(find .rox/sync.lock/pid -mmin +10 2>/dev/null)" ]; then
                 echo "Another sync is running" >&2
                 exit 1
             fi
-            rm -rf .rox/sync.lock
-            mkdir .rox/sync.lock
-        fi
+            # Take the stale lock over by renaming it, which only one sync can do.
+            dead=.rox/sync.lock.dead.$$
+            if mv .rox/sync.lock "$dead" 2>/dev/null; then
+                if [ "$(cat "$dead/pid" 2>/dev/null || true)" != "$owner" ]; then
+                    mv "$dead" .rox/sync.lock 2>/dev/null || true
+                    echo "Another sync is running" >&2
+                    exit 1
+                fi
+                rm -rf "$dead"
+            fi
+            tries=0
+        done
         echo $$ > .rox/sync.lock/pid
         trap sync_done EXIT
-        # An earlier sync that died mid-swap leaves its undo folder: restore it first.
-        sync_rollback
+        # An earlier sync that died mid-swap leaves its undo folder: restore it first, and
+        # stop if that fails, so the backups it kept survive.
+        if [ -f "$work/undo/plan" ]; then
+            sync_rollback || { echo "An earlier sync could not be undone; its backups are in ~/.rox/sync-work" >&2; exit 1; }
+        fi
         rm -rf "$work"
         mkdir "$work" "$work/stage" "$work/undo"
         : > "$work/install.list"

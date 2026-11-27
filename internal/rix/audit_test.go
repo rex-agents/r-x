@@ -8,9 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/rex-agents/r-x/internal/assets"
 	"github.com/rex-agents/r-x/internal/contract"
@@ -435,4 +437,116 @@ func shellForTests() string {
 		return p
 	}
 	return "sh"
+}
+
+func TestGuestSyncKeepsBackupsWhenRollbackFails(t *testing.T) {
+	home := t.TempDir()
+	// A sync died mid-swap; one path can't be put back yet because its folder is read-only.
+	seed(t, home, map[string]string{"d/x": "new half", ".rox/sync-work/undo/data/d/x": "the only prior copy",
+		".rox/sync-work/undo/plan": "E d/x\n"})
+	_ = os.Chmod(filepath.Join(home, "d"), 0o500)
+	defer os.Chmod(filepath.Join(home, "d"), 0o700)
+	tarball := syncTar(t, map[string]string{"y": "1"}, true)
+	if out, err := guestSh(t, home, tarball, "sync", "y", "--"); err == nil {
+		t.Fatalf("sync went on over an unrestored path: %s", out)
+	}
+	if readFile(t, home+"/.rox/sync-work/undo/data/d/x") != "the only prior copy" || !sys.IsFile(home+"/.rox/sync-work/undo/plan") {
+		t.Fatal("the backup or journal was removed")
+	}
+	if sys.IsFile(home + "/y") {
+		t.Error("installed over unrestored state")
+	}
+	// Once the folder is writable again, the next run restores and syncs.
+	_ = os.Chmod(filepath.Join(home, "d"), 0o700)
+	if out, err := guestSh(t, home, tarball, "sync", "y", "--"); err != nil {
+		t.Fatal(err, out)
+	}
+	if readFile(t, home+"/d/x") != "the only prior copy" || readFile(t, home+"/y") != "1" {
+		t.Error("recovery wrong")
+	}
+}
+
+func TestGuestSyncUndoesInstallsWhenStaleRemovalFails(t *testing.T) {
+	home := t.TempDir()
+	seed(t, home, map[string]string{".claude/CLAUDE.md": "old", "old/dir/f": "stale"})
+	_ = os.Chmod(filepath.Join(home, "old/dir"), 0o500)
+	defer os.Chmod(filepath.Join(home, "old/dir"), 0o700)
+	tarball := syncTar(t, map[string]string{".claude/CLAUDE.md": "new"}, true)
+	if out, err := guestSh(t, home, tarball, "sync", ".claude/CLAUDE.md", "--", "old/dir"); err == nil {
+		t.Fatalf("sync succeeded: %s", out)
+	}
+	if readFile(t, home+"/.claude/CLAUDE.md") != "old" {
+		t.Error("install not undone after a failure past the swap")
+	}
+}
+
+func TestGuestSyncLocks(t *testing.T) {
+	tarball := syncTar(t, map[string]string{"x": "1"}, true)
+	lockWith := func(t *testing.T, pid string, age time.Duration) string {
+		home := t.TempDir()
+		seed(t, home, map[string]string{".rox/sync.lock/pid": pid})
+		old := time.Now().Add(-age)
+		_ = os.Chtimes(filepath.Join(home, ".rox/sync.lock/pid"), old, old)
+		return home
+	}
+	// A live owner keeps its lock and its files.
+	home := lockWith(t, strconv.Itoa(os.Getpid()), 0)
+	if _, err := guestSh(t, home, tarball, "sync", "x", "--"); err == nil || sys.IsFile(home+"/x") {
+		t.Error("ran beside a live sync")
+	}
+	if readFile(t, home+"/.rox/sync.lock/pid") != strconv.Itoa(os.Getpid())+"\n" && readFile(t, home+"/.rox/sync.lock/pid") != strconv.Itoa(os.Getpid()) {
+		t.Error("took a live lock")
+	}
+	// A dead owner, restart with a reused-looking PID that is too old to be a running sync,
+	// and a lock that never got its owner all give way.
+	for name, home := range map[string]string{
+		"dead owner": lockWith(t, "999999", 0),
+		"old lock":   lockWith(t, strconv.Itoa(os.Getpid()), time.Hour),
+		"ownerless":  lockWith(t, "", time.Hour),
+	} {
+		if out, err := guestSh(t, home, tarball, "sync", "x", "--"); err != nil || readFile(t, home+"/x") != "1" {
+			t.Errorf("%s: %v %s", name, err, out)
+		}
+		if _, err := os.Stat(filepath.Join(home, ".rox/sync.lock")); err == nil {
+			t.Errorf("%s: lock left behind", name)
+		}
+	}
+}
+
+func TestGuestSyncCompetingRunsNeverOverlap(t *testing.T) {
+	home := t.TempDir()
+	seed(t, home, map[string]string{"x": "0"})
+	tarball := syncTar(t, map[string]string{"x": "1"}, true)
+	results := make(chan error, 6)
+	for i := 0; i < 6; i++ {
+		go func() { _, err := guestSh(t, home, tarball, "sync", "x", "--"); results <- err }()
+	}
+	ok := 0
+	for i := 0; i < 6; i++ {
+		if <-results == nil {
+			ok++
+		}
+	}
+	if ok == 0 || readFile(t, home+"/x") != "1" {
+		t.Errorf("%d syncs succeeded, x=%q", ok, readFile(t, home+"/x"))
+	}
+	for _, left := range []string{".rox/sync.lock", ".rox/sync-work"} {
+		if _, err := os.Stat(filepath.Join(home, left)); err == nil {
+			t.Errorf("left %s", left)
+		}
+	}
+}
+
+func TestGuestSyncReplacesASymlinkWithoutTouchingItsTarget(t *testing.T) {
+	home := t.TempDir()
+	seed(t, home, map[string]string{"shared/SKILL.md": "someone else's"})
+	_ = os.MkdirAll(filepath.Join(home, ".claude/skills"), 0o755)
+	_ = os.Symlink(filepath.Join(home, "shared"), filepath.Join(home, ".claude/skills/a"))
+	tarball := syncTar(t, map[string]string{".claude/skills/a/SKILL.md": "new"}, true)
+	if out, err := guestSh(t, home, tarball, "sync", ".claude/skills/a", "--"); err != nil {
+		t.Fatal(err, out)
+	}
+	if readFile(t, home+"/shared/SKILL.md") != "someone else's" || readFile(t, home+"/.claude/skills/a/SKILL.md") != "new" {
+		t.Error("symlink handling wrong")
+	}
 }
