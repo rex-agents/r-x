@@ -2,6 +2,7 @@ package rux
 
 import (
 	"bytes"
+	"context"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -14,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/rex-agents/r-x/internal/rux/authapi"
 )
 
 // Each project can have a manager: a long-lived thread (its own guest, with
@@ -181,7 +184,8 @@ var managerTools = []mcpTool{
 		obj(map[string]any{"include_removed": map[string]any{"type": "boolean", "description": "also list threads whose guests were removed"}})},
 	{"start_thread", "Start a worker thread: a new sandboxed guest with the project's repo cloned, running Claude Code on the prompt. It works independently; you're told when it finishes a turn. Workers can push branches; only the user merges.",
 		obj(map[string]any{"prompt": str("the task, written so a fresh agent with no other context can do it"), "title": str("a short title for the thread, shown to the user (a few words)"), "branch": str("branch to start from (default: the project's)"),
-			"model": str("model alias such as opus, sonnet, haiku, fable (default: the project's)"), "effort": str("low, medium, high, xhigh or max (default: the project's)")}, "prompt")},
+			"model": str("model alias such as opus, sonnet, haiku, fable (default: the project's)"), "effort": str("low, medium, high, xhigh or max (default: the project's)"),
+			"authority": str("run it on this authority (host) of the pack; by default the pack picks the one with the most free capacity")}, "prompt")},
 	{"send_message", "Send a message to a worker thread, like a reply from the user. It's queued if the worker is mid-turn.",
 		obj(map[string]any{"thread_id": str("worker thread id"), "text": str("the message")}, "thread_id", "text")},
 	{"read_thread", "Read a worker thread's transcript, condensed: messages, tool calls, errors and shared files.",
@@ -290,6 +294,7 @@ func (s *server) callManagerTool(mgr *thread, name string, raw json.RawMessage) 
 		MaxChars       int  `json:"max_chars"`
 		IncludeRemoved bool `json:"include_removed"`
 		Hours          int
+		Authority      string
 	}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &a); err != nil {
@@ -297,6 +302,11 @@ func (s *server) callManagerTool(mgr *thread, name string, raw json.RawMessage) 
 		}
 	}
 	pid := mgr.meta.Project
+	if remoteTools[name] && a.ThreadID != "" && s.get(a.ThreadID) == nil {
+		if owner := s.remoteChild(context.Background(), mgr, a.ThreadID); owner != "" {
+			return s.callRemoteTool(owner, mgr, name, raw, a.ThreadID) // a sub-agent on another authority
+		}
+	}
 	switch name {
 	case "list_threads":
 		s.mu.Lock()
@@ -336,13 +346,28 @@ func (s *server) callManagerTool(mgr *thread, name string, raw json.RawMessage) 
 				fmt.Fprintf(&b, "  latest: %s\n", strings.ReplaceAll(clipText(last, 300), "\n", " "))
 			}
 		}
+		for _, kid := range s.remoteChildren(context.Background())[mgr.meta.ID] {
+			fmt.Fprintf(&b, "- %s %q · %s · on authority %s · started by you\n", kid.ID, kid.Name, kid.Status, kid.Authority)
+		}
 		if b.Len() == 0 {
 			return textContent("No worker threads in this project yet."), nil
 		}
 		return textContent(b.String()), nil
 
 	case "start_thread":
-		req := createReq{Project: pid, Prompt: a.Prompt, Title: a.Title, Branch: a.Branch, Model: a.Model, Effort: a.Effort, Parent: mgr.meta.ID, Vault: mgr.meta.Vault}
+		req := createReq{Project: pid, Prompt: a.Prompt, Title: a.Title, Branch: a.Branch, Model: a.Model, Effort: a.Effort,
+			Parent: mgr.meta.ID, ParentAuthority: s.authName(), Depth: s.depth(mgr) + 1, Vault: mgr.meta.Vault,
+			Placement: authapi.Placement{Authority: strings.TrimSpace(a.Authority)}}
+		// The repo and defaults travel with the request, since another authority may not have the project.
+		s.mu.Lock()
+		if p := s.projects[pid]; p != nil {
+			req.Repo = p.Repo
+			if req.Repo == p.Repo {
+				req.Branch = cmpOr(req.Branch, p.Branch)
+			}
+			req.Model, req.Effort = cmpOr(req.Model, p.Model), cmpOr(req.Effort, p.Effort)
+		}
+		s.mu.Unlock()
 		if mgr.meta.Kind != "manager" {
 			// A project agent's sub-agents run the same engine, and can start sub-agents of their own.
 			if s.depth(mgr) >= maxAgentDepth {
@@ -352,12 +377,14 @@ func (s *server) callManagerTool(mgr *thread, name string, raw json.RawMessage) 
 				req.Engine, req.Model = "harness", cmpOr(a.Model, mgr.meta.Model)
 			}
 		}
-		t, err := s.createThread(req)
+		view, err := s.createPlaced(context.Background(), req)
 		if err != nil {
 			return nil, err
 		}
-		v := t.view()
-		return textContent(fmt.Sprintf("Started worker %s (%q). Its guest takes a minute or two to come up; you'll get a message when it finishes its first turn.", v.ID, v.Title)), nil
+		var v struct{ ID, Title, Authority string }
+		b, _ := json.Marshal(view)
+		json.Unmarshal(b, &v)
+		return textContent(fmt.Sprintf("Started worker %s (%q) on %s. Its guest takes a minute or two to come up; you'll get a message when it finishes its first turn.", v.ID, v.Title, cmpOr(v.Authority, s.authName()))), nil
 
 	case "send_message", "interrupt_thread":
 		t, err := s.worker(mgr, a.ThreadID)

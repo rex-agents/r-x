@@ -46,6 +46,8 @@ type SubAgentSummary struct {
 	Name   string `json:"name,omitempty"`
 	Status string `json:"status"`
 	Guest  string `json:"guest,omitempty"`
+	// Authority is where the sub-agent runs; it can differ from its parent's.
+	Authority string `json:"authority,omitempty"`
 }
 
 // ThreadSummary is a thread as shown in the pack view.
@@ -60,8 +62,11 @@ type ThreadSummary struct {
 	Guest     string            `json:"guest,omitempty"`
 	Placement Placement         `json:"placement"`
 	SubAgents []SubAgentSummary `json:"subagents"`
-	Cost      float64           `json:"cost"`
-	Updated   string            `json:"updated"` // RFC 3339
+	// Parent is the thread that started this one as a sub-agent, on ParentAuthority.
+	Parent          string  `json:"parent,omitempty"`
+	ParentAuthority string  `json:"parent_authority,omitempty"`
+	Cost            float64 `json:"cost"`
+	Updated         string  `json:"updated"` // RFC 3339
 }
 
 // Event types carried by PackEvent.

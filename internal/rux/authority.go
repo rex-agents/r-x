@@ -411,7 +411,7 @@ const spawnSystemPrompt = `You are a project agent: you can start sub-agents, ea
 // maxAgentDepth limits how deep sub-agents can start sub-agents.
 const maxAgentDepth = 3
 
-// depth counts the threads above t.
+// depth counts the threads above t, here or (from the depth recorded at creation) elsewhere.
 func (s *server) depth(t *thread) int {
 	n := 0
 	for id := t.meta.Parent; id != "" && n < 16; n++ {
@@ -421,7 +421,7 @@ func (s *server) depth(t *thread) int {
 		}
 		id = p.meta.Parent
 	}
-	return n
+	return max(n, t.meta.Depth)
 }
 
 // inScope reports whether owner's MCP tools may act on t. A project's manager manages every
@@ -433,5 +433,5 @@ func (s *server) inScope(owner, t *thread) bool {
 	if owner.meta.Kind == "manager" {
 		return t.meta.Project == owner.meta.Project && t.meta.Kind == ""
 	}
-	return t.meta.Parent == owner.meta.ID
+	return t.meta.Parent == owner.meta.ID && cmpOr(t.meta.ParentAuthority, s.authName()) == cmpOr(owner.authority, s.authName())
 }

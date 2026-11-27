@@ -250,8 +250,8 @@ func (s *server) threadSummaries() []authapi.ThreadSummary {
 	}
 	children := map[string][]authapi.SubAgentSummary{}
 	for _, m := range metas {
-		if m.Parent != "" {
-			children[m.Parent] = append(children[m.Parent], authapi.SubAgentSummary{ID: m.ID, Name: m.Title, Status: m.Status, Guest: m.Guest})
+		if m.Parent != "" && (m.ParentAuthority == "" || m.ParentAuthority == s.authName()) {
+			children[m.Parent] = append(children[m.Parent], authapi.SubAgentSummary{ID: m.ID, Name: m.Title, Status: m.Status, Guest: m.Guest, Authority: s.authName()})
 		}
 	}
 	out := make([]authapi.ThreadSummary, len(metas))
@@ -270,6 +270,10 @@ func (s *server) summarize(m threadMeta, cost float64, subs []authapi.SubAgentSu
 	if subs == nil {
 		subs = []authapi.SubAgentSummary{}
 	}
+	parentAuth := ""
+	if m.Parent != "" {
+		parentAuth = cmpOr(m.ParentAuthority, s.authName())
+	}
 	status := m.Status
 	if m.Archived {
 		status = "archived"
@@ -278,6 +282,7 @@ func (s *server) summarize(m threadMeta, cost float64, subs []authapi.SubAgentSu
 		ID: m.ID, Project: m.Project, Title: m.Title, Status: status, Archived: m.Archived,
 		Authority: s.authName(), Guest: m.Guest, Placement: authapi.Placement{Local: m.Backend == "local", Authority: s.authName()},
 		SubAgents: subs, Cost: cost, Updated: m.Updated.UTC().Format(time.RFC3339),
+		Parent: m.Parent, ParentAuthority: parentAuth,
 	}
 }
 
@@ -293,8 +298,8 @@ func (s *server) summaryOf(t *thread) authapi.ThreadSummary {
 			continue
 		}
 		c.mu.Lock()
-		if c.meta.Parent == m.ID {
-			subs = append(subs, authapi.SubAgentSummary{ID: c.meta.ID, Name: c.meta.Title, Status: c.meta.Status, Guest: c.meta.Guest})
+		if c.meta.Parent == m.ID && (c.meta.ParentAuthority == "" || c.meta.ParentAuthority == s.authName()) {
+			subs = append(subs, authapi.SubAgentSummary{ID: c.meta.ID, Name: c.meta.Title, Status: c.meta.Status, Guest: c.meta.Guest, Authority: s.authName()})
 		}
 		c.mu.Unlock()
 	}
@@ -392,6 +397,7 @@ type threadView struct {
 
 func (s *server) viewOf(t *thread) threadView {
 	sum := s.summaryOf(t)
+	sum.SubAgents = append(sum.SubAgents, s.remoteChildren(context.Background())[sum.ID]...)
 	return threadView{threadMeta: t.view(), Authority: sum.Authority, Placement: sum.Placement, SubAgents: sum.SubAgents, Cost: sum.Cost}
 }
 
@@ -401,6 +407,16 @@ func (s *server) subAgent(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		child := s.get(r.PathValue("sub"))
 		if child == nil {
+			// A sub-agent on another authority: its owner serves it.
+			parent := s.get(r.PathValue("id"))
+			if parent != nil {
+				if owner := s.remoteChild(r.Context(), parent, r.PathValue("sub")); owner != "" {
+					r2 := r.Clone(r.Context())
+					r2.URL.Path = "/api/threads/" + r.PathValue("sub") + strings.TrimPrefix(r.URL.Path, "/api/threads/"+r.PathValue("id")+"/subagents/"+r.PathValue("sub"))
+					s.proxyTo(owner, w, r2)
+					return
+				}
+			}
 			httpErr(w, 404, "no such sub-agent")
 			return
 		}

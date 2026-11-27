@@ -71,31 +71,33 @@ type server struct {
 }
 
 type threadMeta struct {
-	ID          string    `json:"id"`
-	Title       string    `json:"title"`
-	Project     string    `json:"project"`
-	Kind        string    `json:"kind,omitempty"`   // "" for a worker, "manager" for a project's manager
-	Parent      string    `json:"parent,omitempty"` // the manager thread that started this one
-	Archived    bool      `json:"archived,omitempty"`
-	Replied     time.Time `json:"replied,omitempty"` // when claude last finished a turn
-	Repo        string    `json:"repo"`
-	Branch      string    `json:"branch"`
-	Model       string    `json:"model,omitempty"`  // claude --model; empty for the default
-	Effort      string    `json:"effort,omitempty"` // claude --effort; empty for the default
-	Prompt      string    `json:"prompt"`
-	Status      string    `json:"status"` // provisioning, starting, running, idle, failed, destroying, destroyed
-	Guest       string    `json:"guest"`
-	Backend     string    `json:"backend"`
-	Runtime     string    `json:"runtime,omitempty"`      // rox up's backend: container, linux, macos, fly or railway
-	SharedGuest bool      `json:"shared_guest,omitempty"` // runs in an existing guest that rux didn't start, and mustn't stop or remove
-	Created     time.Time `json:"created"`
-	Updated     time.Time `json:"updated"`
-	PromptSent  bool      `json:"prompt_sent"`
-	SetupFailed bool      `json:"setup_failed,omitempty"` // the runner couldn't check out the repo, so claude hasn't run
-	Connected   bool      `json:"connected"`
-	Token       string    `json:"token,omitempty"`
-	Vault       string    `json:"vault,omitempty"`  // which vault source serves this thread's model keys: "local" or "leader"
-	Engine      string    `json:"engine,omitempty"` // "" or claude-code: claude -p; "harness": rux's own agent loop (anthropic/… or openai/… models) via the model proxy
+	ID              string    `json:"id"`
+	Title           string    `json:"title"`
+	Project         string    `json:"project"`
+	Kind            string    `json:"kind,omitempty"`             // "" for a worker, "manager" for a project's manager
+	Parent          string    `json:"parent,omitempty"`           // the manager thread that started this one
+	ParentAuthority string    `json:"parent_authority,omitempty"` // where the parent runs; empty: here
+	Depth           int       `json:"depth,omitempty"`            // how many threads started this one, directly or not
+	Archived        bool      `json:"archived,omitempty"`
+	Replied         time.Time `json:"replied,omitempty"` // when claude last finished a turn
+	Repo            string    `json:"repo"`
+	Branch          string    `json:"branch"`
+	Model           string    `json:"model,omitempty"`  // claude --model; empty for the default
+	Effort          string    `json:"effort,omitempty"` // claude --effort; empty for the default
+	Prompt          string    `json:"prompt"`
+	Status          string    `json:"status"` // provisioning, starting, running, idle, failed, destroying, destroyed
+	Guest           string    `json:"guest"`
+	Backend         string    `json:"backend"`
+	Runtime         string    `json:"runtime,omitempty"`      // rox up's backend: container, linux, macos, fly or railway
+	SharedGuest     bool      `json:"shared_guest,omitempty"` // runs in an existing guest that rux didn't start, and mustn't stop or remove
+	Created         time.Time `json:"created"`
+	Updated         time.Time `json:"updated"`
+	PromptSent      bool      `json:"prompt_sent"`
+	SetupFailed     bool      `json:"setup_failed,omitempty"` // the runner couldn't check out the repo, so claude hasn't run
+	Connected       bool      `json:"connected"`
+	Token           string    `json:"token,omitempty"`
+	Vault           string    `json:"vault,omitempty"`  // which vault source serves this thread's model keys: "local" or "leader"
+	Engine          string    `json:"engine,omitempty"` // "" or claude-code: claude -p; "harness": rux's own agent loop (anthropic/… or openai/… models) via the model proxy
 }
 
 type storedEvent struct {
@@ -112,16 +114,17 @@ type sseItem struct {
 }
 
 type thread struct {
-	mu     sync.Mutex
-	dir    string
-	meta   threadMeta
-	events [][]byte // events[i] has id i+1
-	rseq   int64    // highest runner seq stored
-	logf   *os.File
-	subs   map[chan sseItem]struct{}
-	send   chan wireMsg // current runner connection; nil if none
-	cancel context.CancelFunc
-	cost   float64 // summed total_cost_usd of the thread's result events
+	mu        sync.Mutex
+	dir       string
+	meta      threadMeta
+	events    [][]byte // events[i] has id i+1
+	rseq      int64    // highest runner seq stored
+	logf      *os.File
+	subs      map[chan sseItem]struct{}
+	send      chan wireMsg // current runner connection; nil if none
+	cancel    context.CancelFunc
+	cost      float64 // summed total_cost_usd of the thread's result events
+	authority string  // set on a stand-in for a parent that runs on another authority
 
 	onEvent  func(line []byte) // set by server.attach; called with t.mu held
 	onStatus func()            // likewise, on a status change
@@ -567,6 +570,8 @@ type createReq struct {
 	Runtime                                      string // rox up's backend for a new guest (default container)
 	Guest                                        string // an existing rox guest to run in instead
 	Kind, Parent                                 string
+	ParentAuthority                              string
+	Depth                                        int
 	Title                                        string            `json:"-"` // set by managers; otherwise the prompt's first line
 	Placement                                    authapi.Placement `json:"placement"`
 	Vault                                        string            `json:"vault"`  // "local" or "leader"; default: authority.json, else local
@@ -594,7 +599,7 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "bad JSON")
 		return
 	}
-	req.Kind, req.Parent = "", ""
+	req.Kind, req.Parent, req.ParentAuthority, req.Depth = "", "", "", 0
 	view, err := s.createPlaced(r.Context(), req)
 	if err != nil {
 		httpErr(w, errorCode(err), err.Error())
@@ -618,8 +623,10 @@ func (s *server) createThread(req createReq) (*thread, error) {
 			proj = *p
 		}
 		s.mu.Unlock()
-		if p == nil {
+		if p == nil && req.ParentAuthority == "" {
 			return nil, &reqError{404, "no such project"}
+		} else if p == nil {
+			req.Project = "" // a sub-agent of another authority's project: this one makes the project from the repo
 		}
 		if req.Repo == "" {
 			req.Repo = proj.Repo
@@ -694,7 +701,7 @@ func (s *server) createThread(req createReq) (*thread, error) {
 	}
 	id := now.UTC().Format("20060102-150405") + "-" + randHex(3)
 	meta := threadMeta{
-		ID: id, Title: title, Project: req.Project, Kind: req.Kind, Parent: req.Parent,
+		ID: id, Title: title, Project: req.Project, Kind: req.Kind, Parent: req.Parent, ParentAuthority: req.ParentAuthority, Depth: req.Depth,
 		Repo: req.Repo, Branch: req.Branch, Prompt: req.Prompt, Model: req.Model, Effort: req.Effort,
 		Status: "provisioning", Backend: s.backend, Created: now, Updated: now, Token: randHex(24),
 		Runtime: req.Runtime, Guest: req.Guest, SharedGuest: req.Guest != "", Vault: vault, Engine: engine,
@@ -1116,16 +1123,16 @@ func (s *server) handleRunner(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		t.mu.Lock()
-		var parent, wake string
+		var parent, parentAuth, wake string
 		if m.Seq > t.rseq {
 			t.rseq = m.Seq
 			t.appendLocked("runner", m.Seq, m.Ev)
 			t.statusFromEventLocked(m.Ev)
-			parent, wake = t.meta.Parent, t.wakeTextLocked(m.Ev)
+			parent, parentAuth, wake = t.meta.Parent, t.meta.ParentAuthority, t.wakeTextLocked(m.Ev)
 		}
 		t.mu.Unlock()
 		if parent != "" && wake != "" {
-			s.wake(parent, wake)
+			s.wakeParent(parent, parentAuth, wake)
 		}
 	}
 }
@@ -1284,13 +1291,13 @@ func (s *server) provisionRox(t *thread) {
 	t.appendLocked("rux", 0, ruxEv("rux_guest", "name", guest))
 	if err != nil {
 		t.appendLocked("rux", 0, ruxEv("rux_error", "text", "rox up failed: "+err.Error()))
-		parent := t.meta.Parent
+		parent, parentAuth := t.meta.Parent, t.meta.ParentAuthority
 		if !connected {
 			t.setStatusLocked("failed")
 		}
 		t.mu.Unlock()
 		if parent != "" && !connected {
-			s.wake(parent, fmt.Sprintf("%sworker %s (%q) failed to start: rox up failed: %v", wakePrefix, m.ID, m.Title, err))
+			s.wakeParent(parent, parentAuth, fmt.Sprintf("%sworker %s (%q) failed to start: rox up failed: %v", wakePrefix, m.ID, m.Title, err))
 		}
 		return
 	}

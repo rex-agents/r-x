@@ -47,6 +47,7 @@ type Report struct {
 	Threads   []json.RawMessage `json:"threads"`
 	Subagents []json.RawMessage `json:"subagents"`
 	Term      uint64            `json:"term"`
+	Started   string            `json:"started,omitempty"` // RFC 3339 time the authority started
 }
 
 // AuthorityInfo is one authority in the pack view (GET /api/pack "authorities").
@@ -56,6 +57,7 @@ type AuthorityInfo struct {
 	Status    string            `json:"status"` // online, stale or unreachable
 	Host      HostInfo          `json:"host"`
 	Local     bool              `json:"local"`
+	Started   string            `json:"started,omitempty"`
 	Threads   []json.RawMessage `json:"threads,omitempty"`
 	Subagents []json.RawMessage `json:"subagents,omitempty"`
 }
