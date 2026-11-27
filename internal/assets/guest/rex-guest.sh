@@ -31,11 +31,16 @@ case "$action" in
         installer=$(mktemp)
         trap 'rm -f "$installer"' EXIT
         curl -fsSL https://pkgs.superlogical.com/rex/install.sh -o "$installer"
-        S=$(test "$(id -u)" = 0 || echo sudo)
-        $S sh "$installer" --tarball --channel "$1" >&2
-        if ! command -v rex >/dev/null; then
-            found=$($S sh -lc 'command -v rex' || true)
-            [[ -n $found ]] && $S install -m 0755 "$found" /usr/local/bin/rex
+        if [[ $(id -u) = 0 ]] || sudo -n true 2>/dev/null; then
+            S=$(test "$(id -u)" = 0 || echo sudo)
+            $S sh "$installer" --tarball --channel "$1" >&2
+            if ! command -v rex >/dev/null; then
+                found=$($S sh -lc 'command -v rex' || true)
+                [[ -n $found ]] && $S install -m 0755 "$found" /usr/local/bin/rex
+            fi
+        else
+            # Container guests have no sudo for their user: install Rex for the account.
+            sh "$installer" --user --channel "$1" >&2
         fi
         rex version | head -n 1
         ;;
