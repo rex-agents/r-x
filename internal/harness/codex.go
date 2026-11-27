@@ -42,6 +42,20 @@ func (c *Codex) Name() string {
 	return "codex/" + c.Model
 }
 
+// Thread is the Codex thread this agent resumes, empty before its first turn.
+func (c *Codex) Thread() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.thread
+}
+
+// Resume continues an earlier Codex thread instead of starting a new one.
+func (c *Codex) Resume(id string) {
+	c.mu.Lock()
+	c.thread = id
+	c.mu.Unlock()
+}
+
 func (c *Codex) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()

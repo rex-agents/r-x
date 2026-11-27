@@ -398,6 +398,10 @@ func (r *runner) sendUser(id, text string, files ...attachment) error {
 
 // startClaude must be called with procMu held.
 func (r *runner) startClaude() error {
+	cli, model := agentFor(r.model)
+	if cli == "codex" {
+		return r.startAgent(r.codexBridge(model))
+	}
 	args := []string{"-p",
 		"--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
 		// No approvals UI yet: anything not pre-allowed is denied instead of hanging.
@@ -413,8 +417,8 @@ func (r *runner) startClaude() error {
 	if tools != "" {
 		args = append(args, "--allowedTools", tools)
 	}
-	if r.model != "" {
-		args = append(args, "--model", r.model)
+	if model != "" {
+		args = append(args, "--model", model)
 	}
 	if r.effort != "" {
 		args = append(args, "--effort", r.effort)
@@ -432,7 +436,37 @@ func (r *runner) startClaude() error {
 	} else {
 		args = append(args, "--session-id", r.sessionID)
 	}
-	cmd := exec.Command(r.claudeBin, args...)
+	return r.startAgent(r.claudeBin, args)
+}
+
+// codexBridge is the command that runs this thread on Codex: this binary's codex-bridge,
+// which speaks the stream-json the runner expects of its agent.
+func (r *runner) codexBridge(model string) (string, []string) {
+	exe, err := os.Executable()
+	if err != nil {
+		exe = os.Args[0]
+	}
+	prompt := shareSystemPrompt
+	if strings.TrimSpace(r.notes) != "" {
+		prompt += "\n\nNotes from the user for every thread in this project:\n" + r.notes
+	}
+	args := []string{"codex-bridge", "--state", filepath.Join(r.stateDir, "codex-thread"), "--system", prompt}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	if r.effort != "" {
+		args = append(args, "--effort", r.effort)
+	}
+	return exe, args
+}
+
+// startAgent runs the agent process and wires its stream-json to the event log.
+// It must be called with procMu held.
+func (r *runner) startAgent(bin string, args []string) error {
+	if r.role == "manager" && bin != r.claudeBin {
+		return errors.New("a project's manager runs on Claude Code; Codex is for workers")
+	}
+	cmd := exec.Command(bin, args...)
 	cmd.Dir = r.dir
 	cmd.Env = append(os.Environ(), r.gitEnv...)
 	stdin, err := cmd.StdinPipe()
@@ -725,6 +759,7 @@ func (r *runner) applySettings(model, effort, notes, project string) {
 		return
 	}
 	oldModel, oldEffort := r.model, r.effort
+	oldCLI, _ := agentFor(oldModel)
 	r.model, r.effort, r.notes, r.project = model, effort, notes, project
 	b, _ := json.Marshal(map[string]string{"model": model, "effort": effort, "notes": notes, "project": project})
 	os.WriteFile(filepath.Join(r.stateDir, "settings.json"), b, 0o600)
@@ -732,11 +767,13 @@ func (r *runner) applySettings(model, effort, notes, project string) {
 	if r.cmd == nil || r.cmd == r.retiring || (model == oldModel && effort == oldEffort) {
 		return
 	}
-	if effort != oldEffort {
+	// Codex has no live model switch either: its next turn starts on the new settings.
+	if cli, _ := agentFor(model); effort != oldEffort || cli == "codex" || oldCLI == "codex" {
 		r.stdin.Close()
 		r.retiring = r.cmd
 		return
 	}
+	_, model = agentFor(model)
 	if model == "" {
 		model = "default"
 	}

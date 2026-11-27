@@ -6,7 +6,8 @@ rux runs agents in disposable rox guests. It has three modes:
   (see [rux: the multi-agent harness](#rux-the-multi-agent-harness)).
 - **`rux claude`** and **`rux agent`**: Claude Code (or Codex) as the lead in a Rex pane, with sub-agents in Rex panes
   (see [rux claude](#rux-claude-claude-code-as-the-lead) and [`rux agent`](#orchestrating-from-claude-code-or-codex-rux-agent)).
-- **`rux serve`**: Claude Code threads in guests, driven from a phone over Tailscale (described first, below).
+- **`rux serve`**: Claude Code (or Codex) threads in guests, driven from a phone over Tailscale (described first, below;
+  see [Codex threads](#codex-threads)).
 
 rux ships with rox and rix in the r-x release, and stores no credentials: see [Credentials come from rix](#credentials-come-from-rix).
 `rux help` lists every command.
@@ -20,6 +21,8 @@ phone (PWA) ──HTTPS (tailscale serve)──▶ rux serve        (Mac: web ap
 - The runner owns the `claude` process and keeps a numbered event log, so restarting `rux serve`
   doesn't kill a thread. On reconnect it replays whatever the server is missing.
 - If `claude` exits, the next message restarts it with `--resume` on the same session.
+- A Codex thread runs the same way: the runner owns a `rux codex-bridge` process in place of `claude`, which runs each
+  message as a `codex exec` turn and resumes the same Codex thread after a restart.
 - Messages to a thread (the first prompt, what you type, a manager's wake-ups) wait in
   `outbox.jsonl` until the runner acks them. The server sends every unacked message each time a
   runner connects, under a stable `id`; the runner stores a message in `~/.rux/THREAD/inbox/` before
@@ -283,7 +286,7 @@ rux stores no credentials. Everything it needs comes from rix, on the Mac runnin
 
 | What | From | Set it with |
 | --- | --- | --- |
-| Claude Code in thread guests, Claude Code or Codex in `rux agent` guests | rox's hooks into rix, because rux starts guests with `rox up --agents claude` (or `codex`) | `rix auth claude`, `rix auth codex` |
+| Claude Code or Codex in thread guests, Claude Code or Codex in `rux agent` guests | rox's hooks into rix, because rux starts guests with `rox up --agents claude` (or `codex`) | `rix auth claude`, `rix auth codex` |
 | GitHub, for the repo picker and for git in guests | `rix credential github` | `rix auth github` (a token), or nothing to use `gh`'s login |
 | Secrets that actions list | `rix secret get` | `rix secret set NAME` |
 
@@ -441,9 +444,24 @@ Open the `https://<machine>.<tailnet>.ts.net` URL on your phone, then Share → 
 
 `rux serve` flags: `--listen` (default `127.0.0.1:7700`, the web app), `--allow-user LOGIN` (only this Tailscale login through
 `tailscale serve`; recommended), `--runner-listen` (default `0.0.0.0:7701`), `--advertise HOST:PORT`, `--guest-cidrs`,
-`--data DIR` (default `~/.rux`), `--backend rox|local`, `--rox BIN`, `--claude BIN` (only to list the models Claude Code
+`--data DIR` (default `~/.rux`), `--agent claude|codex` (default `claude`; see [Codex threads](#codex-threads)), `--backend rox|local`, `--rox BIN`, `--claude BIN` (only to list the models Claude Code
 offers), `--memory` (default `4G`), `--sleep-after DURATION` (default 15m: stop an idle thread's guest, and start it again on
 the next message; `0` keeps guests running), `--runner-bin PATH` and `--github` (default on).
+
+### Codex threads
+
+A thread runs on Claude Code unless you pick Codex. The names are the ones the harness and `rux agent` use:
+
+- **Per thread or project**: choose the model `codex` or `codex/MODEL` (such as `codex/gpt-5`) in the app's model
+  picker, in the project's model setting, or as `model` when creating a thread. `claude-code/MODEL` and the Claude
+  models (`opus`, `sonnet`) pick Claude Code. Effort is passed on as Codex's reasoning effort.
+- **For every new thread**: `rux serve --agent codex` makes Codex the default for threads and projects with no model.
+- rox installs the chosen CLI in the thread's guest (`--agents codex`) and rix signs it in with `rix auth codex`.
+  A thread's existing guest (`guest` when creating) needs `codex` installed.
+
+Codex runs in its guest without Codex's sandbox, since the guest is the sandbox. A thread keeps its agent: changing a
+thread from Claude to Codex (or back) is refused, so start a new thread. A project's manager always runs on Claude
+Code, because it drives rux's tools through Claude Code; its workers can be Codex.
 
 Guests run the Linux `rux` for their architecture. A release build downloads it from its own release
 the first time a guest asks, checks it against `checksums.txt`, and caches it in `~/.rux/runner/`.
