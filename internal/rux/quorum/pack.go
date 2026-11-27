@@ -59,7 +59,7 @@ func (h *packHub) infoLocked(name string, url string) AuthorityInfo {
 	}
 	info := AuthorityInfo{Name: name, URL: url, Status: h.status(e), Local: self}
 	if e != nil {
-		info.Host, info.Threads, info.Subagents = e.rep.Host, e.rep.Threads, e.rep.Subagents
+		info.Host, info.Threads, info.Subagents, info.Started = e.rep.Host, e.rep.Threads, e.rep.Subagents, e.rep.Started
 	}
 	return info
 }

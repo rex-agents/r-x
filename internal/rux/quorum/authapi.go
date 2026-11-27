@@ -24,7 +24,8 @@ func toAPIStatus(s string) string {
 
 func toAPIAuthority(a AuthorityInfo, withThreads bool) authapi.AuthorityInfo {
 	out := authapi.AuthorityInfo{Name: a.Name, URL: a.URL, Status: toAPIStatus(a.Status), Local: a.Local,
-		Host: authapi.HostInfo{OS: a.Host.OS, CPUs: a.Host.CPUs, Mem: a.Host.Mem, Load: a.Host.Load, GuestsMax: a.Host.GuestsMax, GuestsUsed: a.Host.GuestsUsed}}
+		Started: a.Started,
+		Host:    authapi.HostInfo{OS: a.Host.OS, CPUs: a.Host.CPUs, Mem: a.Host.Mem, Load: a.Host.Load, GuestsMax: a.Host.GuestsMax, GuestsUsed: a.Host.GuestsUsed}}
 	if withThreads {
 		out.Threads = decodeThreads(a)
 	}

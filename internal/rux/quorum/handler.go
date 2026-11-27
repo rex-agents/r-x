@@ -144,6 +144,7 @@ func (n *Node) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, n.pack.Snapshot())
 	}))
 	mux.HandleFunc("POST /quorum/vault", n.handleVault)
+	mux.HandleFunc("POST /quorum/vault/audit", n.handleVaultAudit)
 	mux.HandleFunc("GET /quorum/ssh-agent/{guest}", n.handleSSHAgent)
 	return mux
 }

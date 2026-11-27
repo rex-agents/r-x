@@ -199,13 +199,14 @@ type LeaderVault struct {
 	n        *Node
 	mu       sync.Mutex
 	cache    map[string]Secret
+	noted    map[string]time.Time // thread\x00secret -> when the host last heard of its use
 	lastOK   time.Time
 	lastFail time.Time
 	now      func() time.Time
 }
 
 func newLeaderVault(n *Node) *LeaderVault {
-	return &LeaderVault{n: n, cache: map[string]Secret{}, now: time.Now}
+	return &LeaderVault{n: n, cache: map[string]Secret{}, noted: map[string]time.Time{}, now: time.Now}
 }
 
 // Vault is the pack's vault, seen from this authority.
@@ -221,6 +222,7 @@ func (v *LeaderVault) Get(ctx context.Context, thread, name string) (Secret, err
 	v.mu.Lock()
 	if s, ok := v.cache[name]; ok && v.now().Sub(s.Fetched) < n.cfg.VaultTTL {
 		v.mu.Unlock()
+		v.noteUse(thread, name)
 		return s, nil
 	}
 	delete(v.cache, name)
@@ -255,13 +257,65 @@ func (v *LeaderVault) Get(ctx context.Context, thread, name string) (Secret, err
 	v.lastOK = v.now()
 	s.Name, s.Fetched = name, v.now()
 	v.cache[name] = s
+	v.noted[thread+"\x00"+name] = v.now() // the host's answer was audited with this thread
 	return s, nil
+}
+
+// noteUse tells the vault host that thread used a cached secret, so its audit attributes every
+// thread that uses a key, not only the one whose request made the member fetch it. Once per
+// thread and secret per TTL; the notice is sent in the background and may be lost.
+func (v *LeaderVault) noteUse(thread, name string) {
+	n := v.n
+	if thread == "" {
+		return
+	}
+	key := thread + "\x00" + name
+	v.mu.Lock()
+	if t, ok := v.noted[key]; ok && v.now().Sub(t) < n.cfg.VaultTTL {
+		v.mu.Unlock()
+		return
+	}
+	v.noted[key] = v.now()
+	v.mu.Unlock()
+	host := n.fsm.get().VaultHost
+	if host == n.Name() {
+		n.vhost.audit(AuditEntry{Member: host, Thread: thread, Secret: name, Result: "ok"})
+		return
+	}
+	m, ok := n.memberByName(host)
+	if !ok {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(n.ctx, 5*time.Second)
+		defer cancel()
+		if err := n.call(ctx, m.URL, http.MethodPost, "/quorum/vault/audit", vaultRequest{Thread: thread, Name: name}, nil); err != nil {
+			n.logf("quorum: vault audit notice: %v", err)
+		}
+	}()
+}
+
+// handleVaultAudit records a member's use of a secret it holds in its cache.
+func (n *Node) handleVaultAudit(w http.ResponseWriter, r *http.Request) {
+	member, ok := n.authenticate(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req vaultRequest
+	if err := readJSON(r, &req); err != nil || req.Name == "" {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	n.vhost.audit(AuditEntry{Member: member, Thread: req.Thread, Secret: req.Name, Result: "ok (cached)"})
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // Invalidate drops cached secrets (after a policy change, say).
 func (v *LeaderVault) Invalidate() {
 	v.mu.Lock()
 	v.cache = map[string]Secret{}
+	v.noted = map[string]time.Time{}
 	v.mu.Unlock()
 }
 

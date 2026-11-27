@@ -1,6 +1,7 @@
 package rux
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -266,6 +267,172 @@ func TestPackEndToEnd(t *testing.T) {
 	pr.Body.Close()
 	if pr.StatusCode != 502 {
 		t.Errorf("a member the policy denies: status %d, want 502", pr.StatusCode)
+	}
+
+	// Every pack authority reports when it started.
+	for _, x := range a.pack(t).Authorities {
+		if x.Started == "" {
+			t.Errorf("authority %s has no started time", x.Name)
+		}
+	}
+
+	// A thread that uses a cached key is audited too.
+	code, tb2 := a.createThread(t, `{"prompt":"second on b","placement":{"authority":"b"}}`)
+	if code != 201 {
+		t.Fatalf("second thread on b: %d %v", code, tb2)
+	}
+	idB2 := tb2["id"].(string)
+	req, _ = http.NewRequest("POST", b.guest.URL+"/proxy/anthropic/v1/messages", strings.NewReader("{}"))
+	req.Header.Set("x-api-key", b.s.get(idB2).meta.Token)
+	pr, _ = http.DefaultClient.Do(req)
+	pr.Body.Close()
+	waitUntil(t, "the vault host to hear of the second thread's use of the cached key", 5*time.Second, func() bool {
+		audit, _ := os.ReadFile(filepath.Join(a.s.dataDir, "quorum-audit.jsonl"))
+		return bytes.Contains(audit, []byte(`"thread":"`+idB2+`"`))
+	})
+
+	// Other authorities' thread status changes reach this authority's pack stream.
+	sctx, scancel := context.WithTimeout(ctx, 20*time.Second)
+	defer scancel()
+	sreq, _ := http.NewRequestWithContext(sctx, "GET", a.app.URL+"/api/pack/stream", nil)
+	sresp, err := http.DefaultClient.Do(sreq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sresp.Body.Close()
+	gotStatus := make(chan authapi.ThreadSummary, 8)
+	go func() {
+		sc := bufio.NewScanner(sresp.Body)
+		sc.Buffer(make([]byte, 1<<20), 1<<20)
+		for sc.Scan() {
+			if l := sc.Text(); strings.HasPrefix(l, "data: ") {
+				var ev struct {
+					Type string
+					Data authapi.ThreadSummary
+				}
+				if json.Unmarshal([]byte(strings.TrimPrefix(l, "data: ")), &ev) == nil && ev.Type == authapi.EventThreadStatus {
+					gotStatus <- ev.Data
+				}
+			}
+		}
+	}()
+	time.Sleep(700 * time.Millisecond) // the stream's first snapshot
+	b.s.get(idB2).setStatus("running")
+	waitUntil(t, "b's status change on a's stream", 10*time.Second, func() bool {
+		for {
+			select {
+			case ts := <-gotStatus:
+				if ts.ID == idB2 && ts.Status == "running" && ts.Authority == "b" {
+					return true
+				}
+			default:
+				return false
+			}
+		}
+	})
+
+	// Sub-agents are placed anywhere: idA (on a) starts one pinned to b through its /mcp.
+	mcp := func(tok, name string, args map[string]any) (string, bool) {
+		body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": name, "arguments": args}})
+		req, _ := http.NewRequest("POST", a.guest.URL+"/mcp", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out struct {
+			Result struct {
+				Content []struct{ Text string }
+				IsError bool `json:"isError"`
+			}
+		}
+		json.NewDecoder(resp.Body).Decode(&out)
+		var text string
+		for _, c := range out.Result.Content {
+			text += c.Text
+		}
+		return text, out.Result.IsError
+	}
+	tokA := a.s.get(idA).meta.Token
+	if text, isErr := mcp(tokA, "start_thread", map[string]any{"prompt": "sub-agent work", "title": "remote child", "authority": "b"}); isErr || !strings.Contains(text, "on b") {
+		t.Fatalf("start_thread on b: %v %q", isErr, text)
+	}
+	var child *thread
+	waitUntil(t, "the sub-agent on b", 5*time.Second, func() bool {
+		b.s.mu.Lock()
+		defer b.s.mu.Unlock()
+		for _, x := range b.s.threads {
+			if x.meta.Parent == idA {
+				child = x
+			}
+		}
+		return child != nil
+	})
+	if child.meta.ParentAuthority != "a" || child.meta.Depth != 1 {
+		t.Errorf("child records its parent wrongly: %+v", child.meta)
+	}
+	idKid := child.meta.ID
+	// The parent's subagents include the remote child, in the pack and in /api/threads.
+	waitUntil(t, "the remote child in the parent's subagents", 10*time.Second, func() bool {
+		for _, x := range a.pack(t).Authorities {
+			for _, th := range x.Threads {
+				if th.ID == idA {
+					for _, sa := range th.SubAgents {
+						if sa.ID == idKid && sa.Authority == "b" {
+							return true
+						}
+					}
+				}
+			}
+		}
+		return false
+	})
+	var list []struct {
+		ID        string
+		SubAgents []authapi.SubAgentSummary
+	}
+	getJSON(t, a.app.URL+"/api/threads", &list)
+	foundKid := false
+	for _, th := range list {
+		for _, sa := range th.SubAgents {
+			foundKid = foundKid || (th.ID == idA && sa.ID == idKid)
+		}
+	}
+	if !foundKid {
+		t.Errorf("/api/threads on a doesn't list the remote child under its parent: %+v", list)
+	}
+	// The parent reads, messages and removes it over the quorum link.
+	if text, isErr := mcp(tokA, "read_thread", map[string]any{"thread_id": idKid}); isErr || text == "" {
+		t.Errorf("read_thread on a remote sub-agent: %v %q", isErr, text)
+	}
+	if text, isErr := mcp(tokA, "send_message", map[string]any{"thread_id": idKid, "text": "hi"}); !strings.Contains(text, "isn't connected") && !strings.Contains(text, "Sent") && !strings.Contains(text, "asleep") {
+		t.Errorf("send_message should reach the child's authority: %v %q", isErr, text)
+	}
+	if text, isErr := mcp(tokA, "read_thread", map[string]any{"thread_id": idB}); !isErr {
+		t.Errorf("a thread must not read another thread's non-child: %q", text)
+	}
+	var kidPage struct{ Events []json.RawMessage }
+	waitUntil(t, "the sub-agent's conversation through its parent", 10*time.Second, func() bool {
+		kidPage.Events = nil
+		getJSON(t, a.app.URL+"/api/threads/"+idA+"/subagents/"+idKid+"/events/page", &kidPage)
+		return len(kidPage.Events) > 0
+	})
+	// When it finishes a turn the parent, on another authority, is woken.
+	b.s.wakeParent(idA, "a", "[rux] your sub-agent finished")
+	waitUntil(t, "the wake-up on the parent's authority", 5*time.Second, func() bool {
+		th := a.s.get(idA)
+		th.mu.Lock()
+		defer th.mu.Unlock()
+		for _, it := range th.outbox {
+			if strings.Contains(it.Msg.Text, "your sub-agent finished") {
+				return true
+			}
+		}
+		return false
+	})
+	if text, isErr := mcp(tokA, "remove_thread", map[string]any{"thread_id": idKid}); isErr {
+		t.Errorf("remove_thread on a remote sub-agent: %q", text)
 	}
 
 	// Fencing: a placement from the leader's term is good now and stale after a failover.

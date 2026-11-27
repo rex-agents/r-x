@@ -471,10 +471,13 @@ func TestVaultPolicyAuditAndCache(t *testing.T) {
 		t.Fatalf("missing: %v", err)
 	}
 	// the audit log has every request, with member, thread, secret and time, and no values
-	data, err := os.ReadFile(filepath.Join(a.dir, "quorum-audit.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	// (A cached use is reported to the vault host in the background, so wait for it.)
+	var data []byte
+
+	waitFor(t, "the audit notice for the cached use", 5*time.Second, func() bool {
+		data, err = os.ReadFile(filepath.Join(a.dir, "quorum-audit.jsonl"))
+		return err == nil && strings.Count(string(data), "\n") >= 7
+	})
 	if strings.Contains(string(data), "sk-test") {
 		t.Fatal("audit log holds a secret")
 	}
@@ -486,7 +489,7 @@ func TestVaultPolicyAuditAndCache(t *testing.T) {
 		}
 		entries = append(entries, e)
 	}
-	if len(entries) != 6 {
+	if len(entries) != 7 { // six requests and one cached use, which the host hears of
 		t.Fatalf("%d audit entries: %s", len(entries), data)
 	}
 	if e := entries[0]; e.Member != "b" || e.Thread != "t1" || e.Secret != "ANTHROPIC_API_KEY" || e.Result != "denied" || e.Time.IsZero() {
