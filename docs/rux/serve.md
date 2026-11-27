@@ -151,7 +151,8 @@ the tailnet address). Without `~/.rux/quorum.json` it's a pack of one. `rux quor
 - `/api/pack` and `/api/pack/stream` are the quorum's view: the leader's, or a member's copy of it, or,
   when there's no leader, this authority alone with `degraded: true`. Each authority pushes its host and
   thread summaries to the leader every 2s. The stream carries this authority's own `thread.event` and
-  `thread.status` events too; open another authority's thread through its events endpoint instead.
+  `thread.status` events too, and the status changes of other authorities' threads (their conversation events stay
+  on their authority: open the thread, which is proxied).
 - `POST /api/threads` without `placement.local` asks the leader where to run (pinned by
   `placement.authority`, else the authority with the most free guest slots). If another authority is
   chosen, the create is forwarded to it with the leader's term, which it checks (fencing), and its
@@ -161,10 +162,15 @@ the tailnet address). Without `~/.rux/quorum.json` it's a pack of one. `rux quor
   (`/quorum/proxy/`, member credentials) to the owning authority, so any authority's API serves the whole pack.
 - Model keys come from the `leader` vault source (the vault host, over the quorum link, with the policy
   and audit of `rux quorum policy`) unless the thread, `--vault` or `authority.json` says `local`. The
-  audit names the thread that first made the authority fetch a key.
+  audit names every thread that uses a key: a cached use is reported to the vault host once per thread per 10 minutes.
 
-Sub-agents a thread starts through `/mcp` always run on the thread's own authority, so their wake-ups
-and scope stay local.
+Sub-agents a thread starts through `/mcp` are placed like any thread: anywhere in the pack unless
+`start_thread` is given an `authority`. The child records its parent and the parent's authority
+(`parent`, `parent_authority` in `ThreadSummary`, and `depth`). A parent's `subagents` include children on
+other authorities; `read_thread`, `send_message`, `interrupt_thread` and `remove_thread` reach them over
+the quorum link (`/quorum/mcp`), their wake-ups go back to the parent's authority (`/quorum/wake`), and
+`/api/threads/{parent}/subagents/{id}/events[/page]` is proxied to the child's authority.
+`thread_stats` only covers local sub-agents.
 
 ## Threads are project agents
 
