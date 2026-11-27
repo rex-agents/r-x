@@ -73,6 +73,10 @@ type Launch struct {
 	GitKnownHosts string `json:"git_known_hosts,omitempty"`
 	// NoGitAgent keeps the Git keys for the clone only, as rox up --no-git-agent asks.
 	NoGitAgent bool `json:"no_git_agent,omitempty"`
+	// Credentials is false when rox up --credentials=false asked for a guest with no agent
+	// sign-in: rix then pushes no Claude Code or Codex credentials (Git agent and setup sync
+	// still happen). Absent means true; read it with WantCredentials.
+	Credentials *bool `json:"credentials,omitempty"`
 	// NewAgents are the agents this step installed, which need credentials now.
 	NewAgents []string `json:"new_agents,omitempty"`
 }
@@ -130,3 +134,6 @@ type FunnelEntry struct {
 	URL  string `json:"url"`
 	Port int    `json:"port"`
 }
+
+// WantCredentials reports whether rix should push agent credentials for this launch.
+func (l *Launch) WantCredentials() bool { return l == nil || l.Credentials == nil || *l.Credentials }
