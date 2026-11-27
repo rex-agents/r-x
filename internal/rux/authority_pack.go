@@ -32,6 +32,11 @@ type PackSource interface {
 	Threads(ctx context.Context, authority string) ([]authapi.ThreadSummary, error)
 }
 
+// A pack-wide PackSource (the quorum's) must keep the per-thread endpoints working for threads on
+// other authorities: GET /api/threads/{id}/events, /events/page and /subagents/{sub}/events[/page]
+// are plain /api requests, so the leader proxies them to the authority that owns the thread (found
+// from ThreadSummary.authority) and streams the reply through unchanged.
+
 // SetPackSource swaps in another pack view, such as the quorum's.
 func (s *server) SetPackSource(p PackSource) {
 	s.packMu.Lock()
@@ -205,7 +210,7 @@ func (s *server) localHost() authapi.HostInfo {
 
 func (s *server) localAuthority() authapi.AuthorityInfo {
 	return authapi.AuthorityInfo{
-		Name: s.authName(), URL: s.selfURL, Status: "up", Host: s.localHost(), Local: true,
+		Name: s.authName(), URL: s.selfURL, Status: "up", Host: s.localHost(), Local: true, Started: s.started.UTC().Format(time.RFC3339),
 		Threads: s.threadSummaries(),
 	}
 }
@@ -255,8 +260,12 @@ func (s *server) summarize(m threadMeta, cost float64, subs []authapi.SubAgentSu
 	if subs == nil {
 		subs = []authapi.SubAgentSummary{}
 	}
+	status := m.Status
+	if m.Archived {
+		status = "archived"
+	}
 	return authapi.ThreadSummary{
-		ID: m.ID, Project: m.Project, Title: m.Title, Status: m.Status,
+		ID: m.ID, Project: m.Project, Title: m.Title, Status: status, Archived: m.Archived,
 		Authority: s.authName(), Guest: m.Guest, Placement: authapi.Placement{Local: m.Backend == "local", Authority: s.authName()},
 		SubAgents: subs, Cost: cost, Updated: m.Updated.UTC().Format(time.RFC3339),
 	}
@@ -374,4 +383,25 @@ type threadView struct {
 func (s *server) viewOf(t *thread) threadView {
 	sum := s.summaryOf(t)
 	return threadView{threadMeta: t.view(), Authority: sum.Authority, Placement: sum.Placement, SubAgents: sum.SubAgents, Cost: sum.Cost}
+}
+
+// subAgent serves a thread's sub-agent through one of the thread handlers: the sub-agent must
+// have been started by the thread in the URL.
+func (s *server) subAgent(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		child := s.get(r.PathValue("sub"))
+		if child == nil {
+			httpErr(w, 404, "no such sub-agent")
+			return
+		}
+		child.mu.Lock()
+		parent := child.meta.Parent
+		child.mu.Unlock()
+		if parent == "" || parent != r.PathValue("id") {
+			httpErr(w, 404, "no such sub-agent")
+			return
+		}
+		r.SetPathValue("id", child.meta.ID)
+		h(w, r)
+	}
 }

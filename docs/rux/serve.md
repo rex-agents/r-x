@@ -68,7 +68,11 @@ Go code (the TUI) calls `rux.EnsureAuthority()` to start the daemon if needed an
 OS, CPUs, memory, load and guest slots, plus its threads). `GET /api/pack/stream` is the live feed
 (server-sent events: a `pack` snapshot, then `pack.delta`, `thread.event` and `thread.status`; each
 event's data is `{"type", "data"}`). Outside a quorum this is a pack of one: the leader is the
-authority itself, term 0. `GET /api/threads` also returns `authority`, `placement`, `subagents`
+authority itself, term 0. `started` on each authority is its start time (for uptime), and an archived
+thread has status `archived` (and `archived: true`). A thread's sub-agents are openable at
+`/api/threads/{thread}/subagents/{id}/events` (SSE) and `/events/page`; both are answered only for a
+sub-agent the thread started. A leader proxies all `/api/threads/{id}/...` requests for another
+authority's threads to that authority. `GET /api/threads` also returns `authority`, `placement`, `subagents`
 (a manager's workers) and `cost` for each thread; `?authority=NAME` or `?authority=all` lists another
 authority's or the whole pack's threads. The Go types are in `internal/rux/authapi`.
 
@@ -137,10 +141,36 @@ own token.
 `rux serve --backend local` clones the repo on the host and runs the runner there. It is
 **unsandboxed** and only for exercising the app.
 
+## Threads are project agents
+
+Every thread can start sub-agents, whatever its engine. The authority's guest `/mcp` endpoint accepts
+any live thread's token and serves the same tools to all of them (`start_thread`, `list_threads`,
+`send_message`, `read_thread`, `view_file`, `interrupt_thread`, `remove_thread`, `thread_stats`,
+`get_project`, `update_notes`). A [project's manager](projects-and-managers.md) manages every worker in
+its project; any other thread manages the sub-agents it started. Sub-agents are threads too (own guest,
+repo checked out, `parent` set); they show up in the parent's `subagents` in `/api/pack`, the parent is
+woken when one finishes a turn, and they can nest three deep. A sub-agent inherits its parent's engine,
+model and vault.
+
+A thread's **engine** is chosen with `"engine"` on `POST /api/threads`:
+
+| Engine | Runs in the guest | Model |
+| --- | --- | --- |
+| `claude-code` (default) | `rux runner` → `claude -p`, with the authority's MCP server in its config | Claude Code's: aliases such as `opus`, subscription or API key through the proxy |
+| `harness` | `rux runner` → `rux headless`, rux's own agent loop (`internal/harness`) without a UI | `anthropic/MODEL` or `openai/MODEL`, through the [model proxy](credentials.md#the-model-proxy) |
+
+`rux headless` speaks claude's stream-json on stdin and stdout, so the runner, the thread store and the
+app need no changes. It has the harness's coding tools in the thread's directory plus the authority's MCP
+tools. It's what `rux agent --headless` should run too (the command is hidden for now).
+Limits: a restarted harness agent replays only the text of its last 20 turns, not its tool history;
+cost isn't tracked (`cost` stays 0); a model change on a running harness thread takes effect only on
+restart; other providers (OpenRouter, Ollama, …) aren't served by the proxy yet.
+
+Thread and sub-agent guests are launched with `rox up --credentials=false`, so rix pushes no Claude Code
+or Codex sign-in into them (Git agent and setup sync still apply); their models go through the proxy.
+
 ## Not yet
 
-A thread's guest runs `rux runner`, which runs `claude -p`, not yet `rux agent` (the harness). Threads
-that are managers start workers through the guest `/mcp` endpoint; other threads can't spawn
-sub-agents yet. Pinning to other authorities, the pack-wide view and `vault: leader` need the quorum.
+Pinning to other authorities, the pack-wide view and `vault: leader` need the quorum.
 For `rux serve` threads: push notifications, SQLite storage and a scheduler. Tools are pre-allowed
 (`--allowedTools`) and anything else is denied (`--permission-prompts none`), so a thread has no approval prompts.
