@@ -460,3 +460,76 @@ func TestRunnerLegacyServerMessage(t *testing.T) {
 		t.Fatalf("queue %+v", r.inQ)
 	}
 }
+
+// A message claude couldn't take stays in the inbox, in order, and is retried until the
+// whole write succeeds; only then is it recorded as run and its file removed.
+func TestDeliverRetainsAndRetriesFailedDispatch(t *testing.T) {
+	root := t.TempDir()
+	work := filepath.Join(root, "w")
+	os.MkdirAll(work, 0o755)
+	r := newTestRunner(t, "", work)
+	r.retryDelay = 20 * time.Millisecond
+	r.claudeBin = filepath.Join(root, "claude") // not there yet: starting claude fails
+	close(r.ready)
+	r.accept(wireMsg{T: "user", ID: "m1", Text: "first"})
+	r.accept(wireMsg{T: "user", ID: "m2", Text: "second"})
+	go r.deliverLoop()
+
+	time.Sleep(250 * time.Millisecond)
+	r.inMu.Lock()
+	n, seen := len(r.inQ), len(r.seen)
+	r.inMu.Unlock()
+	if n != 2 || seen != 0 {
+		t.Fatalf("failed dispatch dropped messages: queue %d, delivered %d", n, seen)
+	}
+	if ents, _ := os.ReadDir(r.inboxDir()); len(ents) != 2 {
+		t.Fatalf("inbox files = %d", len(ents))
+	}
+	if strings.Contains(strings.Join(func() []string {
+		var o []string
+		for _, l := range r.lines {
+			o = append(o, string(l))
+		}
+		return o
+	}(), "\n"), `"rux_user"`) {
+		t.Fatal("recorded as run before claude took it")
+	}
+	// A restart in this state still has both, in order.
+	r2 := &runner{stateDir: r.stateDir, dir: r.dir}
+	r2.ready, r2.retry, r2.inNotify = make(chan struct{}), make(chan struct{}, 1), make(chan struct{}, 1)
+	if err := r2.load(); err != nil {
+		t.Fatal(err)
+	}
+	r2.loadInbox()
+	if len(r2.inQ) != 2 || r2.inQ[0].msg.ID != "m1" || r2.inQ[1].msg.ID != "m2" {
+		t.Fatalf("reloaded queue %+v", r2.inQ)
+	}
+
+	// claude becomes available: a fake that logs what it's given.
+	got := filepath.Join(root, "got.txt")
+	os.WriteFile(r.claudeBin, []byte("#!/bin/sh\ncat >> "+got+"\n"), 0o755)
+	waitOutbox(t, "delivery", func() bool {
+		r.inMu.Lock()
+		defer r.inMu.Unlock()
+		return len(r.inQ) == 0
+	})
+	b, _ := os.ReadFile(got)
+	i1, i2 := strings.Index(string(b), "first"), strings.Index(string(b), "second")
+	if i1 < 0 || i2 < i1 {
+		t.Fatalf("claude got %q", b)
+	}
+	if ents, _ := os.ReadDir(r.inboxDir()); len(ents) != 0 {
+		t.Fatalf("inbox not cleaned: %d", len(ents))
+	}
+	r.mu.Lock()
+	var users int
+	for _, l := range r.lines {
+		if strings.Contains(string(l), `"rux_user"`) && strings.Contains(string(l), `"id"`) {
+			users++
+		}
+	}
+	r.mu.Unlock()
+	if users != 2 {
+		t.Fatalf("rux_user events with ids = %d", users)
+	}
+}

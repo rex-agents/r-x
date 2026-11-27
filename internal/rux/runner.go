@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -44,6 +45,7 @@ type runner struct {
 	inMu         sync.Mutex
 	inQ          []inboxMsg // accepted user messages not yet given to claude
 	inSeq        int64
+	retryDelay   time.Duration // first wait before redelivering a failed message; 0 is 2s
 	inNotify     chan struct{}
 	seen, queued map[string]bool
 	gitEnv       []string // extra environment for git and claude
@@ -311,7 +313,11 @@ func (r *runner) handle(m wireMsg, reply func(wireMsg)) {
 	}
 }
 
-func (r *runner) sendUser(id, text string, files ...attachment) {
+// sendUser hands a message to claude. It returns nil only once the whole message is written to
+// claude's stdin, and then records it as run (the rux_user event with its id). On any error the
+// caller keeps the message and tries again. A crash after the write but before the record means
+// the message runs again after a restart: at-least-once, never silently lost.
+func (r *runner) sendUser(id, text string, files ...attachment) error {
 	r.procMu.Lock()
 	defer r.procMu.Unlock()
 	for r.upgrading.Load() { // the runner is about to re-exec; this message would be lost
@@ -328,13 +334,11 @@ func (r *runner) sendUser(id, text string, files ...attachment) {
 	select { // never run in a directory the checkout didn't produce
 	case <-r.ready:
 	default:
-		r.emit(ruxEv("rux_error", "text", "the workspace isn't ready; not starting claude"))
-		return
+		return errors.New("the workspace isn't ready; not starting claude")
 	}
 	if r.cmd == nil {
 		if err := r.startClaude(); err != nil {
-			r.emit(ruxEv("rux_error", "text", "starting claude: "+err.Error()))
-			return
+			return fmt.Errorf("starting claude: %w", err)
 		}
 	}
 	// Attached images go to claude as images, and into the guest as files
@@ -354,7 +358,6 @@ func (r *runner) sendUser(id, text string, files ...attachment) {
 				"type": "base64", "media_type": f.Mime, "data": base64.StdEncoding.EncodeToString(f.Data)}})
 		}
 	}
-	r.emit(ruxEv("rux_user", "text", text, "images", urls, "id", id))
 	ctext := text
 	if len(paths) > 0 {
 		ctext = strings.TrimSpace(text + "\n\n(The user attached " + map[bool]string{true: "an image", false: "images"}[len(paths) == 1] + ", also saved as " + strings.Join(paths, ", ") + ".)")
@@ -368,8 +371,14 @@ func (r *runner) sendUser(id, text string, files ...attachment) {
 		},
 	})
 	if _, err := r.stdin.Write(append(b, '\n')); err != nil {
-		r.emit(ruxEv("rux_error", "text", "writing to claude: "+err.Error()))
+		// Part of the line may have gone through. End this claude, so the half line dies with
+		// it and the retry starts a clean process (--resume).
+		r.stdin.Close()
+		r.retiring = r.cmd
+		return fmt.Errorf("writing to claude: %w", err)
 	}
+	r.emit(ruxEv("rux_user", "text", text, "images", urls, "id", id))
+	return nil
 }
 
 // startClaude must be called with procMu held.

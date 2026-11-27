@@ -131,7 +131,19 @@ func writeFileSync(path string, v any) error {
 		os.Remove(tmp)
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	syncDir(filepath.Dir(path))
+	return nil
+}
+
+// syncDir makes a new or renamed file's directory entry durable, where the filesystem allows.
+func syncDir(dir string) {
+	if d, err := os.Open(dir); err == nil {
+		d.Sync()
+		d.Close()
+	}
 }
 
 // head blocks until a message is waiting, and returns it without removing it.
@@ -166,13 +178,28 @@ func (r *runner) finish(im inboxMsg) {
 
 // deliverLoop hands accepted messages to claude in order, once the workspace is ready.
 func (r *runner) deliverLoop() {
+	backoff := r.retryBase()
 	for {
 		im := r.head()
 		for !r.waitReady() {
 		}
-		r.sendUser(im.msg.ID, im.msg.Text, im.msg.Files...)
+		if err := r.sendUser(im.msg.ID, im.msg.Text, im.msg.Files...); err != nil {
+			// Keep it, at the head so order holds, and try again later without spinning.
+			r.emit(ruxEv("rux_error", "text", "delivering a message: "+err.Error()+"; will retry"))
+			time.Sleep(backoff)
+			backoff = min(backoff*2, 30*time.Second)
+			continue
+		}
+		backoff = r.retryBase()
 		r.finish(im)
 	}
+}
+
+func (r *runner) retryBase() time.Duration {
+	if r.retryDelay > 0 {
+		return r.retryDelay
+	}
+	return 2 * time.Second
 }
 
 // waitReady blocks until the workspace is ready, trying the setup again whenever a message
