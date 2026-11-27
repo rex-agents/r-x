@@ -359,6 +359,8 @@ type GuestState struct {
 	Forward bool `json:"forward"`
 	// AgentPid is the guest's ssh-agent.
 	AgentPid int `json:"agent_pid,omitempty"`
+	// AgentStart is when that process started. A record without it predates it.
+	AgentStart string `json:"agent_start,omitempty"`
 	// Credentials are the agents whose credentials rix pushed.
 	Credentials []string `json:"credentials,omitempty"`
 	// Synced is when rix last synced agent setup, as RFC 3339.

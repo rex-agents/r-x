@@ -317,7 +317,7 @@ func Auth(agent string, apiKey bool, authFile string, off bool) error {
 			}
 		}
 	}
-	var saved []string
+	var saved, obsolete []string
 	err := Update(path, func(data map[string]any) error {
 		agents, _ := data["agents"].(map[string]any)
 		if agents == nil {
@@ -328,11 +328,13 @@ func Auth(agent string, apiKey bool, authFile string, off bool) error {
 		if s, ok := previous["sync"]; ok {
 			settings["sync"] = s
 		}
-		// Delete secrets rix saved for this agent that the new settings no longer use.
+		// Secrets rix saved for this agent that the new settings no longer use go once the
+		// config no longer names them, not before.
+		obsolete = obsolete[:0]
 		for key, file := range SecretFiles {
 			if key[0] == agent {
 				if _, kept := update[key[1]]; !kept {
-					os.Remove(filepath.Join(filepath.Dir(path), file))
+					obsolete = append(obsolete, filepath.Join(filepath.Dir(path), file))
 				}
 			}
 		}
@@ -354,6 +356,9 @@ func Auth(agent string, apiKey bool, authFile string, off bool) error {
 	})
 	if err != nil {
 		return err
+	}
+	for _, file := range obsolete {
+		os.Remove(file)
 	}
 	for _, file := range saved {
 		ui.Done("Saved the %s credential to %s %s", AgentNames[agent], ui.Code(file), ui.Muted("(0600)"))
@@ -652,10 +657,11 @@ func gitAgentCommand() *cobra.Command {
 					return err
 				}
 				if pid > 0 {
-					state.AgentPid = pid
+					recordAgent(state, pid)
 				}
 				state.GitKeys = keys
 				if err := saveState(name, state); err != nil {
+					discardAgent(name, pid)
 					return err
 				}
 				ui.Done("Git agent for %s holds %s", name, keyNames(keys))
