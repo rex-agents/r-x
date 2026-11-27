@@ -296,7 +296,7 @@ func TestGuestSyncSwapsAndRemovesStaleAfterwards(t *testing.T) {
 		sys.IsFile(home+"/.claude/settings.json") || readFile(t, home+"/.claude/guest-only") != "keep" {
 		t.Errorf("tree wrong")
 	}
-	for _, leftover := range []string{".rox/sync-work", ".rox/sync.lock"} {
+	for _, leftover := range []string{".rox/sync-work", ".rox/sync-lock"} {
 		if _, err := os.Stat(filepath.Join(home, leftover)); err == nil {
 			t.Errorf("left %s", leftover)
 		}
@@ -353,7 +353,8 @@ func TestGuestSyncRecoversFromAKilledSwap(t *testing.T) {
 	home := t.TempDir()
 	// What a sync killed mid-swap leaves: one path moved aside, one not yet touched.
 	seed(t, home, map[string]string{".claude/CLAUDE.md": "new half", "AGENTS.md": "untouched",
-		".rox/sync-work/undo/data/.claude/CLAUDE.md": "old", ".rox/sync.lock/pid": "999999"})
+		".rox/sync-work/undo/data/.claude/CLAUDE.md": "old"})
+	_ = os.Symlink("999999:1", filepath.Join(home, ".rox/sync-lock"))
 	seed(t, home, map[string]string{".rox/sync-work/undo/plan": "E .claude/CLAUDE.md\nE AGENTS.md\nA new/file\n", "new/file": "half"})
 	tarball := syncTar(t, map[string]string{"x": "1"}, true)
 	// The next sync restores first (here it then fails, so the restore is what's left).
@@ -495,32 +496,20 @@ func TestGuestSyncLocks(t *testing.T) {
 	link := func(t *testing.T, pid string, d time.Duration) string {
 		home := t.TempDir()
 		_ = os.MkdirAll(filepath.Join(home, ".rox"), 0o755)
-		lock := filepath.Join(home, ".rox/sync.lock")
+		lock := filepath.Join(home, ".rox/sync-lock")
 		_ = os.Symlink(pid+":1", lock)
 		age(lock, d)
-		return home
-	}
-	// A lock an older rix made: a folder, whose pid file may not be written yet.
-	folder := func(t *testing.T, pid string, d time.Duration) string {
-		home := t.TempDir()
-		seed(t, home, map[string]string{".rox/sync.lock/pid": pid})
-		if pid == "" {
-			_ = os.Remove(filepath.Join(home, ".rox/sync.lock/pid"))
-		}
-		age(filepath.Join(home, ".rox/sync.lock"), d)
 		return home
 	}
 	me := strconv.Itoa(os.Getpid())
 	// A live or still-initializing lock is never removed, and nothing is changed under it.
 	for name, home := range map[string]string{
-		"live owner":               link(t, me, 0),
-		"live legacy owner":        folder(t, me, 0),
-		"initializing legacy lock": folder(t, "", 0),
+		"live owner": link(t, me, 0),
 	} {
 		if _, err := guestSh(t, home, tarball, "sync", "x", "--"); err == nil || sys.IsFile(home+"/x") {
 			t.Errorf("%s: ran beside a live sync", name)
 		}
-		if _, err := os.Lstat(filepath.Join(home, ".rox/sync.lock")); err != nil {
+		if _, err := os.Lstat(filepath.Join(home, ".rox/sync-lock")); err != nil {
 			t.Errorf("%s: removed a live lock", name)
 		}
 		if _, err := os.Stat(filepath.Join(home, ".rox/sync-work")); err == nil {
@@ -530,15 +519,13 @@ func TestGuestSyncLocks(t *testing.T) {
 	// A dead owner, a lock too old to be a running sync (a PID reused after a restart), and
 	// an old lock that never got an owner all give way.
 	for name, home := range map[string]string{
-		"dead owner":        link(t, "999999", 0),
-		"old lock":          link(t, me, time.Hour),
-		"dead legacy owner": folder(t, "999999", 0),
-		"old ownerless":     folder(t, "", time.Hour),
+		"dead owner": link(t, "999999", 0),
+		"old lock":   link(t, me, time.Hour),
 	} {
 		if out, err := guestSh(t, home, tarball, "sync", "x", "--"); err != nil || readFile(t, home+"/x") != "1" {
 			t.Errorf("%s: %v %s", name, err, out)
 		}
-		if _, err := os.Lstat(filepath.Join(home, ".rox/sync.lock")); err == nil {
+		if _, err := os.Lstat(filepath.Join(home, ".rox/sync-lock")); err == nil {
 			t.Errorf("%s: lock left behind", name)
 		}
 	}
@@ -547,7 +534,7 @@ func TestGuestSyncLocks(t *testing.T) {
 func TestGuestSyncStaleLockKeepsTheJournalWhenRollbackFails(t *testing.T) {
 	home := t.TempDir()
 	seed(t, home, map[string]string{"d/x": "half", ".rox/sync-work/undo/data/d/x": "prior", ".rox/sync-work/undo/plan": "E d/x\n"})
-	_ = os.Symlink("999999:1", filepath.Join(home, ".rox/sync.lock"))
+	_ = os.Symlink("999999:1", filepath.Join(home, ".rox/sync-lock"))
 	_ = os.Chmod(filepath.Join(home, "d"), 0o500)
 	defer os.Chmod(filepath.Join(home, "d"), 0o700)
 	if _, err := guestSh(t, home, syncTar(t, map[string]string{"y": "1"}, true), "sync", "y", "--"); err == nil {
@@ -556,7 +543,7 @@ func TestGuestSyncStaleLockKeepsTheJournalWhenRollbackFails(t *testing.T) {
 	if readFile(t, home+"/.rox/sync-work/undo/data/d/x") != "prior" || !sys.IsFile(home+"/.rox/sync-work/undo/plan") {
 		t.Error("journal or backup lost")
 	}
-	if _, err := os.Lstat(filepath.Join(home, ".rox/sync.lock")); err == nil {
+	if _, err := os.Lstat(filepath.Join(home, ".rox/sync-lock")); err == nil {
 		t.Error("lock held forever")
 	}
 }
@@ -578,7 +565,7 @@ func TestGuestSyncCompetingRunsNeverOverlap(t *testing.T) {
 	if ok == 0 || readFile(t, home+"/x") != "1" {
 		t.Errorf("%d syncs succeeded, x=%q", ok, readFile(t, home+"/x"))
 	}
-	for _, left := range []string{".rox/sync.lock", ".rox/sync-work"} {
+	for _, left := range []string{".rox/sync-lock", ".rox/sync-work"} {
 		if _, err := os.Stat(filepath.Join(home, left)); err == nil {
 			t.Errorf("left %s", left)
 		}
@@ -642,5 +629,37 @@ func TestLegacyAgentOwnershipIsExact(t *testing.T) {
 		if (signaled == 1) != want {
 			t.Errorf("%q: signaled %d, want %v", command, signaled, want)
 		}
+	}
+}
+
+func TestGuestSyncRefusesAFolderAtTheLockPath(t *testing.T) {
+	home := t.TempDir()
+	seed(t, home, map[string]string{".rox/sync-lock/keep": "someone's"})
+	if out, err := guestSh(t, home, syncTar(t, map[string]string{"x": "1"}, true), "sync", "x", "--"); err == nil {
+		t.Fatalf("sync ran: %s", out)
+	}
+	entries, _ := os.ReadDir(filepath.Join(home, ".rox/sync-lock"))
+	if len(entries) != 1 || readFile(t, home+"/.rox/sync-lock/keep") != "someone's" || sys.IsFile(home+"/x") {
+		t.Errorf("touched the folder: %v", entries)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".rox/sync-work")); err == nil {
+		t.Error("staged anyway")
+	}
+}
+
+func TestGuestSyncDisplacedRunTouchesNothing(t *testing.T) {
+	home := t.TempDir()
+	// A tar that, while it runs, hands the lock to another live run and fails. The first run
+	// no longer holds the lock, so it must not roll back, clear the staging folder or free the lock.
+	seed(t, home, map[string]string{".local/bin/tar": "#!/bin/sh\nrm -f \"$HOME/.rox/sync-lock\"\nln -s 1:1 \"$HOME/.rox/sync-lock\"\necho other > \"$HOME/.rox/sync-work/other-run\"\nexit 1\n"})
+	_ = os.Chmod(filepath.Join(home, ".local/bin/tar"), 0o755)
+	if out, err := guestSh(t, home, syncTar(t, map[string]string{"x": "1"}, true), "sync", "x", "--"); err == nil {
+		t.Fatalf("sync succeeded: %s", out)
+	}
+	if got, _ := os.Readlink(filepath.Join(home, ".rox/sync-lock")); got != "1:1" {
+		t.Errorf("lock is now %q", got)
+	}
+	if readFile(t, home+"/.rox/sync-work/other-run") != "other\n" {
+		t.Error("cleared the other run's staging folder")
 	}
 }
