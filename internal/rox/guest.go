@@ -171,12 +171,8 @@ func (g *Guest) Runtime() string {
 	return filepath.Join(fmt.Sprintf("/tmp/rox-%d", os.Getuid()), id)
 }
 
-func (g *Guest) ControlSocket() string { return filepath.Join(g.Runtime(), "c") }
-func (g *Guest) RelaySocket() string   { return filepath.Join(g.Runtime(), "relay.sock") }
-func (g *Guest) RexSocket() string     { return filepath.Join(g.Runtime(), "rex.sock") }
-
-// Endpoint is the launcher's socket for the guest's Rex server.
-func (g *Guest) Endpoint() string { return "unix://" + g.RexSocket() }
+// Endpoint is the address other devices reach the guest at, its tailnet name when it has one.
+func (g *Guest) Endpoint() string { return g.TailnetName }
 
 // KnownHosts pins the guest's SSH host key.
 func (g *Guest) KnownHosts() string { return filepath.Join(g.Directory(), "known_hosts") }
@@ -368,7 +364,10 @@ func IsLocal(name string) bool {
 func (g *Guest) Record() contract.Guest {
 	r := contract.Guest{Schema: contract.Schema, Name: g.Name, Backend: g.Backend, Engine: g.Engine,
 		Phase: g.Phase, Stopped: g.Stopped, User: g.User, Socket: g.GuestSocket, Agents: map[string]string{},
-		Tailnet: g.TailnetName, Endpoint: g.Endpoint(), Projects: []contract.Project{}}
+		Tailnet: g.TailnetName, Endpoint: g.Endpoint(), Projects: []contract.Project{}, Session: g.SessionID}
+	if g.Name != "" {
+		r.Dir, r.Runtime = g.Directory(), g.Runtime()
+	}
 	if g.GuestSocket != "" {
 		r.Home, r.Base = g.Home(), g.Base()
 	}

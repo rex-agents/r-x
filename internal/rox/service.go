@@ -53,7 +53,7 @@ func serviceTick(retry map[string]*retryState, now time.Time) {
 			if g.Phase != "ready" || g.Stopped {
 				return nil
 			}
-			restored, err := resume(g, savedTailnet(g, ""), 120*time.Second, false)
+			restored, err := resume(g, 120*time.Second, false)
 			if restored {
 				serviceLog("Restored %s", name)
 			}

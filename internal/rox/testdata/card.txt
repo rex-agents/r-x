@@ -3,4 +3,4 @@
   Workspace  rv-web-0123456789ab
   Tailnet    rv-web.tail1.ts.net
   Session    session:abc
-  Inspect    rex -S rv-web-0123456789ab session inspect session:abc
+  Shell      rox shell rv-web-0123456789ab

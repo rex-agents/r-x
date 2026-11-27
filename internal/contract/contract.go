@@ -24,10 +24,17 @@ const (
 	Resume = "resume"
 	// Down: the guest is going away. rix stops its Git agent and forgets it.
 	Down = "down"
+	// OpenShell: open a shell for the guest in an app (the Rex app, a terminal tab). A provider
+	// that did it says so in done. Without one, rox shell runs in the current terminal.
+	OpenShell = "open-shell"
 )
 
+// LegacyEvents are the events the first schema-1 providers, such as rix, know. rox sends a
+// provider named rix only these, so rix keeps working unchanged.
+var LegacyEvents = []string{PreFetch, PostBoot, PreClone, PostProvision, Resume, Down}
+
 // Events lists every hook event.
-var Events = []string{PreFetch, PostBoot, PreClone, PostProvision, Resume, Down}
+var Events = []string{PreFetch, PostBoot, PreClone, PostProvision, Resume, Down, OpenShell}
 
 // Project is one checkout in a guest.
 type Project struct {
@@ -52,9 +59,16 @@ type Guest struct {
 	// Home is the guest user's home, and Base is rox's state folder in it.
 	Home string `json:"home"`
 	Base string `json:"base"`
-	// Socket is the guest's Rex server socket, inside the guest.
-	Socket   string    `json:"socket"`
+	// Socket is where the guest's Rex server listens, inside the guest. rox only records the
+	// path; a provider such as rox-rex starts the server there.
+	Socket string `json:"socket"`
+	// Dir is the guest's state folder on the launcher, and Runtime its short socket folder.
+	// Providers keep their own per-guest state there. Both are empty for a guest on another host.
+	Dir      string    `json:"dir,omitempty"`
+	Runtime  string    `json:"runtime,omitempty"`
 	Projects []Project `json:"projects"`
+	// Session is the guest's own session id, kept for a guest started without a project.
+	Session string `json:"session,omitempty"`
 	// Agents are the agent CLIs rox installed, as {agent: version}.
 	Agents   map[string]string `json:"agents"`
 	Tailnet  string            `json:"tailnet,omitempty"`
@@ -75,6 +89,14 @@ type Launch struct {
 	NoGitAgent bool `json:"no_git_agent,omitempty"`
 	// NewAgents are the agents this step installed, which need credentials now.
 	NewAgents []string `json:"new_agents,omitempty"`
+	// Project is the id of the project post-provision or open-shell is about; empty means the
+	// guest itself.
+	Project string `json:"project,omitempty"`
+	// Command is what rox up was given after --. A provider that keeps sessions starts it.
+	Command []string `json:"command,omitempty"`
+	// Config is the rox config path in effect, and NoTailscale is rox up --no-tailscale.
+	Config      string `json:"config,omitempty"`
+	NoTailscale bool   `json:"no_tailscale,omitempty"`
 }
 
 // Reply is what rix hook prints on stdout, as one JSON object.
@@ -90,6 +112,11 @@ type Reply struct {
 	Done []string `json:"done,omitempty"`
 	// Warnings are problems that didn't stop the hook.
 	Warnings []string `json:"warnings,omitempty"`
+	// Session is the id of a session the provider created for the project or guest the event
+	// is about. rox keeps it in the guest's record and shows it.
+	Session string `json:"session,omitempty"`
+	// Endpoint is an address other devices reach the guest at, such as its tailnet name.
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 // List is what rox ls --json prints.
