@@ -37,6 +37,7 @@ type runner struct {
 	notes                    string // project notes, appended to claude's system prompt
 	project                  string // project name
 	role                     string // "" for a worker, "manager" for a project's manager
+	modelProxy               string // the authority's base URL for /proxy/...; when set, claude gets it and the thread token instead of model keys
 	httpBase                 string // the server's runner listener, e.g. http://192.168.65.1:7701
 
 	ready        chan struct{} // closed once the workspace is cloned or created
@@ -87,6 +88,7 @@ func runRunner(args []string) {
 	fs.StringVar(&r.repo, "repo", "", "repository to clone into --dir (default: an empty git repo)")
 	fs.StringVar(&r.branch, "branch", "", "branch to clone (default: the remote's default)")
 	fs.StringVar(&r.role, "role", "", `"manager" to run a project's manager (rux MCP tools for its workers)`)
+	fs.StringVar(&r.modelProxy, "model-proxy", "", "the authority's base URL, e.g. http://192.168.65.1:7701: claude and codex use its /proxy/... with the thread token instead of model keys")
 	fs.Parse(args)
 	if r.serverURL == "" || r.thread == "" || r.token == "" {
 		log.Fatal("runner: --server, --thread and --token are required")
@@ -434,7 +436,7 @@ func (r *runner) startClaude() error {
 	}
 	cmd := exec.Command(r.claudeBin, args...)
 	cmd.Dir = r.dir
-	cmd.Env = append(os.Environ(), r.gitEnv...)
+	cmd.Env = r.modelEnv(append(os.Environ(), r.gitEnv...))
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err

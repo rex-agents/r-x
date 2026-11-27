@@ -53,6 +53,8 @@ func Main(version string, args []string) int {
 		runStatusLine()
 	case "--version", "version":
 		fmt.Println("rux", Version)
+	case "authority":
+		runAuthority(os.Args[2:])
 	case "serve":
 		runServe(os.Args[2:])
 	case "runner":
@@ -161,7 +163,7 @@ func help(w io.Writer) {
 			{"rux skill install|show", "install or print the rux skill for Claude Code or Codex"},
 		}},
 		{"Threads from your phone", []cmd{
-			{"rux serve", "serve the rux web app and run threads in rox guests"},
+			{"rux authority start|stop|status|logs", "the daemon: web app, threads in rox guests, model proxy (rux serve is a hidden alias of start --foreground)"},
 		}},
 		{"Tools for agents", []cmd{
 			{"rux share FILE... [--caption TEXT]", "show files in the thread (images and videos inline)"},

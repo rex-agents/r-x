@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/rex-agents/r-x/internal/rux/authapi"
 	"io"
 	"io/fs"
 	"log"
@@ -48,6 +49,15 @@ type server struct {
 	models     *modelCache
 	tools      *toolHost
 
+	name         string // this authority's name in the pack
+	selfURL      string // the authority's own HTTP URL, once listening
+	hub          packHub
+	packMu       sync.Mutex
+	pack         PackSource             // see authority_pack.go
+	vaults       map[string]VaultSource // by name: "local", and "leader" once a quorum adds it
+	vaultDefault string                 // the vault source threads use unless they say otherwise
+	proxy        *modelProxy
+
 	mu       sync.Mutex
 	threads  map[string]*thread
 	projects map[string]*project
@@ -78,6 +88,7 @@ type threadMeta struct {
 	SetupFailed bool      `json:"setup_failed,omitempty"` // the runner couldn't check out the repo, so claude hasn't run
 	Connected   bool      `json:"connected"`
 	Token       string    `json:"token,omitempty"`
+	Vault       string    `json:"vault,omitempty"` // which vault source serves this thread's model keys: "local" or "leader"
 }
 
 type storedEvent struct {
@@ -103,6 +114,10 @@ type thread struct {
 	subs   map[chan sseItem]struct{}
 	send   chan wireMsg // current runner connection; nil if none
 	cancel context.CancelFunc
+	cost   float64 // summed total_cost_usd of the thread's result events
+
+	onEvent  func(line []byte) // set by server.attach; called with t.mu held
+	onStatus func()            // likewise, on a status change
 
 	upgradeTried bool      // runner upgrade attempted this server run
 	lastText     string    // the latest assistant text, for wake-ups and summaries
@@ -113,14 +128,13 @@ type thread struct {
 
 func runServe(args []string) {
 	flags := flag.NewFlagSet("serve", flag.ExitOnError)
-	home, _ := os.UserHomeDir()
 	exe, _ := os.Executable()
 	s := &server{threads: map[string]*thread{}, selfBin: exe}
 	listen := flags.String("listen", "127.0.0.1:7700", "web app listen address (front it with `tailscale serve`)")
 	runnerListen := flags.String("runner-listen", "0.0.0.0:7701", "listen address for guest runners")
 	cidrs := flags.String("guest-cidrs", "", "comma-separated networks allowed to reach the runner listener (default: Apple container's default network; loopback always allowed)")
 	flags.StringVar(&s.advertise, "advertise", "", "host:port guests use to reach the runner listener (default: Apple container's gateway, runner port)")
-	flags.StringVar(&s.dataDir, "data", filepath.Join(home, ".rux"), "data directory")
+	flags.StringVar(&s.dataDir, "data", authorityHome(), "data directory")
 	flags.StringVar(&s.runnerBin, "runner-bin", "", "Linux rux binary served to guests (default: rux-linux-ARCH beside rux, or this version's release)")
 	flags.StringVar(&s.roxBin, "rox", "rox", "rox binary")
 	flags.StringVar(&s.memory, "memory", "4G", "guest memory")
@@ -129,7 +143,16 @@ func runServe(args []string) {
 	flags.StringVar(&s.allowUser, "allow-user", "", "only allow this Tailscale login through `tailscale serve` (recommended)")
 	claudeBin := flags.String("claude", "claude", "claude binary on this host, used only to list the models Claude Code offers")
 	ghOn := flags.Bool("github", true, "give guests GitHub access and list repos with the token from rix credential github")
+	proxyOn := flags.Bool("model-proxy", true, "give guests the model proxy instead of model keys")
+	vaultDef := flags.String("vault", "", `default vault source for model keys: "local" (this host's rix) or "leader" (default: authority.json, else local)`)
 	flags.Parse(args)
+	cfg := loadAuthorityConfig(s.dataDir)
+	s.name = cfg.Name
+	s.vaultDefault = cmpOr(*vaultDef, cfg.Vault)
+	s.SetVaultSource("local", newLocalVault())
+	if *proxyOn {
+		s.proxy = newModelProxy(s)
+	}
 
 	if s.advertise == "" || *cidrs == "" {
 		gw, subnet, err := containerNetwork()
@@ -211,6 +234,8 @@ func runServe(args []string) {
 	app.HandleFunc("GET /api/threads/{id}/assets/{file}", s.handleAssetGet)
 	app.HandleFunc("GET /api/overview", s.handleOverview)
 	app.HandleFunc("GET /api/overview/stream", s.handleOverviewStream)
+	app.HandleFunc("GET /api/pack", s.handlePack)
+	app.HandleFunc("GET /api/pack/stream", s.handlePackStream)
 
 	guest := http.NewServeMux()
 	guest.HandleFunc("GET /runner", s.handleRunner)
@@ -218,6 +243,9 @@ func runServe(args []string) {
 	guest.HandleFunc("POST /assets", s.handleAssetUpload)
 	guest.HandleFunc("/mcp", s.handleMCP)
 	guest.HandleFunc("POST /ui", s.handleUIPost)
+	if s.proxy != nil {
+		guest.HandleFunc("/proxy/{provider}/{path...}", s.handleProxy)
+	}
 	guest.HandleFunc("GET /tools", s.handleGuestTools)
 	guest.HandleFunc("POST /tools/run", s.handleGuestToolRun)
 	guest.HandleFunc("GET /tools/runs/{run}", s.handleGuestToolStatus)
@@ -238,8 +266,22 @@ func runServe(args []string) {
 		log.Printf("runner listener on %s (guests use %s)", *runnerListen, s.advertise)
 		log.Fatal(http.ListenAndServe(*runnerListen, s.guestOnly(guest)))
 	}()
-	log.Printf("web app on http://%s (backend %s, data %s)", *listen, s.backend, s.dataDir)
-	log.Fatal(http.ListenAndServe(*listen, s.userOnly(app)))
+	ln, err := net.Listen("tcp", *listen)
+	if err != nil {
+		log.Fatal(err)
+	}
+	sockLn, err := listenUnix(authorityPath(s.dataDir, "sock"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	host, port, _ := net.SplitHostPort(ln.Addr().String())
+	if ip := net.ParseIP(host); host == "" || ip != nil && ip.IsUnspecified() {
+		host = "127.0.0.1"
+	}
+	s.registerAuthority("http://" + net.JoinHostPort(host, port))
+	go func() { log.Fatal(serveUnix(sockLn, s.userOnly(app))) }()
+	log.Printf("authority %s: web app on %s and %s (backend %s, data %s)", s.authName(), s.selfURL, sockLn.Addr(), s.backend, s.dataDir)
+	log.Fatal(http.Serve(ln, s.userOnly(app)))
 }
 
 // containerNetwork reads the gateway and subnet of Apple container's default network.
@@ -274,7 +316,8 @@ func (s *server) userOnly(h http.Handler) http.Handler {
 			host, _, _ := net.SplitHostPort(r.RemoteAddr)
 			ip := net.ParseIP(host)
 			proxied := login != "" || r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("Tailscale-Headers-Info") != ""
-			direct := ip != nil && ip.IsLoopback() && !proxied
+			onSock, _ := r.Context().Value(unixConnKey).(bool)
+			direct := (onSock || ip != nil && ip.IsLoopback()) && !proxied
 			if !direct && !strings.EqualFold(login, s.allowUser) {
 				if _, dup := seen.LoadOrStore("deny:"+login, true); !dup {
 					log.Printf("denied web request from %q (login %q)", r.RemoteAddr, login)
@@ -341,6 +384,7 @@ func (s *server) loadThreads() error {
 			t.meta.Status = "starting" // its runner may still dial in
 		}
 		s.threads[t.meta.ID] = t
+		s.attach(t)
 	}
 	return nil
 }
@@ -381,6 +425,7 @@ func openThread(dir string, meta *threadMeta) (*thread, error) {
 			}
 		}
 		t.events = append(t.events, line)
+		t.addCost(line)
 	}
 	t.logf = f
 	if err := sc.Err(); err != nil {
@@ -406,6 +451,10 @@ func (t *thread) appendLocked(src string, rseq int64, ev json.RawMessage) {
 	t.events = append(t.events, line)
 	t.logf.Write(append(line, '\n'))
 	t.meta.Updated = now
+	t.addCost(line)
+	if t.onEvent != nil {
+		t.onEvent(line)
+	}
 	for ch := range t.subs {
 		select {
 		case ch <- sseItem{se.ID, line}:
@@ -430,6 +479,25 @@ func (t *thread) setStatusLocked(st string) {
 	t.appendLocked("rux", 0, ruxEv("rux_status", "status", st, "connected", t.meta.Connected))
 	if err := t.saveMeta(); err != nil {
 		log.Printf("thread %s: saving meta: %v", t.meta.ID, err)
+	}
+	if t.onStatus != nil {
+		t.onStatus()
+	}
+}
+
+// addCost adds a result event's cost to the thread's total.
+func (t *thread) addCost(line []byte) {
+	if !bytes.Contains(line, []byte(`"total_cost_usd"`)) {
+		return
+	}
+	var se struct {
+		Ev struct {
+			Type string  `json:"type"`
+			Cost float64 `json:"total_cost_usd"`
+		} `json:"ev"`
+	}
+	if json.Unmarshal(line, &se) == nil && se.Ev.Type == "result" {
+		t.cost += se.Ev.Cost
 	}
 }
 
@@ -472,9 +540,23 @@ func (s *server) handleList(w http.ResponseWriter, r *http.Request) {
 		ts = append(ts, t)
 	}
 	s.mu.Unlock()
-	out := make([]threadMeta, 0, len(ts))
+	// ?authority=NAME lists another authority's threads, and ?authority=all the whole pack's,
+	// both as authapi.ThreadSummary.
+	if a := r.URL.Query().Get("authority"); a != "" && a != s.authName() {
+		if a == "all" {
+			a = ""
+		}
+		sums, err := s.packSource().Threads(r.Context(), a)
+		if err != nil {
+			httpErr(w, 502, err.Error())
+			return
+		}
+		writeJSONResp(w, 200, sums)
+		return
+	}
+	out := make([]threadView, 0, len(ts))
 	for _, t := range ts {
-		out = append(out, t.view())
+		out = append(out, s.viewOf(t))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Updated.After(out[j].Updated) })
 	writeJSONResp(w, 200, out)
@@ -486,7 +568,7 @@ func (s *server) handleGet(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 404, "no such thread")
 		return
 	}
-	writeJSONResp(w, 200, t.view())
+	writeJSONResp(w, 200, s.viewOf(t))
 }
 
 var (
@@ -518,7 +600,9 @@ type createReq struct {
 	Runtime                                      string // rox up's backend for a new guest (default container)
 	Guest                                        string // an existing rox guest to run in instead
 	Kind, Parent                                 string
-	Title                                        string `json:"-"` // set by managers; otherwise the prompt's first line
+	Title                                        string            `json:"-"` // set by managers; otherwise the prompt's first line
+	Placement                                    authapi.Placement `json:"placement"`
+	Vault                                        string            `json:"vault"` // "local" or "leader"; default: authority.json, else local
 }
 
 type reqError struct {
@@ -548,7 +632,7 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, errorCode(err), err.Error())
 		return
 	}
-	writeJSONResp(w, 201, t.view())
+	writeJSONResp(w, 201, s.viewOf(t))
 }
 
 func (s *server) createThread(req createReq) (*thread, error) {
@@ -602,6 +686,13 @@ func (s *server) createThread(req createReq) (*thread, error) {
 	} else if !runtimes[req.Runtime] {
 		return nil, &reqError{400, "runtime must be container, linux, macos, fly or railway"}
 	}
+	local, vault, err := s.resolvePlacement(req.Placement, req.Vault)
+	if err != nil {
+		return nil, &reqError{400, err.Error()}
+	}
+	if local {
+		req.Runtime, req.Guest = "", ""
+	}
 	if remoteRuntime(req.Runtime) && hostTailnetName() == "" {
 		return nil, &reqError{400, req.Runtime + " guests reach rux over Tailscale, which isn't running on this Mac"}
 	}
@@ -630,7 +721,10 @@ func (s *server) createThread(req createReq) (*thread, error) {
 		ID: id, Title: title, Project: req.Project, Kind: req.Kind, Parent: req.Parent,
 		Repo: req.Repo, Branch: req.Branch, Prompt: req.Prompt, Model: req.Model, Effort: req.Effort,
 		Status: "provisioning", Backend: s.backend, Created: now, Updated: now, Token: randHex(24),
-		Runtime: req.Runtime, Guest: req.Guest, SharedGuest: req.Guest != "",
+		Runtime: req.Runtime, Guest: req.Guest, SharedGuest: req.Guest != "", Vault: vault,
+	}
+	if local {
+		meta.Backend = "local"
 	}
 	t, err := openThread(filepath.Join(s.threadsDir(), id), &meta)
 	if err != nil {
@@ -639,11 +733,12 @@ func (s *server) createThread(req createReq) (*thread, error) {
 	s.mu.Lock()
 	s.threads[id] = t
 	s.mu.Unlock()
+	s.attach(t)
 	t.mu.Lock()
 	t.queuePromptLocked() // the first message waits for the runner, however long the guest takes
 	t.mu.Unlock()
 	t.event(ruxEv("rux_status", "status", "provisioning", "connected", false))
-	if s.backend == "local" {
+	if meta.Backend == "local" {
 		go s.provisionLocal(t)
 	} else {
 		go s.provisionRox(t)
@@ -1149,6 +1244,9 @@ func (s *server) runnerCommand(t *threadMeta, serverHost string) string {
 	if t.Kind != "" {
 		extra += " --role " + shQuote(t.Kind)
 	}
+	if s.proxy != nil {
+		extra += " --model-proxy " + shQuote("http://"+serverHost)
+	}
 	if t.SharedGuest {
 		// Other work lives in this guest, so the thread gets a folder of its own.
 		extra += ` --dir "$HOME/work/rux-` + t.ID + `"`
@@ -1294,6 +1392,9 @@ func (s *server) provisionLocal(t *thread) {
 	cmd := exec.Command(s.selfBin, "runner", "--server", "ws://127.0.0.1:"+port+"/runner",
 		"--thread", m.ID, "--token", m.Token, "--dir", work, "--state", filepath.Join(t.dir, "runner"),
 		"--repo", m.Repo, "--branch", m.Branch, "--model", s.effectiveModel(m.Model), "--effort", m.Effort, "--role", m.Kind)
+	if s.proxy != nil {
+		cmd.Args = append(cmd.Args, "--model-proxy", "http://127.0.0.1:"+port)
+	}
 	logf, _ := os.Create(filepath.Join(t.dir, "runner.log"))
 	cmd.Stdout, cmd.Stderr = logf, logf
 	t.event(ruxEv("rux_setup", "text", "starting local runner (unsandboxed) in "+work))
