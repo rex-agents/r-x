@@ -47,11 +47,11 @@ You don't need to boot a guest for rux: it starts its own.
 
 ```sh
 cd ~/code/web
-rux "fix the flaky auth tests"
+rux agent "fix the flaky auth tests"
 ```
 
 You talk to a lead agent on your machine. Ask it to hand work off, for example *"spawn an agent to update the docs while you fix the tests"*. The lead calls `spawn_agent`, rox starts a new container guest, and the sub-agent works on a branch `rux/NAME` and pushes it with your key through rix's Git agent. Its report arrives in the lead's conversation when its turn ends, and you merge.
 
-In the window, `tab` switches agents, `esc` interrupts the selected one, `ctrl+o` lists every command, and `ctrl+c` on an empty prompt quits. When you quit, rux asks whether to remove the guests it started. Choose the lead's and sub-agents' models with `--model` and `--agent-model` (for example `rux --model claude-code`).
+In the window, `tab` switches agents, `esc` interrupts the selected one, `ctrl+o` lists every command, and `ctrl+c` on an empty prompt quits. When you quit, rux asks whether to remove the guests it started. Choose the lead's and sub-agents' models with `--model` and `--agent-model` (for example `rux agent --model claude-code`).
 
 Next: the [rux overview](../rux/index.md), [rix](../rix/index.md) and [rox](../rox/index.md).
