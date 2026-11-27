@@ -99,7 +99,7 @@ sub-agent's pane, shell and stop buttons.
 
 | Key | Does |
 | --- | --- |
-| `enter` | send to the selected agent (`alt+enter` for a new line) |
+| `enter` | send to the selected agent (`shift+enter` for a new line in terminals that report it, such as kitty, Ghostty, WezTerm, foot and iTerm2; `alt+enter` or `ctrl+j` everywhere) |
 | `tab` / `shift+tab` | next / previous agent |
 | `esc` | interrupt the selected agent |
 | `ctrl+o` (or `ctrl+k`) | commands: every action below, to pick, search or click |

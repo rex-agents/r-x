@@ -53,7 +53,8 @@ func runHarness(args []string) {
 	if prompt := strings.TrimSpace(strings.Join(fs.Args(), " ")); prompt != "" {
 		r.lead.Send("you", prompt)
 	}
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	var kk kittyKeys
+	p, run := kk.run(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	go func() {
 		for {
 			select {
@@ -67,7 +68,7 @@ func runHarness(args []string) {
 			}
 		}
 	}()
-	final, err := p.Run()
+	final, err := run()
 	r.cancel()
 	for _, a := range r.agents {
 		a.Close()
@@ -255,6 +256,12 @@ func (m *harnessModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, c
 	case tea.MouseMsg:
 		return m, m.mouse(msg)
+	case shiftEnterMsg:
+		if len(m.pending) == 0 && !m.quitting && m.panel == panelNone {
+			m.input.InsertString("\n")
+			m.fitInput()
+		}
+		return m, nil
 	case tea.KeyMsg:
 		if c, done := m.key(msg); done {
 			return m, c
@@ -807,7 +814,7 @@ func (m *harnessModel) quitPanel() string {
 
 func (m *harnessModel) shortcutsView() string {
 	keys := [][2]string{
-		{"enter", "send to the selected agent"}, {"alt+enter", "new line"},
+		{"enter", "send to the selected agent"}, {"shift+enter / alt+enter", "new line"},
 		{"tab / shift+tab", "next / previous agent"}, {"esc", "interrupt the selected agent"},
 		{"ctrl+o", "commands"}, {"ctrl+l", "model and effort"},
 		{"ctrl+e", "open every tool call (or click one)"}, {"pgup / pgdn", "scroll (or the mouse wheel)"},

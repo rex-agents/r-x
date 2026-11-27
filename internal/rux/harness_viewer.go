@@ -98,7 +98,9 @@ func runView(args []string) {
 	ta.Focus()
 	m := &viewModel{c: c, name: name, info: info, input: ta, tr: newTranscriptRenderer(), vp: viewport.New(80, 20),
 		follow: true, expanded: map[int]bool{}}
-	if _, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run(); err != nil {
+	var kk kittyKeys
+	_, run := kk.run(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	if _, err := run(); err != nil {
 		fail("rux view: %v", err)
 	}
 }
@@ -163,6 +165,9 @@ func (m *viewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.vp, c = m.vp.Update(msg)
 		m.follow = m.vp.AtBottom()
 		return m, c
+	case shiftEnterMsg:
+		m.input.InsertString("\n")
+		return m, nil
 	case tea.KeyMsg:
 		m.flash = ""
 		switch msg.String() {
