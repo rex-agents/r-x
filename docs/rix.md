@@ -75,7 +75,7 @@ rix key ls                         # name and path of each key
 
 Keys are stored as `git_keys` in the [config](#configuration). With **no** `git_keys` setting, guests get ssh's
 default identities that exist in `~/.ssh`: `id_rsa`, `id_ecdsa`, `id_ecdsa_sk`, `id_ed25519`, `id_ed25519_sk`
-(`rix key ls` says so). Removing the last key leaves an empty list, which means *no* keys, not the defaults.
+(`rix key ls` says so). Removing the last key unsets `git_keys`, so guests get those defaults again.
 A launch can override both with `rox up --git-key PATH`.
 
 ```sh
@@ -294,7 +294,7 @@ Config keys (unknown keys are preserved when rix rewrites the file):
 ```
 
 - `agents.claude` takes one of `token_file` or `api_key_file`; `agents.codex` one of `auth_file` or
-  `api_key_file`; both also `sync` and `version` (accepted, not used by rix). Anything else, or two credentials
+  `api_key_file`; both also `sync` and `version`. `version` (such as `1.2.3`) is the release rox installs when a project asks for the agent without pinning one; a version set in `.rox.json`, `.rox.local.json` or `--agents` wins, and unset means the latest release. Anything else, or two credentials
   for one agent, is an error. Credential files are read at push time, so rotating a token needs only `rix apply`.
 - `github` is `{"token_file": PATH}` or `{"off": true}`; absent means gh's login.
 - `updates`: `auto`, `notify` or `off`; the `RIX_UPDATES` environment variable overrides it.
