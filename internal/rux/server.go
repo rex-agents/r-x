@@ -75,6 +75,7 @@ type threadMeta struct {
 	Created     time.Time `json:"created"`
 	Updated     time.Time `json:"updated"`
 	PromptSent  bool      `json:"prompt_sent"`
+	SetupFailed bool      `json:"setup_failed,omitempty"` // the runner couldn't check out the repo, so claude hasn't run
 	Connected   bool      `json:"connected"`
 	Token       string    `json:"token,omitempty"`
 }
@@ -105,8 +106,9 @@ type thread struct {
 
 	upgradeTried bool      // runner upgrade attempted this server run
 	lastText     string    // the latest assistant text, for wake-ups and summaries
-	pendingWake  []string  // wake-ups for this (manager) thread, sent when its runner connects
-	pendingMsgs  []wireMsg // messages that arrived while the thread was asleep, sent when its runner connects
+	outbox       []outItem // user messages the runner hasn't acked; see outbox.go
+	outLog       *os.File
+	kick         chan struct{} // wakes the current connection to send the outbox
 }
 
 func runServe(args []string) {
@@ -345,7 +347,7 @@ func (s *server) loadThreads() error {
 
 // openThread loads a thread directory, or creates it when meta is non-nil.
 func openThread(dir string, meta *threadMeta) (*thread, error) {
-	t := &thread{dir: dir, subs: map[chan sseItem]struct{}{}}
+	t := &thread{dir: dir, subs: map[chan sseItem]struct{}{}, kick: make(chan struct{}, 1)}
 	if meta != nil {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, err
@@ -381,7 +383,10 @@ func openThread(dir string, meta *threadMeta) (*thread, error) {
 		t.events = append(t.events, line)
 	}
 	t.logf = f
-	return t, sc.Err()
+	if err := sc.Err(); err != nil {
+		return t, err
+	}
+	return t, t.loadOutbox()
 }
 
 func (t *thread) saveMeta() error {
@@ -634,6 +639,9 @@ func (s *server) createThread(req createReq) (*thread, error) {
 	s.mu.Lock()
 	s.threads[id] = t
 	s.mu.Unlock()
+	t.mu.Lock()
+	t.queuePromptLocked() // the first message waits for the runner, however long the guest takes
+	t.mu.Unlock()
 	t.event(ruxEv("rux_status", "status", "provisioning", "connected", false))
 	if s.backend == "local" {
 		go s.provisionLocal(t)
@@ -758,30 +766,38 @@ func (s *server) sendToRunner(w http.ResponseWriter, r *http.Request, m wireMsg)
 		httpErr(w, 404, "no such thread")
 		return
 	}
-	t.mu.Lock()
-	if t.send == nil && asleepStatus(t.meta.Status) {
-		// The guest is stopped: start it, and send this when the runner connects.
-		if m.T == "interrupt" {
-			t.mu.Unlock()
+	if m.T == "interrupt" { // only for a live turn, so it isn't kept
+		t.mu.Lock()
+		send, asleep := t.send, asleepStatus(t.meta.Status)
+		if send != nil {
+			select {
+			case send <- m:
+				t.mu.Unlock()
+				writeJSONResp(w, 202, map[string]bool{"ok": true})
+			default:
+				t.mu.Unlock()
+				httpErr(w, 503, "runner busy")
+			}
+			return
+		}
+		t.mu.Unlock()
+		if asleep {
 			writeJSONResp(w, 202, map[string]bool{"ok": true})
 			return
 		}
-		t.pendingMsgs = append(t.pendingMsgs, m)
-		t.mu.Unlock()
-		s.wakeIfAsleep(t)
+		httpErr(w, 409, errNoRunner.Error())
+		return
+	}
+	waking, err := s.enqueueUser(t, m, false)
+	switch {
+	case errors.Is(err, errNoRunner):
+		httpErr(w, 409, err.Error())
+	case err != nil:
+		httpErr(w, 500, "saving the message: "+err.Error())
+	case waking:
 		writeJSONResp(w, 202, map[string]bool{"ok": true, "waking": true})
-		return
-	}
-	defer t.mu.Unlock()
-	if t.send == nil {
-		httpErr(w, 409, "the thread's runner isn't connected")
-		return
-	}
-	select {
-	case t.send <- m:
-		writeJSONResp(w, 202, map[string]bool{"ok": true})
 	default:
-		httpErr(w, 503, "runner busy")
+		writeJSONResp(w, 202, map[string]bool{"ok": true})
 	}
 }
 
@@ -916,32 +932,25 @@ func (s *server) handleRunner(w http.ResponseWriter, r *http.Request) {
 	if err := readJSON(ctx, c, &hello); err != nil || hello.T != "hello" {
 		return
 	}
-	send := make(chan wireMsg, 64)
+	send := make(chan wireMsg, 64) // control messages only (settings, interrupt, upgrade); never filled under t.mu
+	acks := hello.Info["acks"] == "1"
 	t.mu.Lock()
 	if t.cancel != nil {
 		t.cancel() // replace any older connection
 	}
 	t.send, t.cancel = send, cancel
+	t.kick = make(chan struct{}, 1)
+	kick := t.kick
 	t.meta.Connected = true
 	have := t.rseq
 	t.appendLocked("rux", 0, ruxEv("rux_runner_connected", "hostname", hello.Info["hostname"], "dir", hello.Info["dir"], "session_id", hello.Info["session_id"]))
 	switch t.meta.Status {
 	case "provisioning", "starting", "failed", "waking", "asleep":
-		t.setStatusLocked("idle")
+		if !t.meta.SetupFailed {
+			t.setStatusLocked("idle")
+		}
 	}
-	send <- s.settingsMsg(&t.meta) // the thread's settings win over whatever the runner last had
-	if !t.meta.PromptSent {
-		t.meta.PromptSent = true
-		send <- wireMsg{T: "user", Text: t.meta.Prompt}
-	}
-	for _, w := range t.pendingWake {
-		send <- wireMsg{T: "user", Text: w}
-	}
-	t.pendingWake = nil
-	for _, m := range t.pendingMsgs {
-		send <- m
-	}
-	t.pendingMsgs = nil
+	t.queuePromptLocked() // normally queued when the thread was created
 	t.saveMeta()
 	t.mu.Unlock()
 
@@ -962,11 +971,50 @@ func (s *server) handleRunner(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		ping := time.NewTicker(30 * time.Second)
 		defer ping.Stop()
+		sent := map[string]bool{} // outbox ids written on this connection
+		write := func(m wireMsg) bool {
+			if err := writeJSON(ctx, c, m); err != nil {
+				cancel()
+				return false
+			}
+			return true
+		}
+		flush := func() bool {
+			t.mu.Lock()
+			var todo []outItem
+			for _, it := range t.outbox {
+				if !sent[it.ID] {
+					todo = append(todo, it)
+				}
+			}
+			t.mu.Unlock()
+			for _, it := range todo {
+				if !write(it.Msg) {
+					return false
+				}
+				sent[it.ID] = true
+				if !acks { // an older runner can't ack, so being written is all we know
+					t.mu.Lock()
+					t.ackLocked(it.ID)
+					t.mu.Unlock()
+				}
+			}
+			return true
+		}
+		t.mu.Lock()
+		settings := s.settingsMsg(&t.meta) // the thread's settings win over whatever the runner last had
+		t.mu.Unlock()
+		if !write(settings) || !flush() {
+			return
+		}
 		for {
 			select {
 			case m := <-send:
-				if err := writeJSON(ctx, c, m); err != nil {
-					cancel()
+				if !write(m) {
+					return
+				}
+			case <-kick:
+				if !flush() {
 					return
 				}
 			case <-ping.C:
@@ -987,6 +1035,12 @@ func (s *server) handleRunner(w http.ResponseWriter, r *http.Request) {
 		if err := readJSON(ctx, c, &m); err != nil {
 			return
 		}
+		if m.T == "ack" {
+			t.mu.Lock()
+			t.ackLocked(m.ID)
+			t.mu.Unlock()
+			continue
+		}
 		if m.T != "event" {
 			continue
 		}
@@ -1005,6 +1059,13 @@ func (s *server) handleRunner(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (t *thread) clearSetupFailedLocked() {
+	if t.meta.SetupFailed {
+		t.meta.SetupFailed = false
+		t.saveMeta()
+	}
+}
+
 func (t *thread) statusFromEventLocked(ev json.RawMessage) {
 	var e struct{ Type string }
 	if json.Unmarshal(ev, &e) != nil {
@@ -1015,6 +1076,7 @@ func (t *thread) statusFromEventLocked(ev json.RawMessage) {
 	}
 	switch e.Type {
 	case "rux_preparing":
+		t.clearSetupFailedLocked()
 		t.setStatusLocked("starting")
 	case "rux_checkout":
 		var c struct{ Branch string }
@@ -1023,9 +1085,14 @@ func (t *thread) statusFromEventLocked(ev json.RawMessage) {
 			t.saveMeta()
 		}
 	case "rux_ready":
+		t.clearSetupFailedLocked()
 		if t.meta.Status == "starting" {
 			t.setStatusLocked("idle")
 		}
+	case "rux_setup_failed":
+		t.meta.SetupFailed = true
+		t.setStatusLocked("failed")
+		t.saveMeta()
 	case "rux_user":
 		t.setStatusLocked("running")
 	case "result", "rux_exit":
@@ -1104,7 +1171,6 @@ func (s *server) provisionRox(t *thread) {
 		s.provisionShared(t, m)
 		return
 	}
-	before := s.roxNames()
 	// The runner clones the repo itself, with the GitHub token rix hands out, so rox
 	// starts an empty guest. --no-git-agent keeps rox from forwarding the host's SSH
 	// keys into it. --agents claude installs Claude Code, which rix signs in through
@@ -1131,15 +1197,8 @@ func (s *server) provisionRox(t *thread) {
 		}
 	})
 	t.mu.Lock()
-	if t.meta.Guest == "" {
-		for n := range s.roxNames() {
-			if !before[n] {
-				t.meta.Guest = n
-				t.saveMeta()
-				break
-			}
-		}
-	}
+	// The guest is the name rox up printed. It's not guessed from a list of guests, which
+	// could pick one that another thread was starting at the same moment.
 	guest, connected := t.meta.Guest, t.meta.Connected
 	t.appendLocked("rux", 0, ruxEv("rux_guest", "name", guest))
 	if err != nil {
@@ -1220,36 +1279,6 @@ func scanLinesCR(data []byte, atEOF bool) (int, []byte, error) {
 		return len(data), data, nil
 	}
 	return 0, nil, nil
-}
-
-func (s *server) roxNames() map[string]bool {
-	out := map[string]bool{}
-	b, err := exec.Command(s.roxBin, "ls", "--all-projects", "--json").Output()
-	if err != nil {
-		return out
-	}
-	var v any
-	if json.Unmarshal(b, &v) != nil {
-		return out
-	}
-	var walk func(any)
-	walk = func(v any) {
-		switch x := v.(type) {
-		case []any:
-			for _, e := range x {
-				walk(e)
-			}
-		case map[string]any:
-			if n, ok := x["name"].(string); ok {
-				out[n] = true
-			}
-			for _, e := range x {
-				walk(e)
-			}
-		}
-	}
-	walk(v)
-	return out
 }
 
 // ---- local backend (no sandbox; for exercising the app without Rox) ----

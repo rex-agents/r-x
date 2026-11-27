@@ -48,7 +48,7 @@ func TestSleepy(t *testing.T) {
 		t.Error("once its action ends, the thread can sleep")
 	}
 	waiting := idle(time.Hour, "idle")
-	waiting.pendingWake = []string{"[rux] worker done"}
+	waiting.outbox = []outItem{{ID: "w1", Msg: wireMsg{T: "user", Text: "[rux] worker done"}}}
 	if s.sleepy(waiting) {
 		t.Error("a manager with a wake-up waiting shouldn't sleep")
 	}

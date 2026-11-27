@@ -16,14 +16,20 @@ import (
 //
 //	hello  {info}          first message after connecting
 //	event  {seq, ev}       one event; ev is a claude stream-json line or a rux_* event
+//	ack    {id}            the runner has durably accepted the user message with this id. Runners
+//	                       that do this say info.acks=1 in hello; the server treats a message to
+//	                       any other runner as delivered once written.
 //
 // server -> runner:
 //
 //	sync      {have}       reply to hello: highest seq the server has stored
-//	user      {text}       a user message for claude
+//	user      {id, text}   a user message for claude. With an id, the runner stores it, acks it,
+//	                       and ignores a repeat of the same id (the server resends every unacked
+//	                       message when a runner connects).
 //	interrupt {}           SIGINT the running claude turn
 type wireMsg struct {
 	T    string            `json:"t"`
+	ID   string            `json:"id,omitempty"`
 	Seq  int64             `json:"seq,omitempty"`
 	Ev   json.RawMessage   `json:"ev,omitempty"`
 	Have int64             `json:"have"`

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -38,9 +39,17 @@ type runner struct {
 	role                     string // "" for a worker, "manager" for a project's manager
 	httpBase                 string // the server's runner listener, e.g. http://192.168.65.1:7701
 
-	ready  chan struct{} // closed once the workspace is cloned or created
-	userQ  chan wireMsg
-	gitEnv []string // extra environment for git and claude
+	ready        chan struct{} // closed once the workspace is cloned or created
+	retry        chan struct{} // a message arrived; set up the workspace again if it failed
+	prepMu       sync.Mutex
+	inMu         sync.Mutex
+	inQ          []inboxMsg // accepted user messages not yet given to claude
+	inSeq        int64
+	retryDelay   time.Duration // first wait before redelivering a failed message; 0 is 2s
+	inNotify     chan struct{}
+	seen, queued map[string]bool
+	announced    map[string]bool // ids with a rux_user event already
+	gitEnv       []string        // extra environment for git and claude
 
 	mu        sync.Mutex
 	seq       int64
@@ -108,19 +117,15 @@ func runRunner(args []string) {
 			runnerLock = lf
 		}
 	}
-	r.ready, r.userQ = make(chan struct{}), make(chan wireMsg, 64)
+	r.ready, r.retry, r.inNotify = make(chan struct{}), make(chan struct{}, 1), make(chan struct{}, 1)
 	if err := r.load(); err != nil {
 		log.Fatal(err)
 	}
+	r.loadInbox()
 	log.Printf("runner: thread %s, dir %s, session %s, %d stored events", r.thread, r.dir, r.sessionID, r.seq)
 	r.setupGitEnv()
 	go r.prepare()
-	go func() { // messages wait for the workspace, then go to claude in order
-		<-r.ready
-		for m := range r.userQ {
-			r.sendUser(m.Text, m.Files...)
-		}
-	}()
+	go r.deliverLoop() // messages wait for the workspace, then go to claude in order
 
 	backoff := time.Second
 	for {
@@ -215,7 +220,7 @@ func (r *runner) connectOnce(ctx context.Context) (bool, error) {
 	defer ccancel()
 	host, _ := os.Hostname()
 	if err := writeJSON(cctx, c, wireMsg{T: "hello", Info: map[string]string{
-		"hostname": host, "dir": r.dir, "session_id": r.sessionID, "version": selfVersion(),
+		"hostname": host, "dir": r.dir, "session_id": r.sessionID, "version": selfVersion(), "acks": "1",
 	}}); err != nil {
 		return true, err
 	}
@@ -241,7 +246,7 @@ func (r *runner) connectOnce(ctx context.Context) (bool, error) {
 	r.mu.Unlock()
 	log.Printf("runner: connected; replaying %d events", len(backlog))
 
-	errc := make(chan error, 2)
+	errc := make(chan error, 4)
 	go func() {
 		for _, l := range backlog {
 			if err := c.Write(cctx, websocket.MessageText, l); err != nil {
@@ -269,7 +274,14 @@ func (r *runner) connectOnce(ctx context.Context) (bool, error) {
 				errc <- err
 				return
 			}
-			r.handle(m)
+			r.handle(m, func(a wireMsg) {
+				if err := writeJSON(cctx, c, a); err != nil {
+					select {
+					case errc <- err:
+					default:
+					}
+				}
+			})
 		}
 	}()
 	err = <-errc
@@ -282,10 +294,12 @@ func (r *runner) connectOnce(ctx context.Context) (bool, error) {
 	return true, err
 }
 
-func (r *runner) handle(m wireMsg) {
+func (r *runner) handle(m wireMsg, reply func(wireMsg)) {
 	switch m.T {
 	case "user":
-		r.userQ <- m
+		if r.accept(m) {
+			reply(wireMsg{T: "ack", ID: m.ID})
+		}
 	case "upgrade":
 		go r.upgrade()
 	case "settings":
@@ -300,7 +314,11 @@ func (r *runner) handle(m wireMsg) {
 	}
 }
 
-func (r *runner) sendUser(text string, files ...attachment) {
+// sendUser hands a message to claude. It returns nil only once the whole message is written to
+// claude's stdin, and then records it as delivered (the rux_delivered event with its id). On any error the
+// caller keeps the message and tries again. A crash after the write but before the record means
+// the message runs again after a restart: at-least-once, never silently lost.
+func (r *runner) sendUser(id, text string, files ...attachment) error {
 	r.procMu.Lock()
 	defer r.procMu.Unlock()
 	for r.upgrading.Load() { // the runner is about to re-exec; this message would be lost
@@ -314,10 +332,14 @@ func (r *runner) sendUser(text string, files ...attachment) {
 		<-done
 		r.procMu.Lock()
 	}
+	select { // never run in a directory the checkout didn't produce
+	case <-r.ready:
+	default:
+		return errors.New("the workspace isn't ready; not starting claude")
+	}
 	if r.cmd == nil {
 		if err := r.startClaude(); err != nil {
-			r.emit(ruxEv("rux_error", "text", "starting claude: "+err.Error()))
-			return
+			return fmt.Errorf("starting claude: %w", err)
 		}
 	}
 	// Attached images go to claude as images, and into the guest as files
@@ -337,7 +359,6 @@ func (r *runner) sendUser(text string, files ...attachment) {
 				"type": "base64", "media_type": f.Mime, "data": base64.StdEncoding.EncodeToString(f.Data)}})
 		}
 	}
-	r.emit(ruxEv("rux_user", "text", text, "images", urls))
 	ctext := text
 	if len(paths) > 0 {
 		ctext = strings.TrimSpace(text + "\n\n(The user attached " + map[bool]string{true: "an image", false: "images"}[len(paths) == 1] + ", also saved as " + strings.Join(paths, ", ") + ".)")
@@ -350,9 +371,29 @@ func (r *runner) sendUser(text string, files ...attachment) {
 			"content": content,
 		},
 	})
-	if _, err := r.stdin.Write(append(b, '\n')); err != nil {
-		r.emit(ruxEv("rux_error", "text", "writing to claude: "+err.Error()))
+	// The user's turn is announced before the first write, so claude's answer, which the
+	// stdout reader emits without waiting for us, can't land ahead of it. Once per message,
+	// not once per attempt.
+	r.inMu.Lock()
+	announce := id == "" || !r.announced[id]
+	if id != "" {
+		r.announced[id] = true
 	}
+	r.inMu.Unlock()
+	if announce {
+		r.emit(ruxEv("rux_user", "text", text, "images", urls, "mid", id))
+	}
+	if _, err := r.stdin.Write(append(b, '\n')); err != nil {
+		// Part of the line may have gone through. End this claude, so the half line dies with
+		// it and the retry starts a clean process (--resume).
+		r.stdin.Close()
+		r.retiring = r.cmd
+		return fmt.Errorf("writing to claude: %w", err)
+	}
+	if id != "" {
+		r.emit(ruxEv("rux_delivered", "id", id)) // the dedupe record: claude has all of it
+	}
+	return nil
 }
 
 // startClaude must be called with procMu held.
@@ -506,40 +547,85 @@ func (r *runner) setupGitEnv() {
 	}
 }
 
-// prepare clones the repo (or creates an empty one) the first time the runner
-// starts, then lets queued messages through.
-func (r *runner) prepare() {
-	defer close(r.ready)
+// prepare clones the repo (or creates an empty one) the first time the runner starts, then
+// lets queued messages through. It reports whether the workspace is ready. If the requested
+// checkout fails it's reported as rux_setup_failed and nothing runs: claude isn't started in
+// an empty directory in its place. It runs again when another message arrives or the server
+// resends one. A workspace with no repo requested keeps its fallback of an empty directory.
+func (r *runner) prepare() bool {
+	r.prepMu.Lock()
+	defer r.prepMu.Unlock()
+	select {
+	case <-r.ready:
+		return true
+	default:
+	}
 	marker := filepath.Join(r.stateDir, "prepared")
 	if _, err := os.Stat(marker); err == nil {
-		return
+		close(r.ready)
+		return true
 	}
 	r.emit(ruxEv("rux_preparing"))
 	if _, err := os.Stat(filepath.Join(r.dir, ".git")); err != nil {
 		var err error
 		if r.repo != "" {
-			args := []string{"clone", "--progress"}
-			if r.branch != "" {
-				args = append(args, "--branch", r.branch)
-			}
-			err = r.git(filepath.Dir(r.dir), append(args, "--", r.repo, r.dir)...)
+			err = r.clone()
 		} else {
 			err = os.MkdirAll(r.dir, 0o755)
 			if err == nil {
 				err = r.git(r.dir, "init", "--quiet", "--initial-branch", "main")
 			}
 		}
+		if err != nil && r.repo != "" {
+			msg := "checking out " + r.repo + ": " + err.Error()
+			r.emit(ruxEv("rux_error", "text", msg))
+			r.emit(ruxEv("rux_setup_failed", "text", msg))
+			return false
+		}
 		if err != nil {
 			r.emit(ruxEv("rux_error", "text", "setting up the workspace: "+err.Error()))
 			os.MkdirAll(r.dir, 0o755) // let claude start anyway, so the thread is still usable
 			r.emit(ruxEv("rux_ready"))
-			return
+			close(r.ready)
+			return true
 		}
 	}
 	out, _ := exec.Command("git", "-C", r.dir, "symbolic-ref", "--short", "HEAD").Output()
 	r.emit(ruxEv("rux_checkout", "branch", strings.TrimSpace(string(out)), "dir", r.dir))
 	os.WriteFile(marker, nil, 0o600)
 	r.emit(ruxEv("rux_ready"))
+	close(r.ready)
+	return true
+}
+
+// clone checks the repo out beside r.dir and moves it into place, so a failed or interrupted
+// clone leaves nothing behind in r.dir. It refuses a directory that already holds files:
+// those aren't ours to replace.
+func (r *runner) clone() error {
+	if st, err := os.Stat(r.dir); err == nil {
+		if !st.IsDir() {
+			return fmt.Errorf("%s exists and isn't a directory", r.dir)
+		}
+		if ents, err := os.ReadDir(r.dir); err != nil || len(ents) > 0 {
+			return fmt.Errorf("%s already has files and isn't a git checkout, so it was left alone", r.dir)
+		}
+	}
+	parent := filepath.Dir(r.dir)
+	tmp := r.dir + ".rux-clone-" + randHex(3)
+	args := []string{"clone", "--progress"}
+	if r.branch != "" {
+		args = append(args, "--branch", r.branch)
+	}
+	if err := r.git(parent, append(args, "--", r.repo, tmp)...); err != nil {
+		os.RemoveAll(tmp) // the partial clone is ours; r.dir is untouched
+		return err
+	}
+	os.Remove(r.dir) // an empty directory; Remove refuses anything else
+	if err := os.Rename(tmp, r.dir); err != nil {
+		os.RemoveAll(tmp)
+		return err
+	}
+	return nil
 }
 
 // git runs a git command, streaming its output into the thread.
