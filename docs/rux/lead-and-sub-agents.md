@@ -5,11 +5,11 @@ sidebar:
 
 # Lead and sub-agents
 
-Run `rux` to talk to a lead agent that starts sub-agents, each in its own rox guest, with every conversation live in one window. This page covers the window, its keys and commands, the lead's tools and a sub-agent's life.
+Run `rux agent` to talk to a lead agent that starts sub-agents, each in its own rox guest, with every conversation live in one window. This page covers the window, its keys and commands, the lead's tools and a sub-agent's life.
 
-## rux: the multi-agent harness
+## rux agent: the multi-agent harness
 
-Run `rux` (or `rux "what to do"`) in any terminal. rux is its own agent harness: you talk to a lead
+Run `rux agent` (or `rux agent "what to do"`) in any terminal; bare `rux` opens the [authority TUI](authority-tui.md) instead, and `rux "what to do"` still works but prints a deprecation notice. rux is its own agent harness: you talk to a lead
 agent, the lead starts sub-agents, and every agent's conversation is live in one window, with the
 agents in a sidebar and the selected one's transcript beside it.
 
@@ -54,8 +54,8 @@ agents in a sidebar and the selected one's transcript beside it.
   (`y` removes, `n` keeps, `esc` cancels; a guest that was there before is never removed). It prints the kept guests'
   names (remove them later with `rox down NAME`) and saves every transcript, as `NAME.json` and `NAME.md`, to
   `~/.rux/sessions/TIME/`.
-- Run it with `rux [--model M] [--agent-model M] [--effort LEVEL] [PROMPT...]`; the words after the flags are the lead's
-  first message. A lone lowercase word is taken for a mistyped command, so add a word or quote a one-word prompt with a space.
+- Run it with `rux agent [--model M] [--agent-model M] [--effort LEVEL] [PROMPT...]`; the words after the flags are the lead's
+  first message. `rux agent` also takes a one-word prompt (`rux agent refactor`); the old `rux PROMPT` form treats a lone lowercase word as a mistyped command.
   See [models](models.md) for what `--model`, `--agent-model` and `--effort` take.
 
 The window is quiet: the conversation, the agents in a strip above the prompt once there are

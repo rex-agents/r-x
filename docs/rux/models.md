@@ -39,10 +39,10 @@ and rix signs it in with what `rix auth claude` stored.
 ### Examples
 
 ```
-rux --model anthropic/claude-opus-5-5
-rux --model openai/gpt-5 --agent-model openrouter/qwen/qwen3-coder
-rux --model ollama/qwen3-coder          # a local model, no key
-rux --model claude-code                 # Claude Code, with your Claude subscription
+rux agent --model anthropic/claude-opus-5-5
+rux agent --model openai/gpt-5 --agent-model openrouter/qwen/qwen3-coder
+rux agent --model ollama/qwen3-coder          # a local model, no key
+rux agent --model claude-code                 # Claude Code, with your Claude subscription
 ```
 
 ### Claude and effort

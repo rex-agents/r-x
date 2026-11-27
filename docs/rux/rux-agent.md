@@ -5,7 +5,7 @@ sidebar:
 
 # rux agent
 
-`rux agent` lets your own Claude Code or Codex session orchestrate sub-agents in Rex panes. It has no daemon: state is one JSON file per agent.
+`rux agent spawn`, `ls`, `read`, `send`, `wait`, `focus` and `stop` let your own Claude Code or Codex session orchestrate sub-agents in Rex panes. They have no daemon: state is one JSON file per agent. A first argument that is not one of these is a prompt: `rux agent "fix the bug"` opens the [harness](lead-and-sub-agents.md) in the current context (on the host, or inside a VM), and `rux agent` alone opens it empty. Bare `rux` is the [authority TUI](authority-tui.md).
 
 ## Orchestrating from Claude Code or Codex (`rux agent`)
 
