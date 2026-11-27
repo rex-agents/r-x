@@ -318,7 +318,7 @@ func Auth(agent string, apiKey bool, authFile string, off bool) error {
 		}
 	}
 	var saved, obsolete []string
-	err := Update(path, func(data map[string]any) error {
+	err := UpdateThen(path, func(data map[string]any) error {
 		agents, _ := data["agents"].(map[string]any)
 		if agents == nil {
 			agents = map[string]any{}
@@ -353,12 +353,14 @@ func Auth(agent string, apiKey bool, authFile string, off bool) error {
 		agents[agent] = settings
 		data["agents"] = agents
 		return nil
+	}, func() {
+		// The config is committed and still locked: the files it dropped can go.
+		for _, file := range obsolete {
+			os.Remove(file)
+		}
 	})
 	if err != nil {
 		return err
-	}
-	for _, file := range obsolete {
-		os.Remove(file)
 	}
 	for _, file := range saved {
 		ui.Done("Saved the %s credential to %s %s", AgentNames[agent], ui.Code(file), ui.Muted("(0600)"))

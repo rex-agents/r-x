@@ -482,34 +482,82 @@ func TestGuestSyncUndoesInstallsWhenStaleRemovalFails(t *testing.T) {
 
 func TestGuestSyncLocks(t *testing.T) {
 	tarball := syncTar(t, map[string]string{"x": "1"}, true)
-	lockWith := func(t *testing.T, pid string, age time.Duration) string {
+	age := func(path string, d time.Duration) {
+		if d == 0 {
+			return
+		}
+		stamp := time.Now().Add(-d).Format("200601021504.05")
+		if out, err := exec.Command("touch", "-h", "-t", stamp, path).CombinedOutput(); err != nil {
+			t.Skip("touch -h unsupported:", string(out))
+		}
+	}
+	// A lock as this rix makes it: one symlink, whole from the moment it exists.
+	link := func(t *testing.T, pid string, d time.Duration) string {
 		home := t.TempDir()
-		seed(t, home, map[string]string{".rox/sync.lock/pid": pid})
-		old := time.Now().Add(-age)
-		_ = os.Chtimes(filepath.Join(home, ".rox/sync.lock/pid"), old, old)
+		_ = os.MkdirAll(filepath.Join(home, ".rox"), 0o755)
+		lock := filepath.Join(home, ".rox/sync.lock")
+		_ = os.Symlink(pid+":1", lock)
+		age(lock, d)
 		return home
 	}
-	// A live owner keeps its lock and its files.
-	home := lockWith(t, strconv.Itoa(os.Getpid()), 0)
-	if _, err := guestSh(t, home, tarball, "sync", "x", "--"); err == nil || sys.IsFile(home+"/x") {
-		t.Error("ran beside a live sync")
+	// A lock an older rix made: a folder, whose pid file may not be written yet.
+	folder := func(t *testing.T, pid string, d time.Duration) string {
+		home := t.TempDir()
+		seed(t, home, map[string]string{".rox/sync.lock/pid": pid})
+		if pid == "" {
+			_ = os.Remove(filepath.Join(home, ".rox/sync.lock/pid"))
+		}
+		age(filepath.Join(home, ".rox/sync.lock"), d)
+		return home
 	}
-	if readFile(t, home+"/.rox/sync.lock/pid") != strconv.Itoa(os.Getpid())+"\n" && readFile(t, home+"/.rox/sync.lock/pid") != strconv.Itoa(os.Getpid()) {
-		t.Error("took a live lock")
-	}
-	// A dead owner, restart with a reused-looking PID that is too old to be a running sync,
-	// and a lock that never got its owner all give way.
+	me := strconv.Itoa(os.Getpid())
+	// A live or still-initializing lock is never removed, and nothing is changed under it.
 	for name, home := range map[string]string{
-		"dead owner": lockWith(t, "999999", 0),
-		"old lock":   lockWith(t, strconv.Itoa(os.Getpid()), time.Hour),
-		"ownerless":  lockWith(t, "", time.Hour),
+		"live owner":               link(t, me, 0),
+		"live legacy owner":        folder(t, me, 0),
+		"initializing legacy lock": folder(t, "", 0),
+	} {
+		if _, err := guestSh(t, home, tarball, "sync", "x", "--"); err == nil || sys.IsFile(home+"/x") {
+			t.Errorf("%s: ran beside a live sync", name)
+		}
+		if _, err := os.Lstat(filepath.Join(home, ".rox/sync.lock")); err != nil {
+			t.Errorf("%s: removed a live lock", name)
+		}
+		if _, err := os.Stat(filepath.Join(home, ".rox/sync-work")); err == nil {
+			t.Errorf("%s: used the staging folder", name)
+		}
+	}
+	// A dead owner, a lock too old to be a running sync (a PID reused after a restart), and
+	// an old lock that never got an owner all give way.
+	for name, home := range map[string]string{
+		"dead owner":        link(t, "999999", 0),
+		"old lock":          link(t, me, time.Hour),
+		"dead legacy owner": folder(t, "999999", 0),
+		"old ownerless":     folder(t, "", time.Hour),
 	} {
 		if out, err := guestSh(t, home, tarball, "sync", "x", "--"); err != nil || readFile(t, home+"/x") != "1" {
 			t.Errorf("%s: %v %s", name, err, out)
 		}
-		if _, err := os.Stat(filepath.Join(home, ".rox/sync.lock")); err == nil {
+		if _, err := os.Lstat(filepath.Join(home, ".rox/sync.lock")); err == nil {
 			t.Errorf("%s: lock left behind", name)
 		}
+	}
+}
+
+func TestGuestSyncStaleLockKeepsTheJournalWhenRollbackFails(t *testing.T) {
+	home := t.TempDir()
+	seed(t, home, map[string]string{"d/x": "half", ".rox/sync-work/undo/data/d/x": "prior", ".rox/sync-work/undo/plan": "E d/x\n"})
+	_ = os.Symlink("999999:1", filepath.Join(home, ".rox/sync.lock"))
+	_ = os.Chmod(filepath.Join(home, "d"), 0o500)
+	defer os.Chmod(filepath.Join(home, "d"), 0o700)
+	if _, err := guestSh(t, home, syncTar(t, map[string]string{"y": "1"}, true), "sync", "y", "--"); err == nil {
+		t.Fatal("sync went on")
+	}
+	if readFile(t, home+"/.rox/sync-work/undo/data/d/x") != "prior" || !sys.IsFile(home+"/.rox/sync-work/undo/plan") {
+		t.Error("journal or backup lost")
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".rox/sync.lock")); err == nil {
+		t.Error("lock held forever")
 	}
 }
 
@@ -548,5 +596,51 @@ func TestGuestSyncReplacesASymlinkWithoutTouchingItsTarget(t *testing.T) {
 	}
 	if readFile(t, home+"/shared/SKILL.md") != "someone else's" || readFile(t, home+"/.claude/skills/a/SKILL.md") != "new" {
 		t.Error("symlink handling wrong")
+	}
+}
+
+func TestAuthCleanupRunsUnderTheConfigLock(t *testing.T) {
+	isolate(t)
+	path := ConfigLocation("")
+	other := make(chan struct{})
+	err := UpdateThen(path, func(map[string]any) error { return nil }, func() {
+		go func() { _ = Update(path, func(map[string]any) error { return nil }); close(other) }()
+		select {
+		case <-other:
+			t.Error("another command got the config before the cleanup finished")
+		case <-time.After(200 * time.Millisecond):
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-other
+}
+
+func TestLegacyAgentOwnershipIsExact(t *testing.T) {
+	isolate(t)
+	name := "rv-web-0123456789ab"
+	sock := agentSocket(name)
+	var signaled int
+	signalProcess = func(int, syscall.Signal) error { signaled++; return nil }
+	defer func() { signalProcess = syscall.Kill }()
+	for command, want := range map[string]bool{
+		"ssh-agent -D -a " + sock:            true,
+		"/usr/bin/ssh-agent -D -a " + sock:   true,
+		"vim ssh-agent -D -a " + sock:        false,
+		"ssh-agent -D -a " + sock + "2":      false,
+		"ssh-agent -D -a " + sock + " extra": false,
+		"sh -c echo ssh-agent -D -a " + sock: false,
+		"not-ssh-agent -D -a " + sock:        false,
+		"ssh-agent -D -a /other/agent.sock":  false,
+		"ssh-agent -a " + sock:               false,
+	} {
+		signaled = 0
+		restore := psFake("Mon Jan 1 10:00:00 2026", command).Install()
+		stopAgent(name, &GuestState{AgentPid: 9})
+		restore()
+		if (signaled == 1) != want {
+			t.Errorf("%q: signaled %d, want %v", command, signaled, want)
+		}
 	}
 }

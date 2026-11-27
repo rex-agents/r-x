@@ -44,6 +44,14 @@ sync_rollback() {
     return "$failed"
 }
 
+# Stop unless this run still holds the lock, before each step that changes the guest.
+sync_still_mine() {
+    if [ "$(readlink "$HOME/.rox/sync.lock" 2>/dev/null || true)" != "$me" ]; then
+        echo "Lost the sync lock" >&2
+        return 1
+    fi
+}
+
 sync_done() {
     status=$?
     trap - EXIT
@@ -58,8 +66,8 @@ sync_done() {
     if [ "$keep" = 0 ]; then
         rm -rf "$work"
     fi
-    if [ "$(cat "$HOME/.rox/sync.lock/pid" 2>/dev/null || true)" = "$$" ]; then
-        rm -rf "$HOME/.rox/sync.lock"
+    if [ "$(readlink "$HOME/.rox/sync.lock" 2>/dev/null || true)" = "$me" ]; then
+        rm -f "$HOME/.rox/sync.lock"
     fi
     exit "$status"
 }
@@ -109,34 +117,50 @@ case "$action" in
         # each path swap in, the old one kept aside so a failure puts it back.
         cd "$HOME"
         mkdir -p .rox
-        # One sync at a time. A lock is stale when its owner is gone or it is older than any
-        # sync runs. A lock without an owner yet is just being made, so give it a moment.
-        tries=0
-        until mkdir .rox/sync.lock 2>/dev/null; do
-            owner=$(cat .rox/sync.lock/pid 2>/dev/null || true)
-            if [ -z "$owner" ] && [ "$tries" -lt 3 ]; then
-                tries=$((tries + 1))
-                sleep 1
+        # One sync at a time. The lock is a symlink whose target, "PID:TIME", is the owner's
+        # record, so creating it is one atomic step and it never exists half made. A lock is
+        # stale only when its owner is gone or it is older than any sync runs. Locks an
+        # older rix made were folders with a pid file inside, and are read the same way.
+        me="$$:$(date +%s)"
+        attempts=0
+        until [ ! -d .rox/sync.lock ] && ln -s "$me" .rox/sync.lock 2>/dev/null; do
+            attempts=$((attempts + 1))
+            if [ "$attempts" -gt 20 ]; then
+                echo "Could not take the sync lock" >&2
+                exit 1
+            fi
+            if [ -L .rox/sync.lock ]; then
+                record=$(readlink .rox/sync.lock 2>/dev/null || true)
+                owner=${record%%:*}
+            elif [ -d .rox/sync.lock ]; then
+                owner=$(cat .rox/sync.lock/pid 2>/dev/null || true)
+                record=$owner
+            else
                 continue
             fi
-            if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null &&
-                [ -z "$(find .rox/sync.lock/pid -mmin +10 2>/dev/null)" ]; then
+            if [ -z "$(find .rox/sync.lock -prune -mmin +10 2>/dev/null)" ] &&
+                { [ -z "$owner" ] || kill -0 "$owner" 2>/dev/null; }; then
                 echo "Another sync is running" >&2
                 exit 1
             fi
-            # Take the stale lock over by renaming it, which only one sync can do.
+            # Stale. Take it over by renaming it, which only one sync can do, and check that
+            # what was renamed is the lock that was judged stale.
             dead=.rox/sync.lock.dead.$$
-            if mv .rox/sync.lock "$dead" 2>/dev/null; then
-                if [ "$(cat "$dead/pid" 2>/dev/null || true)" != "$owner" ]; then
-                    mv "$dead" .rox/sync.lock 2>/dev/null || true
-                    echo "Another sync is running" >&2
-                    exit 1
-                fi
-                rm -rf "$dead"
+            rm -rf "$dead"
+            mv .rox/sync.lock "$dead" 2>/dev/null || continue
+            if [ -L "$dead" ]; then
+                moved=$(readlink "$dead" 2>/dev/null || true)
+            else
+                moved=$(cat "$dead/pid" 2>/dev/null || true)
             fi
-            tries=0
+            if [ "$moved" != "$record" ]; then
+                if [ -L "$dead" ]; then ln -s "$moved" .rox/sync.lock 2>/dev/null || true; fi
+                rm -rf "$dead"
+                echo "Another sync is running" >&2
+                exit 1
+            fi
+            rm -rf "$dead"
         done
-        echo $$ > .rox/sync.lock/pid
         trap sync_done EXIT
         # An earlier sync that died mid-swap leaves its undo folder: restore it first, and
         # stop if that fails, so the backups it kept survive.
@@ -166,6 +190,7 @@ case "$action" in
                 exit 1
             fi
         done < "$work/install.list"
+        sync_still_mine
         # Plan the swap before touching anything: E for a path that exists, A for one that doesn't.
         : > "$work/undo/plan.tmp"
         while IFS= read -r p; do
@@ -184,6 +209,7 @@ case "$action" in
             fi
             mv "$work/stage/$p" "$p"
         done < "$work/install.list"
+        sync_still_mine
         # The new setup is in place: now drop what the launcher no longer syncs.
         while IFS= read -r p; do
             rm -rf -- "$p"

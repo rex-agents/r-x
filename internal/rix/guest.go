@@ -133,7 +133,9 @@ func isOurAgent(pid int, start, sock string) bool {
 	if start != "" && now != start {
 		return false
 	}
-	return strings.Contains(command, "ssh-agent") && strings.Contains(command, sock)
+	// The command must be exactly what rix runs: ssh-agent, then -D -a and this socket.
+	exe, rest, _ := strings.Cut(strings.TrimSpace(command), " ")
+	return filepath.Base(exe) == "ssh-agent" && strings.TrimSpace(rest) == "-D -a "+sock
 }
 
 // recordAgent notes the agent rix started, with the identity stopAgent checks later.
