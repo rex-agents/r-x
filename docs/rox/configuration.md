@@ -27,7 +27,7 @@ file passed with `--config`. `rox config` edits it.
 | Setting | Meaning |
 | --- | --- |
 | `updates` | `auto` (default), `notify`, `off` |
-| `hooks` | `"off"`/`"none"`, or a program other than rix to call for [hook events](rix-contract.md#the-rix-contract) |
+| `hooks` | `"off"`/`"none"`, or a program other than rix to call for [hook events](rix-contract.md) |
 | `container.engine` | `container`, `docker`, `podman` |
 | `*.cpus`, `*.memory`, `*.image`, `*.prebuild` | defaults for the backend; `memory` like `4G`/`512M`; `prebuild` true/false (default true) |
 | `linux`/`macos`: `user`, `identity`, `host_key` | VM login user (default `admin`), SSH private key, and file with the pinned host key. Required; [`rox template`](templates.md) sets them |

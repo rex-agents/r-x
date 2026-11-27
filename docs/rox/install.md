@@ -5,22 +5,11 @@ sidebar:
 
 # Install
 
-How to install rox, what it needs on `PATH`, and how it updates itself.
-
-```sh
-brew install rex-agents/tap/r-x        # or download an archive from the releases page
-rox rex install                        # optional: every rox and rix command as a Rex action
-rox skill install                      # optional: the rox skill for Claude Code and Codex
-```
-
-`rox --version` prints the version. A released binary updates itself: `rox self-update` installs the
-latest release (and refreshes the skill and the Rex actions), `rox self-update --check` only says
-whether one is out. Automatic checks happen at most every six hours and follow `"updates"` in the
-[config](configuration.md) (`"auto"` the default, `"notify"`, `"off"`) or `ROX_UPDATES`.
+What rox needs on `PATH`, the rox skill, and `rox self-update`. To install rox, rix and rux (Homebrew or release archives), or to migrate from Python rox, see the [installation guide](../getting-started/installation.md).
 
 ## Required programs
 
-rox needs these programs on `PATH`, depending on what you launch:
+rox needs these programs on `PATH`, depending on what you launch, and checks the ones a launch needs before it starts:
 
 | When | Programs |
 | --- | --- |
@@ -32,16 +21,19 @@ rox needs these programs on `PATH`, depending on what you launch:
 | Funnels | `tailscale` on this machine |
 | `rox template` | `tart`, `ssh`, `ssh-keygen`, and `ssh-keyscan` (linux); `ditto` and the Rex app in `/Applications/Rex.app` (macos) |
 
-rox checks the ones a launch needs before it starts and says which is missing.
+## The rox skill
 
-## rox skill, self-update
-
-```
+```sh
 rox skill install [--agent claude|codex]... [--dir DIR] [--force]
+```
+
+Copies the bundled rox skill into `~/.claude/skills` and/or the Codex skills folder (each agent set up on this machine, or the ones named by `--agent`), or into `--dir` (such as a project's `.claude/skills`). `--agent` and `--dir` can't be combined. `--force` replaces a folder named `rox` that isn't a rox skill.
+
+## Updates
+
+```sh
+rox --version
 rox self-update [--check]
 ```
 
-`skill install` copies the bundled rox skill into `~/.claude/skills` and/or the Codex skills folder
-(each agent set up on this machine, or the ones named by `--agent`), or into `--dir` (such as a project's
-`.claude/skills`). `--agent` and `--dir` can't be combined. `--force` replaces a folder named `rox`
-that isn't a rox skill. `self-update` also refreshes the skill.
+`rox self-update` installs the latest release and refreshes the skill and the Rex actions; `--check` only says whether one is out. Automatic checks happen at most every six hours and follow `"updates"` in the [config](configuration.md) (`"auto"` the default, `"notify"`, `"off"`) or `ROX_UPDATES`.

@@ -97,7 +97,7 @@ rix secret set BUTLER_API_KEY     # secrets that rux actions list in tool.json
 rix secret import ~/.rux/secrets.env   # move secrets from an older rux
 ```
 
-`rix credential github` and `rix secret get NAME... --json` are how rux asks; any tool on this machine can do the same. Details: [docs/rux/index.md](docs/rux/index.md#credentials-come-from-rix).
+`rix credential github` and `rix secret get NAME... --json` are how rux asks; any tool on this machine can do the same. Details: [docs/rux/index.md](docs/rux/credentials.md#credentials-come-from-rix).
 
 ## Rex actions
 

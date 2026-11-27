@@ -46,7 +46,7 @@ Released binaries update themselves. Run `rox self-update` or `rix self-update` 
 
 ## Prerequisites
 
-rox needs these programs on `PATH`, depending on what you launch, and checks the ones a launch needs before it starts:
+rox needs these programs on `PATH`, depending on what you launch, and checks the ones a launch needs before it starts (the [rox install page](../rox/install.md) has the same list, plus `rox template`'s needs):
 
 | You use | You need |
 | --- | --- |
