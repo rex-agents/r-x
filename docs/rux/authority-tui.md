@@ -23,8 +23,8 @@ pack › mac › web app › fix the login bug     ←↑↓→ move  enter open
 ```
 
 - **Cards** show a status dot, the name, a one-line summary, a count ("3 threads", "2 sub-agents") and a small activity sparkline (events in the last ~40 seconds). The selected card has a bright border, and a line connects the selected path from the root to its threads.
-- **Preview** (far right) describes the selected node: for a host its OS, load, VMs and role; for a project its repo, thread counts and cost; for a thread its placement, guest, `duration · turns · cost`, shared files and the last few events; for a sub-agent its status and guest.
-- **Header**: the tabs, then a live/degraded/offline dot, the pack leader, its term, whether the vault is reachable, how long the live feed has been connected and the URL. A yellow banner says *degraded* when the authority can't reach a leader and is showing only its own view; a red one says *vault unreachable* when the vault host is down (cached keys still work until their TTL; new credentialed work fails).
+- **Preview** (far right) describes the selected node: for a host its OS, load, VMs and role; for a project its repo, thread counts and cost; for a thread its placement, guest, `duration · turns · cost`, shared files and the last few events; for a sub-agent its status and guest. `enter` on a sub-agent opens its conversation, read-only.
+- **Header**: the tabs, then a live/degraded/offline dot, the pack leader, its term, whether the vault is reachable, how long the authority has been up and the URL. A yellow banner says *degraded* when the authority can't reach a leader and is showing only its own view; a red one says *vault unreachable* when the vault host is down (cached keys still work until their TTL; new credentialed work fails).
 - **Small terminals** collapse columns: the columns shown always include the focused one, the preview drops below 90 columns, and below ~60 columns one column is shown at a time. The T-rex appears when there's room.
 
 ## Keys
@@ -67,7 +67,7 @@ The TUI keeps no state of its own and reads nothing from `~/.rux`: it is only a 
 | --- | --- |
 | The pack, and live updates | `GET /api/pack`, SSE `GET /api/pack/stream` (`pack`, `pack.delta`, `thread.status`, `thread.event`) |
 | Project names | `GET /api/projects` |
-| A thread's conversation | `GET /api/threads/{id}/events/page` |
+| A thread's conversation | `GET /api/threads/{id}/events/page` (a sub-agent's, read-only: `/api/threads/{id}/subagents/{sub}/events/page`) |
 | Send a message | `POST /api/threads/{id}/messages` |
 | New thread, with `placement` | `POST /api/threads` |
 
