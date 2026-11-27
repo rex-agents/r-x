@@ -11,6 +11,28 @@ import (
 	"github.com/rex-agents/r-x/internal/sys"
 )
 
+// fileGit runs real subprocesses, but lets git use the file transport for local fixtures.
+// Production keeps GIT_ALLOW_PROTOCOL=ssh:https.
+type fileGit struct{ sys.Real }
+
+func (r fileGit) Run(c sys.Cmd) (sys.Result, error) {
+	if len(c.Argv) > 0 && c.Argv[0] == "git" {
+		env := map[string]string{}
+		for k, v := range c.Env {
+			env[k] = v
+		}
+		env["GIT_ALLOW_PROTOCOL"] = "file"
+		c.Env = env
+	}
+	return r.Real.Run(c)
+}
+
+func allowFileGit() func() {
+	previous := sys.R
+	sys.R = fileGit{}
+	return func() { sys.R = previous }
+}
+
 func fixtureGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"}, args...)...)
@@ -24,9 +46,7 @@ func fixtureGit(t *testing.T, dir string, args ...string) string {
 
 func TestReadBranchSurvivesPrefixTransitions(t *testing.T) {
 	_, errs := isolate(t)
-	old := gitProtocols
-	gitProtocols = "file"
-	t.Cleanup(func() { gitProtocols = old })
+	defer allowFileGit()()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git missing")
 	}
@@ -162,5 +182,26 @@ func TestReconnectRefusesIncompleteBoot(t *testing.T) {
 		if len(fake.Calls) != 0 {
 			t.Errorf("%s: ran %+v", phase, fake.Calls)
 		}
+	}
+}
+
+func TestStopErrorThenObservedStoppedIsSuccess(t *testing.T) {
+	fake, g := stopFixture(t, sampleName, true, 1)
+	stopped := false
+	inner := fake.Handle
+	fake.Handle = func(c sys.Call) sys.Result {
+		if strings.Contains(c.Line(), "docker stop") {
+			stopped = true // the backend timed out after it had stopped the container
+		}
+		if strings.Contains(c.Line(), "docker inspect") && stopped {
+			return sys.Result{Stdout: "false\n"}
+		}
+		return inner(c)
+	}
+	if err := Stop(g.Name); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := LoadGuest(g.Name); !got.Stopped {
+		t.Error("reconciled stop was not saved")
 	}
 }

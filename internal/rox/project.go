@@ -227,7 +227,7 @@ type Branch struct {
 // gitEnv is how the launcher's git reaches a remote: through rix's agent and pins when rix
 // lends them, and otherwise through the user's own SSH setup, without prompting.
 func gitEnv(lease *Lease, scratch string) (map[string]string, []string, error) {
-	env := map[string]string{"GIT_TERMINAL_PROMPT": "0", "GIT_ALLOW_PROTOCOL": gitProtocols}
+	env := map[string]string{"GIT_TERMINAL_PROMPT": "0", "GIT_ALLOW_PROTOCOL": "ssh:https"}
 	if lease == nil {
 		env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
 		return env, nil, nil
@@ -695,6 +695,3 @@ func githubDefaultBranch(url string) (string, error) {
 	}
 	return repo.DefaultBranch, nil
 }
-
-// gitProtocols are the transports launcher-side Git may use. Tests widen it to read a local fixture.
-var gitProtocols = "ssh:https"
