@@ -13,7 +13,7 @@ import (
 func rexSplit(label string, argv ...string) string {
 	sess, block := os.Getenv("REX_SESSION"), os.Getenv("REX_BLOCK")
 	if sess == "" || block == "" {
-		return "Panes need rux to run in a Rex terminal"
+		return "Panes need Rex (REX_SESSION isn't set). Read the agent with rux agent read"
 	}
 	args := append([]string{"split", "-s", sess, "-b", block, "--split=right", "--ratio", "45", "--label", label, "--focus=false", "--"}, argv...)
 	if out, err := exec.Command("rex", args...).CombinedOutput(); err != nil {

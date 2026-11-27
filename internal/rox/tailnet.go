@@ -14,131 +14,6 @@ import (
 	"github.com/rex-agents/r-x/internal/ui"
 )
 
-// tailscaleOn turns on the guest server's tailnet node. The auth key goes over SSH on stdin.
-func tailscaleOn(g *Guest, tags []string, controlURL string, key *string) error {
-	argv := guestRex(g, "server", "tailscale", "on", "--hostname", g.Name, "--json")
-	for _, tag := range tags {
-		argv = append(argv, "--advertise-tag", tag)
-	}
-	if len(tags) > 0 {
-		// A tagged node belongs to its tags, so the tailnet ACLs decide who may connect.
-		argv = append(argv, "--allow-tailnet-members")
-	}
-	if controlURL != "" {
-		argv = append(argv, "--control-url", controlURL)
-	}
-	input := ""
-	if key != nil {
-		argv = append(argv, "--auth-key-file", "-")
-		input = *key
-	}
-	_, err := guestRun(g, argv, input, 30*time.Second)
-	return err
-}
-
-type tailnetState struct {
-	State   string `json:"state"`
-	DNSName string `json:"dns_name"`
-	HTTPS   struct {
-		State string `json:"state"`
-	} `json:"https"`
-}
-
-func tailnetStatus(g *Guest) (tailnetState, error) {
-	var status struct {
-		Tailscale tailnetState `json:"tailscale"`
-	}
-	out, err := sys.OutputWith(sys.Cmd{Argv: rexOn(g, "server", "status", "--json"), Timeout: 8 * time.Second})
-	if err != nil {
-		return status.Tailscale, err
-	}
-	err = json.Unmarshal([]byte(out), &status)
-	return status.Tailscale, err
-}
-
-func enableTailnet(g *Guest, t *Tailnet, timeout time.Duration) error {
-	s := ui.Start("Adding %s to the tailnet", g.Name)
-	key, err := t.Key()
-	if err == nil {
-		err = tailscaleOn(g, t.Tags, t.ControlURL, &key)
-	}
-	if err != nil {
-		s.Fail(err)
-		return err
-	}
-	// The node reports needs_login for a moment while Tailscale takes the key, so only a node
-	// still waiting when time runs out means the key was rejected.
-	var last tailnetState
-	name, err := sys.WaitFor(min(timeout, 60*time.Second), "the guest to join the tailnet", func() (string, bool, error) {
-		state, err := tailnetStatus(g)
-		last = state
-		return strings.TrimRight(state.DNSName, "."), err == nil && state.State == "running" && state.DNSName != "", err
-	})
-	if err != nil {
-		if last.State == "needs_login" {
-			err = errors.New("Tailscale still wants a browser sign-in, so the auth key was rejected. Check that it's valid, reusable, and allowed to use the configured tags")
-		}
-		s.Fail(err)
-		return err
-	}
-	g.TailnetName = name
-	g.MustSave()
-	// Rex serves the tailnet over HTTPS, and refuses other devices until Tailscale issues a certificate.
-	s.Note("waiting for its HTTPS certificate")
-	_, err = sys.WaitFor(min(timeout, 90*time.Second), "the guest's tailnet HTTPS certificate", func() (bool, bool, error) {
-		state, err := tailnetStatus(g)
-		return true, err == nil && state.HTTPS.State == "available", err
-	})
-	if err != nil {
-		s.Warn("On the tailnet at %s, but its HTTPS certificate isn't ready yet", name)
-		return nil
-	}
-	s.Done("On the tailnet at %s", ui.Accent(name))
-	return nil
-}
-
-// resumeTailnet serves over the tailnet again after a server restart. Tailscale deletes an
-// ephemeral node that stays offline, so the configured key goes along when there is one.
-func resumeTailnet(g *Guest, t *Tailnet) {
-	err := func() error {
-		state, err := tailnetStatus(g)
-		if err != nil || state.State == "running" {
-			return err
-		}
-		var key *string
-		var tags []string
-		controlURL := ""
-		if t != nil {
-			k, err := t.Key()
-			if err != nil {
-				return err
-			}
-			key, tags, controlURL = &k, t.Tags, t.ControlURL
-		}
-		if err := tailscaleOn(g, tags, controlURL, key); err != nil {
-			return err
-		}
-		_, err = sys.WaitFor(30*time.Second, "the guest to rejoin the tailnet", func() (bool, bool, error) {
-			state, err := tailnetStatus(g)
-			return true, err == nil && state.State == "running", err
-		})
-		return err
-	}()
-	if err != nil {
-		ui.Warn("%s could not rejoin the tailnet, so only this machine can reach it (%s)", g.Name, firstLine(err.Error()))
-	}
-}
-
-// leaveTailnet signs the guest's node out so it doesn't linger after the guest is gone.
-func leaveTailnet(g *Guest) {
-	if g.TailnetName == "" || g.GuestSocket == "" {
-		return
-	}
-	if _, err := sys.Try(sys.Cmd{Argv: remoteCommand(g, guestRex(g, "server", "tailscale", "logout"), "", false), Timeout: 20 * time.Second}); err != nil {
-		ui.Warn("Could not sign %s out of the tailnet. Remove it in the Tailscale admin console if it's still listed", g.Name)
-	}
-}
-
 // Funnels: Tailscale on the launcher serves a guest port on the internet, through an SSH tunnel.
 
 var FunnelPorts = []int{443, 8443, 10000}
@@ -419,7 +294,7 @@ func AddFunnel(name string, port, https int, path string) error {
 		if _, err := tailscaleCLI(); err != nil {
 			return err
 		}
-		if _, err := resume(g, savedTailnet(g, ""), 120*time.Second, false); err != nil {
+		if _, err := resume(g, 120*time.Second, false); err != nil {
 			return err
 		}
 		if !strings.HasPrefix(path, "/") {

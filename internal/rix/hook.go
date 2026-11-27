@@ -166,7 +166,7 @@ func Hook(event, name string, stdin io.Reader, stdout io.Writer) error {
 		}
 		return write()
 	}
-	return fmt.Errorf("Unknown hook event %s. rix knows %s", event, strings.Join(contract.Events, ", "))
+	return fmt.Errorf("Unknown hook event %s. rix knows %s", event, strings.Join(contract.LegacyEvents, ", "))
 }
 
 // preFetch lends an agent for the launcher's own fetch of the branch, until rox closes stdin.

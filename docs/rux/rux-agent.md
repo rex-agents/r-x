@@ -23,6 +23,10 @@ and `--force` (replace a `rux` folder that isn't this skill). The skill teaches 
 daemon: state is one JSON file per agent in `~/.rux/agents/<rex session>/`. Every command takes `--session S`
 (default `$REX_SESSION`).
 
+**Without Rex** (`REX_SESSION` unset, no `--session`), `rux agent spawn` runs the sub-agent headless: no pane, the agent
+CLI runs non-interactively in the guest, and its output goes to a log next to its state file. `rux agent read ID`
+prints the log, `wait` and `stop` work as usual, and `send` and `focus` need a pane. Nothing here calls `rex` then.
+
 ### Commands
 
 | Command | Does |
