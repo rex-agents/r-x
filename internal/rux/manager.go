@@ -5,7 +5,9 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -56,6 +58,7 @@ func (t *thread) wakeTextLocked(ev json.RawMessage) string {
 		NumTurns      int  `json:"num_turns"`
 		Code          int
 		Error         string
+		Text          string
 		DurationMS    int64 `json:"duration_ms"`
 	}
 	if json.Unmarshal(ev, &e) != nil {
@@ -74,6 +77,8 @@ func (t *thread) wakeTextLocked(ev json.RawMessage) string {
 		}
 		return fmt.Sprintf("%s%s %s after %ds. Its last message:\n\n%s\n\nUse read_thread for the full transcript, or send_message to reply to it.",
 			wakePrefix, name, state, e.DurationMS/1000, clipText(last, 2000))
+	case e.Type == "rux_setup_failed":
+		return fmt.Sprintf("%s%s failed to start: %s. It hasn't run anything; a new message makes it try the checkout again.", wakePrefix, name, e.Text)
 	case e.Type == "rux_exit" && e.Code != 0:
 		return fmt.Sprintf("%s%s: claude exited with code %d (%s). A new message will restart it.", wakePrefix, name, e.Code, e.Error)
 	}
@@ -91,17 +96,11 @@ func (s *server) wake(managerID, text string) {
 		m.mu.Unlock()
 		return
 	}
-	if m.send != nil {
-		select {
-		case m.send <- wireMsg{T: "user", Text: text}:
-			m.mu.Unlock()
-			return
-		default:
-		}
-	}
-	m.pendingWake = append(m.pendingWake, text)
 	m.mu.Unlock()
-	s.wakeIfAsleep(m) // a sleeping manager starts to hear from its workers
+	// Kept until the manager's runner acks it, connected or not.
+	if _, err := s.enqueueUser(m, wireMsg{T: "user", Text: text}, true); err != nil {
+		log.Printf("manager %s: queueing a wake-up: %v", managerID, err)
+	}
 }
 
 // managerFor returns the project's live manager thread, if any.
@@ -129,30 +128,18 @@ func (s *server) handleManagerMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if m := s.managerFor(pid); m != nil {
-		m.mu.Lock()
-		send, status := m.send, m.meta.Status
-		m.mu.Unlock()
-		if send == nil && asleepStatus(status) {
-			m.mu.Lock()
-			m.pendingMsgs = append(m.pendingMsgs, wireMsg{T: "user", Text: req.Text})
-			m.mu.Unlock()
-			s.wakeIfAsleep(m)
-			writeJSONResp(w, 202, m.view())
-			return
-		}
-		if send == nil {
-			if status == "failed" {
+		_, err := s.enqueueUser(m, wireMsg{T: "user", Text: req.Text}, false)
+		switch {
+		case errors.Is(err, errNoRunner):
+			if m.view().Status == "failed" {
 				httpErr(w, 409, "the manager failed to start; remove it from the menu and try again")
 			} else {
 				httpErr(w, 409, "the manager is still starting")
 			}
-			return
-		}
-		select {
-		case send <- wireMsg{T: "user", Text: req.Text}:
-			writeJSONResp(w, 202, m.view())
+		case err != nil:
+			httpErr(w, 500, "saving the message: "+err.Error())
 		default:
-			httpErr(w, 503, "manager busy")
+			writeJSONResp(w, 202, m.view())
 		}
 		return
 	}
@@ -367,38 +354,40 @@ func (s *server) callManagerTool(mgr *thread, name string, raw json.RawMessage) 
 		if err != nil {
 			return nil, err
 		}
-		msg := wireMsg{T: "interrupt"}
 		if name == "send_message" {
 			if strings.TrimSpace(a.Text) == "" {
 				return nil, fmt.Errorf("text is required")
 			}
-			msg = wireMsg{T: "user", Text: a.Text}
+			waking, err := s.enqueueUser(t, wireMsg{T: "user", Text: a.Text}, false)
+			if errors.Is(err, errNoRunner) {
+				return nil, fmt.Errorf("worker %s isn't connected (status %s)", a.ThreadID, t.view().Status)
+			}
+			if err != nil {
+				return nil, err
+			}
+			if waking {
+				return textContent(fmt.Sprintf("Worker %s was asleep; its guest is starting, and it gets the message when it's up (about a minute).", a.ThreadID)), nil
+			}
+			return textContent("Sent."), nil
 		}
 		t.mu.Lock()
 		send, status := t.send, t.meta.Status
-		if send == nil && asleepStatus(status) && msg.T == "user" {
-			t.pendingMsgs = append(t.pendingMsgs, msg)
+		if send != nil {
+			select {
+			case send <- wireMsg{T: "interrupt"}:
+				t.mu.Unlock()
+				return textContent("Interrupted."), nil
+			default:
+			}
 		}
 		t.mu.Unlock()
 		if send == nil && asleepStatus(status) {
-			if msg.T != "user" {
-				return textContent(fmt.Sprintf("Worker %s is asleep (its guest is stopped), so there's nothing to interrupt.", a.ThreadID)), nil
-			}
-			s.wakeIfAsleep(t)
-			return textContent(fmt.Sprintf("Worker %s was asleep; its guest is starting, and it gets the message when it's up (about a minute).", a.ThreadID)), nil
+			return textContent(fmt.Sprintf("Worker %s is asleep (its guest is stopped), so there's nothing to interrupt.", a.ThreadID)), nil
 		}
 		if send == nil {
 			return nil, fmt.Errorf("worker %s isn't connected (status %s)", a.ThreadID, t.view().Status)
 		}
-		select {
-		case send <- msg:
-		default:
-			return nil, fmt.Errorf("worker %s is busy; try again", a.ThreadID)
-		}
-		if name == "interrupt_thread" {
-			return textContent("Interrupted."), nil
-		}
-		return textContent("Sent."), nil
+		return nil, fmt.Errorf("worker %s is busy; try again", a.ThreadID)
 
 	case "read_thread":
 		t, err := s.worker(mgr, a.ThreadID)

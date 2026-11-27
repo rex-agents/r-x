@@ -228,10 +228,8 @@ func (s *server) handleUIAnswer(w http.ResponseWriter, r *http.Request) {
 	if len(req.State) > 0 && string(req.State) != "null" && string(req.State) != "{}" {
 		fmt.Fprintf(&b, "\nform values: %s", req.State)
 	}
-	select {
-	case t.send <- wireMsg{T: "user", Text: b.String()}:
-	default:
-		httpErr(w, 503, "runner busy")
+	if err := t.queueLocked(wireMsg{T: "user", Text: b.String()}); err != nil {
+		httpErr(w, 500, "saving the answer: "+err.Error())
 		return
 	}
 	t.appendLocked("rux", 0, ruxEv("rux_ui_answer", "ui", ui, "action", req.Action, "params", req.Params, "state", req.State))

@@ -47,7 +47,7 @@ func (s *server) allThreads() []*thread {
 func (s *server) sleepy(t *thread) bool {
 	t.mu.Lock()
 	m := t.meta
-	pending := len(t.pendingWake)
+	pending := len(t.outbox)
 	t.mu.Unlock()
 	// A guest rux didn't start may be doing other work, so it's never stopped.
 	if m.Backend != "rox" || m.Guest == "" || m.SharedGuest || m.Status != "idle" || pending > 0 {
