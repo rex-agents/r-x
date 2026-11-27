@@ -1,12 +1,14 @@
 package rux
 
 import (
+	"os"
 	"reflect"
 	"testing"
 )
 
 // TestMainDispatch checks which entry point each command line reaches.
 func TestMainDispatch(t *testing.T) {
+	defer func(a []string) { os.Args = a }(os.Args) // Main rewrites os.Args
 	var got string
 	var gotArgs []string
 	save := [3]any{tuiFn, harnessFn, agentCmdFn}
