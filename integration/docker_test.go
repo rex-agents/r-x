@@ -44,10 +44,11 @@ func TestDockerGuestLifecycle(t *testing.T) {
 		return string(out)
 	}
 	run("up", "container", "--engine", "docker", "--no-project", "--no-tailscale", "--boot-timeout", "300")
+	// The guest has no project, so list every guest rather than this directory's.
 	var list struct {
 		Guests []struct{ Name, Phase string } `json:"guests"`
 	}
-	if err := json.Unmarshal([]byte(run("ls", "--json")), &list); err != nil || len(list.Guests) != 1 {
+	if err := json.Unmarshal([]byte(run("ls", "--json", "--all-projects")), &list); err != nil || len(list.Guests) != 1 {
 		t.Fatalf("ls: %v %+v", err, list)
 	}
 	name := list.Guests[0].Name
