@@ -1,5 +1,5 @@
-# Builds rox, rix and rux for macOS and Linux on arm64 and amd64: one archive per platform with
-# all three binaries, plus checksums.txt, which self-update checks downloads against.
+# Builds rox, rix, rox-rex and rux for macOS and Linux on arm64 and amd64: one archive per platform with
+# all four binaries, plus checksums.txt, which self-update checks downloads against.
 #
 # Self-update downloads r-x_<version>_<os>_<arch>.tar.gz, so keep name_template and the
 # archive format in step with internal/selfupdate.
@@ -29,6 +29,15 @@ builds:
     flags: [-trimpath]
     ldflags: ["-s -w -X main.version=v{{ .Version }}"]
     mod_timestamp: "{{ .CommitTimestamp }}"
+  - id: rox-rex
+    main: ./cmd/rox-rex
+    binary: rox-rex
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux]
+    goarch: [arm64, amd64]
+    flags: [-trimpath]
+    ldflags: ["-s -w -X main.version=v{{ .Version }}"]
+    mod_timestamp: "{{ .CommitTimestamp }}"
   - id: rux
     main: ./cmd/rux
     binary: rux
@@ -40,7 +49,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
-  - ids: [rox, rix, rux]
+  - ids: [rox, rix, rox-rex, rux]
     formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files: [README.md]
@@ -68,11 +77,11 @@ release:
     ```
 
     Or download the archive for your platform, check it against `checksums.txt`, and put
-    `rox`, `rix` and `rux` on your `PATH`. rox and rix update themselves after that (`rox self-update`, `rix self-update`).
+    `rox`, `rix`, `rox-rex` and `rux` on your `PATH`. rox and rix update themselves after that (`rox self-update`, `rix self-update`). `rox-rex` is optional: rox works without Rex.
 
 homebrew_casks:
   - name: r-x
-    binaries: [rox, rix, rux]
+    binaries: [rox, rix, rox-rex, rux]
     repository:
       owner: rex-agents
       name: homebrew-tap
@@ -90,5 +99,5 @@ homebrew_casks:
         # The binaries aren't notarized, so clear the quarantine Gatekeeper would refuse them for.
         install_steps: |
           if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/rox", "#{staged_path}/rix", "#{staged_path}/rux"]
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/rox", "#{staged_path}/rix", "#{staged_path}/rox-rex", "#{staged_path}/rux"]
           end

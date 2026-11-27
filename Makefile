@@ -9,6 +9,7 @@ install:
 	mkdir -p $(BIN)
 	go build -ldflags "$(LDFLAGS)" -o $(BIN)/rox ./cmd/rox
 	go build -ldflags "$(LDFLAGS)" -o $(BIN)/rix ./cmd/rix
+	go build -ldflags "$(LDFLAGS)" -o $(BIN)/rox-rex ./cmd/rox-rex
 	go build -ldflags "$(LDFLAGS)" -o $(BIN)/rux ./cmd/rux
 	# The Linux rux that rux serve hands to guests, beside rux.
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(BIN)/rux-linux-arm64 ./cmd/rux
