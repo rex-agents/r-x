@@ -19,4 +19,4 @@ asks.
   versions in the guest record (`rox inspect`).
 - Signing the agents in is [rix](../rix/index.md)'s job (`rix auth claude|codex`); rox calls the
   `post-boot` hook with the agents that are new to the guest. See
-  [The rix contract](rix-contract.md#the-rix-contract).
+  [The rix contract](rix-contract.md).

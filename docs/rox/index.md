@@ -14,7 +14,7 @@ rox up ──▶ backend (container, Tart, Fly, Railway)  ──▶ sshd + Rex s
 - rox owns the guest: boot, SSH, the Rex server inside it, the Rex host entry on your machine, the
   tailnet node, funnels, stop/start and removal.
 - rix owns secrets: Git SSH keys, Claude Code and Codex credentials, synced agent setup. rox works
-  without rix; with rix on `PATH` it calls it at fixed points (see [The rix contract](rix-contract.md#the-rix-contract)).
+  without rix; with rix on `PATH` it calls it at fixed points (see [The rix contract](rix-contract.md)).
   See also the [rix](../rix/index.md) docs. [rux](../rux/index.md) builds a multi-agent harness on rox guests.
 - Every guest is named `rv-SLUG-XXXXXXXXXXXX` (the project's name, then 12 hex digits), such as
   `rv-web-3f2a9c1b7d4e`.
@@ -95,7 +95,7 @@ around.
 | `rox config` | [Configuration](configuration.md#rox-config) |
 | `rox service` | [Keeping guests running](service.md#rox-service) |
 | `rox rex` | [Rex actions](rex-actions.md#rox-rex) |
-| `rox skill`, `rox self-update` | [Install](install.md#rox-skill-self-update) |
+| `rox skill`, `rox self-update` | [Install](install.md#the-rox-skill) |
 | `rox exec`, `inspect`, `hooks` | [The rix contract](rix-contract.md#for-rix-and-other-tools) |
 
 ### Global flags

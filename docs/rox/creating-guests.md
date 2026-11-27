@@ -66,7 +66,7 @@ In order:
 8. Run `.rox.sh`; start the project's Rex session.
 9. Run the `post-provision` hook.
 
-Each step prints one line. The hooks are described in [The rix contract](rix-contract.md#the-rix-contract).
+Each step prints one line. The hooks are described in [The rix contract](rix-contract.md).
 
 If a launch fails after the guest exists, rox keeps it (phase `failed`); remove it with
 `rox down NAME`. A failed Git clone or `.rox.sh` leaves the Rex host available so you can look around.
