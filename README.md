@@ -3,11 +3,11 @@
 Three static Go binaries. rox and rix replace the Python `rox` script; rux runs agents on them.
 
 - **rox** owns guests: it boots them (Apple container, Docker, Podman, Tart, Fly.io, Railway), wires them to Rex and Tailscale, manages their lifecycle, and installs agent CLIs when a project asks for them.
-- **rix** owns the secrets and settings that agents and Git use inside a guest: Git SSH keys, Claude Code and Codex credentials, and synced skills, instructions, MCP servers and settings. rix installs nothing. See [docs/rix.md](docs/rix.md).
+- **rix** owns the secrets and settings that agents and Git use inside a guest: Git SSH keys, Claude Code and Codex credentials, and synced skills, instructions, MCP servers and settings. rix installs nothing. See [docs/rix/index.md](docs/rix/index.md).
 
-- **rux** is a multi-agent harness on rox and rix. `rux` opens it: you talk to a lead agent that starts sub-agents, each in its own rox guest, and every agent's conversation is live in one window. Agents run on Claude (Anthropic API), any OpenAI-compatible model, Claude Code or Codex, and model keys stay with rix on your machine. `rux claude` makes Claude Code itself the lead, with sub-agents in Rex panes. `rux serve` runs threads you drive from your phone; a thread's guest is stopped when it's been idle and started again by the next message. rux stores no credentials: it gets every one from rix. See [docs/rux.md](docs/rux.md).
+- **rux** is a multi-agent harness on rox and rix. `rux` opens it: you talk to a lead agent that starts sub-agents, each in its own rox guest, and every agent's conversation is live in one window. Agents run on Claude (Anthropic API), any OpenAI-compatible model, Claude Code or Codex, and model keys stay with rix on your machine. `rux claude` makes Claude Code itself the lead, with sub-agents in Rex panes. `rux serve` runs threads you drive from your phone; a thread's guest is stopped when it's been idle and started again by the next message. rux stores no credentials: it gets every one from rix. See [docs/rux/index.md](docs/rux/index.md).
 
-rox works without rix. With rix on `PATH`, rox calls it at fixed points in a guest's life, and rix reaches guests only through `rox exec`. The full rox reference is [docs/rox.md](docs/rox.md).
+rox works without rix. With rix on `PATH`, rox calls it at fixed points in a guest's life, and rix reaches guests only through `rox exec`. The full rox reference is [docs/rox/index.md](docs/rox/index.md).
 
 ## Install
 
@@ -63,7 +63,7 @@ A failed step shows the last lines of what it captured. `--verbose` (or `ROX_VER
 
 ## rox ↔ rix contract
 
-The full rix reference is in [docs/rix.md](docs/rix.md).
+The full rix reference is in [docs/rix/index.md](docs/rix/index.md).
 
 rox runs `rix hook EVENT NAME` with the guest record (`rox inspect NAME --json`, schema 1) on stdin, and reads one JSON reply on stdout:
 
@@ -97,7 +97,7 @@ rix secret set BUTLER_API_KEY     # secrets that rux actions list in tool.json
 rix secret import ~/.rux/secrets.env   # move secrets from an older rux
 ```
 
-`rix credential github` and `rix secret get NAME... --json` are how rux asks; any tool on this machine can do the same. Details: [docs/rux.md](docs/rux.md#credentials-come-from-rix).
+`rix credential github` and `rix secret get NAME... --json` are how rux asks; any tool on this machine can do the same. Details: [docs/rux/index.md](docs/rux/index.md#credentials-come-from-rix).
 
 ## Rex actions
 
