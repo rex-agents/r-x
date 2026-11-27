@@ -573,3 +573,33 @@ func TestBridgeInstallEditsInitOnce(t *testing.T) {
 		t.Errorf("uninstall left %s", data)
 	}
 }
+
+func TestConfiguredAgentVersionPinsLatest(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	path := filepath.Join(dir, "rix", "config.json")
+	_ = os.MkdirAll(filepath.Dir(path), 0o700)
+	write := func(s string) {
+		if err := os.WriteFile(path, []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`{"agents":{"claude":{"version":"2.0.1"},"codex":{"version":"0.5.0"}}}`)
+	got, err := WithConfiguredVersions(AgentSpec{"claude": "latest", "codex": "0.9.0"})
+	if err != nil || got["claude"] != "2.0.1" || got["codex"] != "0.9.0" {
+		t.Errorf("got %v err=%v", got, err)
+	}
+	// The installer command carries the pinned version.
+	if s := strings.Join(AgentSpecs(AgentVersions(got, false)), " "); s != "claude=2.0.1 codex=0.9.0" {
+		t.Errorf("specs %s", s)
+	}
+	write(`{}`)
+	if got, _ := WithConfiguredVersions(AgentSpec{"claude": "latest"}); got["claude"] != "latest" {
+		t.Errorf("unset should stay latest: %v", got)
+	}
+	write(`{"agents":{"claude":{"version":"1;id"}}}`)
+	if _, err := WithConfiguredVersions(AgentSpec{"claude": "latest"}); err == nil {
+		t.Error("invalid version accepted")
+	}
+}
