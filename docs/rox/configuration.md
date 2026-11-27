@@ -14,7 +14,8 @@ file passed with `--config`. `rox config` edits it.
 ```json
 {
   "updates": "auto",
-  "hooks": "rix",
+  "hooks": ["rix", "rox-rex"],
+  "hosts": ["studio"],
   "container": {"engine": "docker", "cpus": 4, "memory": "8G", "image": "rox:linux", "prebuild": true},
   "linux": {"image": "rox-ubuntu", "user": "admin", "identity": "~/.ssh/rox_vm", "host_key": "~/.ssh/rox_linux_host.pub"},
   "macos": {"image": "rox-macos", "user": "admin", "identity": "~/.ssh/rox_vm", "host_key": "~/.ssh/rox_macos_host.pub"},
@@ -27,7 +28,9 @@ file passed with `--config`. `rox config` edits it.
 | Setting | Meaning |
 | --- | --- |
 | `updates` | `auto` (default), `notify`, `off` |
-| `hooks` | `"off"`/`"none"`, or a program other than rix to call for [hook events](rix-contract.md) |
+| `hooks` | the [hook providers](rix-contract.md#providers) to call, in order: a string (`"rix,rox-rex"`) or a list; `"off"`/`"none"`. Default: `rix` and `rox-rex`, each when found on `PATH` |
+| `hosts` | hosts `rox ls --all` and the automatic guest lookup ask, as a list: `["studio"]`. See [Remote hosts](remote-hosts.md) |
+| `host_transport` | how rox reaches other hosts: `ssh` (default), or a program such as `rox-rex` |
 | `container.engine` | `container`, `docker`, `podman` |
 | `*.cpus`, `*.memory`, `*.image`, `*.prebuild` | defaults for the backend; `memory` like `4G`/`512M`; `prebuild` true/false (default true) |
 | `linux`/`macos`: `user`, `identity`, `host_key` | VM login user (default `admin`), SSH private key, and file with the pinned host key. Required; [`rox template`](templates.md) sets them |
