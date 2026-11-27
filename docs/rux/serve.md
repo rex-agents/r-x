@@ -68,7 +68,11 @@ Go code (the TUI) calls `rux.EnsureAuthority()` to start the daemon if needed an
 OS, CPUs, memory, load and guest slots, plus its threads). `GET /api/pack/stream` is the live feed
 (server-sent events: a `pack` snapshot, then `pack.delta`, `thread.event` and `thread.status`; each
 event's data is `{"type", "data"}`). Outside a quorum this is a pack of one: the leader is the
-authority itself, term 0. `GET /api/threads` also returns `authority`, `placement`, `subagents`
+authority itself, term 0. `started` on each authority is its start time (for uptime), and an archived
+thread has status `archived` (and `archived: true`). A thread's sub-agents are openable at
+`/api/threads/{thread}/subagents/{id}/events` (SSE) and `/events/page`; both are answered only for a
+sub-agent the thread started. A leader proxies all `/api/threads/{id}/...` requests for another
+authority's threads to that authority. `GET /api/threads` also returns `authority`, `placement`, `subagents`
 (a manager's workers) and `cost` for each thread; `?authority=NAME` or `?authority=all` lists another
 authority's or the whole pack's threads. The Go types are in `internal/rux/authapi`.
 
