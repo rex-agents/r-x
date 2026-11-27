@@ -594,8 +594,11 @@ func (r *hrun) provision(a *harness.Agent, s *subInfo) {
 // roxStream runs rox, showing its latest line as the agent's status, and returns the
 // guest name it printed.
 func (r *hrun) roxStream(a *harness.Agent, rox string, args []string, onGuest func(string)) (string, error) {
+	// A rox up that has started owns a guest nobody can name until it prints the
+	// launch line, so stop lets it finish (cancelling only with the whole session);
+	// other commands end as soon as the agent is stopped.
 	ctx := r.ctx
-	if s := r.subOf(a); s != nil {
+	if s := r.subOf(a); s != nil && !(len(args) > 0 && args[0] == "up") {
 		ctx = s.ctx
 	}
 	cmd := exec.CommandContext(ctx, rox, args...)
@@ -839,12 +842,12 @@ func (r *hrun) stop(name string, remove bool) (string, error) {
 	a.Stop()
 	s.cancel()
 	a.Close()
-	// Provisioning may be between rox up naming the guest and returning; wait for it
-	// so the guest we remove is the final one.
+	// A rox up that already started is allowed to finish, so the guest it made is
+	// named before we decide what to remove.
 	select {
 	case <-s.done:
-	case <-time.After(30 * time.Second):
-		return "", fmt.Errorf("stopped %s, but its guest is still being set up; run stop_agent again in a moment to remove it", a.Name)
+	case <-time.After(10 * time.Minute):
+		return "", fmt.Errorf("stopped %s, but rox is still starting its guest; run stop_agent again once it finishes to remove it", a.Name)
 	}
 	s.cleanup.Lock()
 	defer s.cleanup.Unlock()

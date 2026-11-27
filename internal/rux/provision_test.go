@@ -25,7 +25,7 @@ case "$1" in
 up)
   echo "Starting ` + fakeGuest + `"
   case "` + mode + `" in
-  hang) exec sleep 60 ;;
+  hang) sleep 1; echo "Started ` + fakeGuest + `"; exit 0 ;;
   fail) echo "boom"; exit 1 ;;
   ok) echo "Started ` + fakeGuest + `"; exit 0 ;;
   silent) echo "an unrelated rv-other-aaaaaaaaaaaa guest exists"; exit 0 ;;
@@ -270,5 +270,25 @@ func TestAgentStopKeepsSharedGuestAndFailedRemovalKeepsRecord(t *testing.T) {
 	}
 	if got, _ := loadAgent(a.path); got.Guest != fakeGuest {
 		t.Errorf("guest forgotten after failed removal: %+v", got)
+	}
+}
+
+func TestStopLetsStartedUpFinishAndNeverAttaches(t *testing.T) {
+	log := fakeRox(t, "hang")
+	r := testRun(t)
+	a, s := spawn(t, r, "w8")
+	waitFor(t, "guest named", func() bool { return r.guestOf(s) == fakeGuest })
+	start := time.Now()
+	if _, err := r.stop("w8", true); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) < 300*time.Millisecond {
+		t.Errorf("stop didn't wait for rox up to finish")
+	}
+	if !strings.Contains(readLog(log), "down "+fakeGuest) || strings.Contains(readLog(log), "inspect") {
+		t.Errorf("log: %s", readLog(log))
+	}
+	if st, _ := a.Status(); st != harness.Stopped || a.Where != "" {
+		t.Errorf("status %s, where %q", st, a.Where)
 	}
 }

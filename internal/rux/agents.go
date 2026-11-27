@@ -363,9 +363,9 @@ func agentPane(args []string) {
 	if err != nil {
 		failed("rox isn't on PATH")
 	}
-	// A stop or a closed pane cancels whatever rox is running, and the guest it had
-	// named by then stays recorded for stop to remove.
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
+	// A stop or a closed pane cancels rox add, but not rox up: an up that has begun owns
+	// a guest only its launch line names, so it finishes and the result is recorded.
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT, syscall.SIGPIPE)
 	defer cancel()
 	stopped := false
 	a.update(func(a *subAgent) {
@@ -431,7 +431,7 @@ func agentPane(args []string) {
 		}
 		// The guest is recorded as soon as rox names it, so a failure or a stop
 		// afterwards can still remove it. Only a name this rox up printed counts.
-		guest, err = runShown(ctx, rox, up, func(name string) {
+		guest, err = runShown(context.WithoutCancel(ctx), rox, up, func(name string) {
 			a.update(func(a *subAgent) {
 				if a.Guest == "" {
 					a.Guest = name
@@ -444,9 +444,6 @@ func agentPane(args []string) {
 		if guest == "" {
 			failed("rox up finished but didn't say which guest it started; check rox ls before starting again")
 		}
-	}
-	if ctx.Err() != nil {
-		failed("interrupted")
 	}
 	stopped = false
 	a.update(func(a *subAgent) {
@@ -465,6 +462,9 @@ func agentPane(args []string) {
 			}
 		}
 		os.Exit(0)
+	}
+	if ctx.Err() != nil {
+		failed("the pane was closed while it started")
 	}
 	// Type the agent's command in once the guest's shell is up. Detached, since
 	// this process becomes rox shell.
@@ -835,18 +835,29 @@ func agentStop(args []string) {
 	a.update(func(a *subAgent) {
 		a.Phase, a.Cleanup, a.StopDone = "stopped", !*keep, false
 	})
-	if a.Block != "" {
+	// A pane that's running rox up isn't closed yet: it finishes the launch, records
+	// the guest, sees the stop and exits. Closing it sooner could lose the guest's name.
+	// (Everything else, including rox add in a shared guest, ends with the pane.)
+	launching := a.Pane > 0 && !a.Shared
+	if a.Block != "" && !launching {
 		rexOut("block", "close", "-s", a.Session, a.Block)
 	}
-	// Closing the pane cancels its rox up; wait for the pane to exit so the guest it
-	// named is on record before we decide what to remove.
 	if a.Pane > 0 {
+		if launching {
+			fmt.Printf("%s is still starting its guest; waiting for rox to finish so the guest can be removed\n", a.ID)
+		}
 		deadline := time.Now().Add(30 * time.Second)
+		if launching {
+			deadline = time.Now().Add(10 * time.Minute)
+		}
 		for paneAlive(a.Pane) && time.Now().Before(deadline) {
 			time.Sleep(200 * time.Millisecond)
 		}
 		if paneAlive(a.Pane) {
-			fail("rux agent stop: closed the pane, but it is still setting up the guest; run rux agent stop %s again", a.ID)
+			fail("rux agent stop: it is still setting up the guest; run rux agent stop %s again later", a.ID)
+		}
+		if launching && a.Block != "" {
+			rexOut("block", "close", "-s", a.Session, a.Block)
 		}
 	}
 	if cur, err := loadAgent(a.path); err == nil {
