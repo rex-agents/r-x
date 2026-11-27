@@ -453,9 +453,9 @@ func agentPane(args []string) {
 		}
 	})
 	if stopped {
-		// Stopped while the guest was coming up. stop removes it once this pane is gone;
-		// if stop already finished, this pane removes the guest it started.
-		if a.StopDone && a.Cleanup && !a.Shared {
+		// Stopped while the guest was coming up. This pane started it and knows its name,
+		// so it removes the guest itself, even if stop stopped waiting.
+		if a.Cleanup && !a.Shared {
 			if err := removeGuest(a); err != nil {
 				fmt.Fprintln(os.Stderr, "rux: "+err.Error())
 				os.Exit(1)
@@ -848,10 +848,16 @@ func agentStop(args []string) {
 		}
 		deadline := time.Now().Add(30 * time.Second)
 		if launching {
-			deadline = time.Now().Add(10 * time.Minute)
+			deadline = time.Now().Add(launchWait)
 		}
 		for paneAlive(a.Pane) && time.Now().Before(deadline) {
 			time.Sleep(200 * time.Millisecond)
+		}
+		if paneAlive(a.Pane) && launching {
+			// The pane started this guest and knows its name: it removes the guest itself
+			// when rox up returns, so a slow launch needs no second stop.
+			fmt.Printf("stopped %s; rox is still starting its guest, and the pane removes it when rox finishes\n", a.ID)
+			return
 		}
 		if paneAlive(a.Pane) {
 			fail("rux agent stop: it is still setting up the guest; run rux agent stop %s again later", a.ID)
@@ -881,6 +887,9 @@ func agentStop(args []string) {
 	a.update(func(a *subAgent) { a.StopDone = true })
 	fmt.Printf("stopped %s and removed guest %s\n", a.ID, guest)
 }
+
+// launchWait is how long stop waits for a pane's rox up before leaving the cleanup to the pane.
+var launchWait = 10 * time.Minute
 
 func paneAlive(pid int) bool { return pid > 0 && syscall.Kill(pid, 0) == nil }
 

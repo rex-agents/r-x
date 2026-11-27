@@ -41,6 +41,7 @@ type hrun struct {
 	subEffortV   string
 	subEffortSet bool
 	allowBash    bool
+	stopWait     time.Duration // how long stop waits for a rox up; 0 is ten minutes
 
 	// changed coalesces change notifications for the UI.
 	changed chan struct{}
@@ -74,6 +75,9 @@ type subInfo struct {
 	done chan struct{}
 	// stopped is sticky: once set, provisioning attaches nothing and reports nothing.
 	stopped bool
+	// removeWanted: the stop asked to remove the guest, so whoever sees it last does.
+	removeWanted bool
+	reaped       bool // the guest was removed
 	// cleanup serializes stops, so a retry can't race a stop that's removing the guest.
 	cleanup sync.Mutex
 }
@@ -435,6 +439,16 @@ func (r *hrun) spawnTool(_ context.Context, in json.RawMessage) (string, error) 
 	go func() {
 		defer close(info.done)
 		r.provision(sub, info)
+		// A stop that gave up waiting leaves the removal to us: rox up has now returned
+		// and named its guest, if it made one.
+		r.mu.Lock()
+		reap := info.stopped && info.removeWanted
+		r.mu.Unlock()
+		if reap {
+			if _, err := r.reap(info); err != nil {
+				sub.Note("error", err.Error()+" (stop_agent retries)")
+			}
+		}
 	}()
 	where := "a new " + gt + " guest"
 	if a.Host != "" {
@@ -838,7 +852,12 @@ func (r *hrun) stop(name string, remove bool) (string, error) {
 	}
 	r.mu.Lock()
 	s.stopped = true
+	s.removeWanted = remove
+	wait := r.stopWait
 	r.mu.Unlock()
+	if wait == 0 {
+		wait = 10 * time.Minute
+	}
 	a.Stop()
 	s.cancel()
 	a.Close()
@@ -846,14 +865,41 @@ func (r *hrun) stop(name string, remove bool) (string, error) {
 	// named before we decide what to remove.
 	select {
 	case <-s.done:
-	case <-time.After(10 * time.Minute):
-		return "", fmt.Errorf("stopped %s, but rox is still starting its guest; run stop_agent again once it finishes to remove it", a.Name)
+	case <-time.After(wait):
+		if remove && !s.Shared {
+			return "Stopped " + a.Name + ". rox is still starting its guest; rux removes it as soon as rox finishes.", nil
+		}
+		return "Stopped " + a.Name + ". rox is still starting its guest, which is kept.", nil
 	}
+	if !remove || s.Shared {
+		g := r.guestOf(s)
+		return "Stopped " + a.Name + map[bool]string{true: "; kept its guest " + g, false: ""}[g != ""], nil
+	}
+	g, err := r.reap(s)
+	if err != nil {
+		return "", fmt.Errorf("stopped %s, but %v (stop_agent again retries)", a.Name, err)
+	}
+	if g == "" && !r.reapedOf(s) {
+		return "Stopped " + a.Name, nil
+	}
+	return "Stopped " + a.Name + " and removed its guest", nil
+}
+
+func (r *hrun) reapedOf(s *subInfo) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return s.reaped
+}
+
+// reap removes the guest rox up named for this sub-agent, once. Stop and the provisioning
+// goroutine may both call it; the lock and clearing the name make the second a no-op.
+// If rox down fails the name stays, so a later stop can retry.
+func (r *hrun) reap(s *subInfo) (string, error) {
 	s.cleanup.Lock()
 	defer s.cleanup.Unlock()
 	guest := r.guestOf(s)
-	if guest == "" || s.Shared || !remove {
-		return "Stopped " + a.Name + map[bool]string{true: "; kept its guest " + guest, false: ""}[guest != ""], nil
+	if guest == "" || s.Shared {
+		return "", nil
 	}
 	down := []string{"down"}
 	if s.Host != "" {
@@ -861,12 +907,12 @@ func (r *hrun) stop(name string, remove bool) (string, error) {
 	}
 	out, err := exec.Command("rox", append(down, guest)...).CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("stopped %s, but rox down %s failed (stop_agent again retries): %s", a.Name, guest, lastLine(ansiRe.ReplaceAllString(string(out), "")))
+		return "", fmt.Errorf("rox down %s failed: %s", guest, lastLine(ansiRe.ReplaceAllString(string(out), "")))
 	}
 	r.mu.Lock()
-	s.Guest = ""
+	s.Guest, s.reaped = "", true
 	r.mu.Unlock()
-	return "Stopped " + a.Name + " and removed its guest", nil
+	return guest, nil
 }
 
 // ownGuests are the guests rux started in this session that are still up.

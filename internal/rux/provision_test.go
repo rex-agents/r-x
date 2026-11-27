@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,10 +24,11 @@ func fakeRox(t *testing.T, mode string) (log string) {
 echo "$@" >> "` + log + `"
 case "$1" in
 up)
-  [ "` + mode + `" = late ] || echo "Starting ` + fakeGuest + `"
+  [ "` + mode + `" = late ] || [ "` + mode + `" = gated ] || echo "Starting ` + fakeGuest + `"
   case "` + mode + `" in
   hang) sleep 1; echo "Started ` + fakeGuest + `"; exit 0 ;;
   late) sleep 1; echo "Workspace ` + fakeGuest + `"; exit 0 ;;
+  gated) while [ ! -f "` + dir + `/gate" ]; do sleep 0.05; done; echo "Started ` + fakeGuest + `"; exit 0 ;;
   fail) echo "boom"; exit 1 ;;
   ok) echo "Started ` + fakeGuest + `"; exit 0 ;;
   silent) echo "an unrelated rv-other-aaaaaaaaaaaa guest exists"; exit 0 ;;
@@ -325,5 +327,86 @@ func TestStopBeforeAnyGuestNameCleansUpLateIdentity(t *testing.T) {
 		if r.guestOf(s) != "" {
 			t.Errorf("host %q: guest still recorded", host)
 		}
+	}
+}
+
+func countOf(s, sub string) int { return strings.Count(s, sub) }
+
+func TestSlowUpIsCleanedUpWithoutASecondStop(t *testing.T) {
+	log := fakeRox(t, "gated")
+	gate := filepath.Join(filepath.Dir(log), "gate")
+	r := testRun(t)
+	r.stopWait = 100 * time.Millisecond
+	a, s := spawn(t, r, "slow")
+	waitFor(t, "rox up running", func() bool { return strings.Contains(readLog(log), "up ") })
+	if g := r.guestOf(s); g != "" {
+		t.Fatalf("guest %q named before rox printed a line", g)
+	}
+	msg, err := r.stop("slow", true)
+	if err != nil || !strings.Contains(msg, "as soon as rox finishes") {
+		t.Fatalf("stop = %q, %v", msg, err)
+	}
+	if strings.Contains(readLog(log), "down") {
+		t.Fatal("removed a guest before rox named it")
+	}
+	os.WriteFile(gate, nil, 0o600)
+	waitFor(t, "late removal", func() bool { return strings.Contains(readLog(log), "down "+fakeGuest) })
+	<-s.done
+	if st, _ := a.Status(); st != harness.Stopped || a.Where != "" || strings.Contains(readLog(log), "inspect") {
+		t.Errorf("status %s, where %q, log %q", st, a.Where, readLog(log))
+	}
+	// A second stop finds nothing left to remove and doesn't call rox down again.
+	if msg, err := r.stop("slow", true); err != nil || !strings.Contains(msg, "removed") {
+		t.Errorf("second stop = %q, %v", msg, err)
+	}
+	if n := countOf(readLog(log), "down "); n != 1 {
+		t.Errorf("rox down ran %d times", n)
+	}
+}
+
+func TestPaneHelper(t *testing.T) {
+	if p := os.Getenv("RUX_PANE_STATE"); p != "" {
+		agentPane([]string{p})
+		os.Exit(0)
+	}
+}
+
+func TestCLISlowUpPaneRemovesGuestAfterStop(t *testing.T) {
+	log := fakeRox(t, "gated")
+	gate := filepath.Join(filepath.Dir(log), "gate")
+	a := cliAgent(t, func(a *subAgent) { a.Guest = "" })
+	launchWait = 300 * time.Millisecond
+	t.Cleanup(func() { launchWait = 10 * time.Minute })
+	pane := exec.Command(os.Args[0], "-test.run=^TestPaneHelper$")
+	pane.Env = append(os.Environ(), "RUX_PANE_STATE="+a.path)
+	if err := pane.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan struct{})
+	go func() { pane.Wait(); close(exited) }()
+	waitFor(t, "pane running rox up", func() bool {
+		cur, _ := loadAgent(a.path)
+		return strings.Contains(readLog(log), "up ") && cur != nil && cur.Pane == pane.Process.Pid
+	})
+	agentStop([]string{"c1"}) // returns after launchWait, leaving the cleanup to the pane
+	cur, _ := loadAgent(a.path)
+	if cur.Phase != "stopped" || cur.Guest != "" || !cur.Cleanup {
+		t.Fatalf("after stop: %+v", cur)
+	}
+	if strings.Contains(readLog(log), "down") {
+		t.Fatal("removed a guest before rox named it")
+	}
+	os.WriteFile(gate, nil, 0o600)
+	select {
+	case <-exited:
+	case <-time.After(10 * time.Second):
+		t.Fatal("pane never exited")
+	}
+	cur, _ = loadAgent(a.path)
+	if cur.Phase != "stopped" || cur.Guest != "" || cur.Error != "" {
+		t.Errorf("final state: %+v", cur)
+	}
+	if got := readLog(log); countOf(got, "down "+fakeGuest) != 1 {
+		t.Errorf("log: %s", got)
 	}
 }
