@@ -831,7 +831,7 @@ func openTailnetSSH(entry contract.Entry) (*tailnetSSH, error) {
 	}
 	t.argv = []string{"ssh", "-F", "/dev/null", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "IdentitiesOnly=yes",
 		"-o", "StrictHostKeyChecking=yes", "-o", "GlobalKnownHostsFile=/dev/null", "-o", "HostKeyAlias=" + name,
-		"-o", "UserKnownHostsFile=" + knownHosts, "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
+		"-o", "UserKnownHostsFile=" + knownHosts, "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=8",
 		"-i", login, "-l", entry.User, "-p", fmt.Sprint(port)}
 	return t, nil
 }

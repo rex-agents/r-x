@@ -52,7 +52,14 @@ var RixSpecs = map[string]Spec{
 	"known-hosts set":   {Args: "path", Mode: "text", Title: "Rix: Pin Git Server Keys"},
 	"known-hosts clear": {Mode: "text", Title: "Rix: Unpin Git Server Keys"},
 	// rix auth asks for the secret in its terminal, so it never passes through Lua.
-	"auth":            {Args: "agent", Choices: map[string][]string{"agent": {"claude", "codex"}}, Title: "Rix: Sign an Agent In"},
+	"auth": {Args: "agent", Choices: map[string][]string{"agent": {"claude", "codex", "github"}}, Title: "Rix: Sign an Agent or GitHub In"},
+	// A secret's value is typed in the terminal split; values never come back to Lua.
+	"secret set":      {Args: "name", Title: "Rix: Store a Secret"},
+	"secret ls":       {Mode: "text", Title: "Rix: List Secrets"},
+	"secret rm":       {Args: "name", Mode: "text", Title: "Rix: Delete a Secret"},
+	"secret import":   {Args: "file", Title: "Rix: Import Secrets from an Env File"},
+	"secret get":      {Skip: true},
+	"credential":      {Skip: true},
 	"sync set":        {Args: "agent,items", Choices: map[string][]string{"agent": {"claude", "codex"}}, Mode: "text", Title: "Rix: Choose What Guests Get"},
 	"sync show":       {Mode: "text", Title: "Rix: Show What Guests Get"},
 	"apply":           {Args: "name?", Pick: "name", Title: "Rix: Apply the Vault to a Guest"},

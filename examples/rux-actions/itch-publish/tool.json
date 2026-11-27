@@ -1,0 +1,23 @@
+{
+  "description": "Build the game on the Mac and push it to itch.io with butler. Pass --source . (your checkout; it's built on the Mac with the project's build command, sandboxed) or --build PATH (a finished build). Each branch goes to its own channel (CHANNEL-BRANCH, e.g. mac-new-jump), the main branch to CHANNEL; keep using the same branch so the itch app updates in place. butler only uploads what changed.",
+  "args": [
+    {"name": "source", "type": "file", "description": "the repo checkout to build on the Mac (usually .); only files git keeps are sent"},
+    {"name": "build", "type": "file", "description": "a finished build instead: a folder, a .zip, or a single executable"},
+    {"name": "channel", "description": "channel to push to instead of the branch's"},
+    {"name": "version", "description": "version label shown on itch (default: the commit)"}
+  ],
+  "settings": [
+    {"name": "target", "description": "the itch game, as user/game"},
+    {"name": "build_command", "description": "run in the checkout on the Mac, sandboxed: no network, no access to your files", "default": "make dist"},
+    {"name": "build_output", "description": "the folder the build command makes, which gets pushed", "default": "build/itch"},
+    {"name": "channel", "description": "base channel name", "default": "mac"},
+    {"name": "main_branch", "description": "branch that pushes to the base channel", "default": "main"},
+    {"name": "hide_new_channels", "description": "yes: new branch channels are hidden from the game page", "default": "no"}
+  ],
+  "secrets": ["BUTLER_API_KEY"],
+  "approval": "ask",
+  "concurrency": 1,
+  "timeout": "30m",
+  "max_upload_mb": 4096,
+  "run": "./run.sh"
+}

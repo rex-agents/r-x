@@ -30,7 +30,7 @@ func sshCommand(g *Guest, options ...string) []string {
 		"-o", "StrictHostKeyChecking=yes", "-o", "GlobalKnownHostsFile=/dev/null",
 		"-o", "HostKeyAlias=" + g.Name,
 		"-o", "UserKnownHostsFile=" + string(known),
-		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
+		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=8",
 		"-i", g.Identity, "-l", g.User, "-p", strconv.Itoa(g.Port),
 	}
 	argv = append(argv, options...)

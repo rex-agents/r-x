@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -89,16 +90,17 @@ func RootCommand(version string, updater *selfupdate.Updater) *cobra.Command {
 	root.SetVersionTemplate("rix {{.Version}}\n")
 	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "show the output of the tools rix runs")
 	root.AddGroup(&cobra.Group{ID: "vault", Title: "Vault:"}, &cobra.Group{ID: "guests", Title: "Guests:"},
-		&cobra.Group{ID: "setup", Title: "Setup:"})
+		&cobra.Group{ID: "setup", Title: "Setup:"}, &cobra.Group{ID: "tools", Title: "For rux and other tools:"})
 	add := func(group string, cmds ...*cobra.Command) {
 		for _, c := range cmds {
 			c.GroupID = group
 			root.AddCommand(c)
 		}
 	}
-	add("vault", keyCommand(), knownHostsCommand(), authCommand(), syncCommand())
+	add("vault", keyCommand(), knownHostsCommand(), authCommand(), secretCommand(), syncCommand())
 	add("guests", applyCommand(), statusCommand(), gitAgentCommand())
 	add("setup", configCommand(), migrateCommand(), selfUpdateCommand(updater))
+	add("tools", credentialCommand())
 	root.AddCommand(hookCommand())
 	return root
 }
@@ -224,18 +226,30 @@ func codexAuthLocation() string {
 }
 
 func authCommand() *cobra.Command {
-	var apiKey, off bool
+	var apiKey, off, useGh bool
 	var authFile string
 	c := &cobra.Command{
-		Use:   "auth claude|codex",
-		Short: "store the credential an agent signs in with in guests",
+		Use:   "auth claude|codex|github",
+		Short: "store the credential an agent signs in with, or the GitHub token tools use",
 		Long: "Store the credential an agent signs in with in guests (mode 0600). rix pushes it only into\n" +
-			"guests that have the agent, which projects choose with \"agents\" in .rox.json.",
-		Args: cobra.ExactArgs(1),
+			"guests that have the agent, which projects choose with \"agents\" in .rox.json.\n\n" +
+			"rix auth github stores the GitHub token that rux and other tools on this machine get from\n" +
+			"rix credential github. Without one, they use gh's login.",
+		Args:      cobra.ExactArgs(1),
+		ValidArgs: []string{"claude", "codex", "github"},
 		RunE: func(_ *cobra.Command, args []string) error {
 			agent := args[0]
+			if agent == "github" {
+				if apiKey || authFile != "" {
+					return errors.New("--api-key and --auth-file are for codex")
+				}
+				return AuthGitHub(useGh, off)
+			}
+			if useGh {
+				return errors.New("--gh is for github")
+			}
 			if Credentials[agent] == nil {
-				return errors.New("Choose claude or codex")
+				return errors.New("Choose claude, codex or github")
 			}
 			if agent != "codex" && authFile != "" {
 				return errors.New("--auth-file is for codex")
@@ -245,7 +259,8 @@ func authCommand() *cobra.Command {
 	}
 	c.Flags().BoolVar(&apiKey, "api-key", false, "codex: sign in with an OpenAI API key")
 	c.Flags().StringVar(&authFile, "auth-file", "", "codex: login file to copy into guests (default ~/.codex/auth.json)")
-	c.Flags().BoolVar(&off, "off", false, "forget the agent's credential")
+	c.Flags().BoolVar(&off, "off", false, "forget the agent's credential, or turn GitHub access off")
+	c.Flags().BoolVar(&useGh, "gh", false, "github: use gh's login on this machine, forgetting any stored token")
 	return c
 }
 
@@ -257,13 +272,15 @@ func Auth(agent string, apiKey bool, authFile string, off bool) error {
 	if !off {
 		switch agent {
 		case "claude":
-			value, err := ui.Secret("Claude Code token or Anthropic API key:",
-				"Run claude setup-token to create a long-lived token for your Claude subscription,\nor paste an Anthropic API key. Leave it blank to keep guests signed out.")
+			value, err := claudeCredential()
 			if err != nil {
 				return err
 			}
 			if strings.ContainsAny(value, " \t") {
 				return errors.New("Expected a single token with no spaces")
+			}
+			if value != "" && !strings.HasPrefix(value, "sk-ant-") {
+				return errors.New("That doesn't look like a Claude Code token (sk-ant-oat01-…) or an Anthropic API key (sk-ant-api03-…)")
 			}
 			if value != "" {
 				setting := "token_file"
@@ -364,7 +381,7 @@ func syncCommand() *cobra.Command {
 		RunE: func(_ *cobra.Command, args []string) error {
 			agent := args[0]
 			if Credentials[agent] == nil {
-				return errors.New("Choose claude or codex")
+				return errors.New("Choose claude, codex or github")
 			}
 			chosen := map[string]bool{}
 			for _, item := range strings.Split(args[1], ",") {
@@ -899,4 +916,47 @@ func agentList(m map[string]any) string {
 		}
 	}
 	return strings.Join(names, " and ")
+}
+
+func detail(text string) {
+	for _, line := range strings.Split(text, "\n") {
+		ui.Detail("%s", line)
+	}
+}
+
+// Where Anthropic API keys are made, and how to install Claude Code.
+const (
+	anthropicKeysURL  = "https://platform.claude.com/settings/keys"
+	claudeCodeInstall = "https://code.claude.com/docs/en/setup"
+)
+
+// claudeCredential asks for the token or key guests sign Claude Code in with. With Claude
+// Code on this machine, it offers to run claude setup-token first, which signs in with
+// the browser and prints a token for the Claude subscription.
+func claudeCredential() (string, error) {
+	_, err := sys.R.LookPath("claude")
+	haveClaude := err == nil
+	if ui.IsTerminal() {
+		ui.Info("Guests sign Claude Code in with either:")
+		detail("a subscription token, for Claude Pro or Max (sk-ant-oat01-…)\n" +
+			"  claude setup-token signs in with your browser and prints one that lasts a year\n" +
+			"an Anthropic API key, billed per use (sk-ant-api03-…)\n" +
+			"  create one at " + anthropicKeysURL)
+		if haveClaude && ui.Confirm("Run claude setup-token now to create a subscription token?") {
+			err := ui.Suspend(func() error {
+				fmt.Fprintln(os.Stderr)
+				cmd := exec.Command("claude", "setup-token")
+				cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+				return cmd.Run()
+			})
+			if err != nil {
+				ui.Warn("claude setup-token didn't finish (%v). You can still paste a token or API key", err)
+			}
+			return ui.Secret("Paste the token it printed (sk-ant-oat01-…):", "Leave it blank to keep guests signed out.")
+		}
+		if !haveClaude {
+			detail("Claude Code isn't installed here. To make a subscription token, install it\n  " + claudeCodeInstall + "\nand run claude setup-token, here or on any machine with it.")
+		}
+	}
+	return ui.Secret("Claude Code token or Anthropic API key:", "Leave it blank to keep guests signed out.")
 }

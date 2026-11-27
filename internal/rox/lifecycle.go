@@ -87,7 +87,11 @@ func projectOptions(src *Source) []string {
 	if src == nil {
 		return []string{"--no-project"}
 	}
-	return []string{"--project=" + src.Name, "--repo=" + src.URL, "--branch=" + src.Branch}
+	args := []string{"--project=" + src.Name, "--repo=" + src.URL}
+	if src.Branch != "" { // otherwise the remote rox finds the default branch with its own vault
+		args = append(args, "--branch="+src.Branch)
+	}
+	return args
 }
 
 // Up starts and provisions a new guest.
@@ -117,7 +121,7 @@ func Up(o *UpOptions) error {
 	}
 	detail := "a guest without a project"
 	if src != nil {
-		detail = src.Name + " · " + src.Branch
+		detail = src.Name + " · " + firstNonEmpty(src.Branch, "default branch")
 	}
 	if o.Backend != "" {
 		detail += " → " + o.Backend
@@ -194,6 +198,9 @@ func Up(o *UpOptions) error {
 		}
 		if isSSHRemote(src.URL) {
 			lease = fetchLease(o.launch(src.URL))
+		}
+		if err := DefaultBranch(src, lease); err != nil {
+			return err
 		}
 		if branch, err = ReadBranch(src, lease); err != nil {
 			return err
@@ -750,7 +757,7 @@ func Add(name string, o *UpOptions) error {
 		o.Host = host
 	}
 	if o.Host != "" {
-		ui.Header("add", src.Name+" · "+src.Branch+" → "+name+" on "+o.Host)
+		ui.Header("add", src.Name+" · "+firstNonEmpty(src.Branch, "default branch")+" → "+name+" on "+o.Host)
 		args := append([]string{"add", name}, projectOptions(src)...)
 		args = append(args, remoteOptions(o)...)
 		if len(o.Command) > 0 {
@@ -765,6 +772,17 @@ func Add(name string, o *UpOptions) error {
 		}
 		openRemoteGuest(text)
 		return nil
+	}
+	if checkout == "" {
+		var lease *Lease
+		if isSSHRemote(src.URL) {
+			lease = fetchLease(o.launch(src.URL))
+		}
+		err := DefaultBranch(src, lease)
+		lease.Close()
+		if err != nil {
+			return err
+		}
 	}
 	ui.Header("add", src.Name+" · "+src.Branch+" → "+name)
 	appSession := ""

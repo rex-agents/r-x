@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
@@ -61,7 +62,7 @@ var scpLike = regexp.MustCompile(`^(?:[\w.-]+@)?[\w.-]+:[^:\s][^\r\n]*$`)
 
 // ValidateClone checks a branch name and a Git remote rox can clone safely.
 func ValidateClone(rawURL, branch string) error {
-	if sys.Status("git", "check-ref-format", "refs/heads/"+branch) != 0 {
+	if branch != "" && sys.Status("git", "check-ref-format", "refs/heads/"+branch) != 0 {
 		return fmt.Errorf("%q is not a valid branch name", branch)
 	}
 	valid := false
@@ -142,8 +143,9 @@ func ResolveProject(a ProjectArgs, required bool) (*Source, error) {
 		return nil, nil
 	}
 	if a.Project != "" {
-		if strings.TrimSpace(a.Project) == "" || a.Repo == "" || a.Branch == "" {
-			return nil, errors.New("--project needs a name, --repo and --branch")
+		// Without --branch, the clone uses the remote's default branch (DefaultBranch).
+		if strings.TrimSpace(a.Project) == "" || a.Repo == "" {
+			return nil, errors.New("--project needs a name and --repo")
 		}
 		if err := ValidateClone(a.Repo, a.Branch); err != nil {
 			return nil, err
@@ -153,14 +155,14 @@ func ResolveProject(a ProjectArgs, required bool) (*Source, error) {
 	if inCheckout(a.Cwd) {
 		return projectFrom(a.Cwd, a.Remote, a.Repo, a.Branch)
 	}
-	if a.Repo != "" && a.Branch != "" {
+	if a.Repo != "" {
 		if err := ValidateClone(a.Repo, a.Branch); err != nil {
 			return nil, err
 		}
 		return &Source{RepoName(a.Repo), a.Repo, a.Branch}, nil
 	}
 	if required || a.Repo != "" || a.Remote != "" || a.Branch != "" {
-		return nil, fmt.Errorf("%s is not inside a Git checkout. Run from a checkout, or pass --repo and --branch", a.Cwd)
+		return nil, fmt.Errorf("%s is not inside a Git checkout. Run from a checkout, or pass --repo", a.Cwd)
 	}
 	return nil, nil
 }
@@ -595,3 +597,91 @@ func matchingCheckout(checkouts []checkoutRef, wanted string, current *checkoutI
 }
 
 type checkoutRef struct{ ID, Name, URL string }
+
+var githubRepoURL = regexp.MustCompile(`^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([\w.-]+)/([\w.-]+?)(?:\.git)?/?$`)
+
+// DefaultBranch fills in src.Branch, when it's empty, with the remote's default branch. It
+// asks the remote with git ls-remote, through rix's SSH lease for SSH remotes, and for a
+// GitHub repo Git can't reach falls back to the GitHub API with rix's token.
+func DefaultBranch(src *Source, lease *Lease) error {
+	if src == nil || src.Branch != "" {
+		return nil
+	}
+	branch, err := lsRemoteHead(src.URL, lease)
+	if err != nil || branch == "" {
+		if gh, ghErr := githubDefaultBranch(src.URL); ghErr == nil && gh != "" {
+			branch, err = gh, nil
+		}
+	}
+	if err != nil || branch == "" {
+		why := "it has no default branch"
+		if err != nil {
+			why = firstLine(err.Error())
+		}
+		return fmt.Errorf("Couldn't find %s's default branch (%s). Pass --branch", src.URL, why)
+	}
+	src.Branch = branch
+	return nil
+}
+
+func lsRemoteHead(url string, lease *Lease) (string, error) {
+	scratch, err := os.MkdirTemp("", "rox-git-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(scratch)
+	env, unset, err := gitEnv(lease, scratch)
+	if err != nil {
+		return "", err
+	}
+	res, err := sys.Run(sys.Cmd{Env: env, Unset: unset, Timeout: time.Minute,
+		Argv: []string{"git", "ls-remote", "--symref", "--", url, "HEAD"}})
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(res.Stdout, "\n") {
+		if ref, ok := strings.CutPrefix(line, "ref: refs/heads/"); ok {
+			if name, _, ok := strings.Cut(ref, "\t"); ok {
+				return name, nil
+			}
+		}
+	}
+	return "", nil
+}
+
+// githubDefaultBranch asks GitHub for a repo's default branch, with the token rix hands out.
+func githubDefaultBranch(url string) (string, error) {
+	m := githubRepoURL.FindStringSubmatch(url)
+	if m == nil {
+		return "", errors.New("not a GitHub repo")
+	}
+	if _, err := sys.R.LookPath("rix"); err != nil {
+		return "", err
+	}
+	out, err := sys.Output("rix", "credential", "github", "--json")
+	if err != nil {
+		return "", err
+	}
+	var cred struct{ Password string }
+	if err := json.Unmarshal([]byte(out), &cred); err != nil || cred.Password == "" {
+		return "", errors.New("rix has no GitHub token")
+	}
+	req, _ := http.NewRequest("GET", "https://api.github.com/repos/"+m[1]+"/"+m[2], nil)
+	req.Header.Set("Authorization", "Bearer "+cred.Password)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var repo struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("GitHub: %s", resp.Status)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&repo); err != nil {
+		return "", err
+	}
+	return repo.DefaultBranch, nil
+}

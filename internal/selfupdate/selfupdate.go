@@ -120,8 +120,64 @@ func (u *Updater) Newer(refresh bool) (string, bool, error) {
 	return "", asked, err
 }
 
-func archiveName(tag string) string {
-	return fmt.Sprintf("r-x_%s_%s_%s.tar.gz", strings.TrimPrefix(tag, "v"), runtime.GOOS, runtime.GOARCH)
+func archiveName(tag string) string { return archiveFor(tag, runtime.GOOS, runtime.GOARCH) }
+
+func archiveFor(tag, goos, goarch string) string {
+	return fmt.Sprintf("r-x_%s_%s_%s.tar.gz", strings.TrimPrefix(tag, "v"), goos, goarch)
+}
+
+// fetchArchive downloads a release archive into w after checking it against checksums.txt.
+func fetchArchive(tag, name string, w io.Writer) error {
+	var sums strings.Builder
+	if err := download(fmt.Sprintf("%s/download/%s/checksums.txt", Releases, tag), &sums); err != nil {
+		return err
+	}
+	expected := ""
+	for _, line := range strings.Split(sums.String(), "\n") {
+		if f := strings.Fields(line); len(f) == 2 && f[1] == name {
+			expected = strings.ToLower(f[0])
+		}
+	}
+	if expected == "" {
+		return fmt.Errorf("The %s release has no %s", tag, name)
+	}
+	hash := sha256.New()
+	if err := download(fmt.Sprintf("%s/download/%s/%s", Releases, tag, name), io.MultiWriter(w, hash)); err != nil {
+		return err
+	}
+	if hex.EncodeToString(hash.Sum(nil)) != expected {
+		return fmt.Errorf("The %s download of %s doesn't match its published SHA-256", tag, name)
+	}
+	return nil
+}
+
+// FetchBinary saves program from the tag's release for goos and goarch to dest, after
+// checking the archive's SHA-256. rux uses it to get the Linux binary it runs in guests.
+func FetchBinary(tag, goos, goarch, program, dest string) error {
+	if !releasePattern.MatchString(tag) {
+		return fmt.Errorf("%s isn't a release, so there's no %s %s/%s to download", tag, program, goos, goarch)
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	archive, err := os.CreateTemp(filepath.Dir(dest), ".fetch-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(archive.Name())
+	defer archive.Close()
+	if err := fetchArchive(tag, archiveFor(tag, goos, goarch), archive); err != nil {
+		return err
+	}
+	if _, err := archive.Seek(0, 0); err != nil {
+		return err
+	}
+	staged := dest + ".new"
+	if err := extract(archive, program, staged); err != nil {
+		os.Remove(staged)
+		return err
+	}
+	return os.Rename(staged, dest)
 }
 
 func download(url string, w io.Writer) error {
@@ -168,32 +224,14 @@ func (u *Updater) Install(tag string) error {
 		return err
 	}
 	defer lock.Unlock()
-	name := archiveName(tag)
-	var sums strings.Builder
-	if err := download(fmt.Sprintf("%s/download/%s/checksums.txt", Releases, tag), &sums); err != nil {
-		return err
-	}
-	expected := ""
-	for _, line := range strings.Split(sums.String(), "\n") {
-		if f := strings.Fields(line); len(f) == 2 && f[1] == name {
-			expected = strings.ToLower(f[0])
-		}
-	}
-	if expected == "" {
-		return fmt.Errorf("The %s release has no %s", tag, name)
-	}
 	archive, err := os.CreateTemp(filepath.Dir(self), "."+u.Program+"-update-")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(archive.Name())
 	defer archive.Close()
-	hash := sha256.New()
-	if err := download(fmt.Sprintf("%s/download/%s/%s", Releases, tag, name), io.MultiWriter(archive, hash)); err != nil {
-		return err
-	}
-	if hex.EncodeToString(hash.Sum(nil)) != expected {
-		return fmt.Errorf("The %s download doesn't match its published SHA-256, so %s stays at %s", tag, u.Program, u.Version)
+	if err := fetchArchive(tag, archiveName(tag), archive); err != nil {
+		return fmt.Errorf("%v, so %s stays at %s", err, u.Program, u.Version)
 	}
 	if _, err := archive.Seek(0, 0); err != nil {
 		return err

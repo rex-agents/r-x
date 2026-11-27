@@ -1,5 +1,5 @@
-# Builds rox and rix for macOS and Linux on arm64 and amd64: one archive per platform with
-# both binaries, plus checksums.txt, which self-update checks downloads against.
+# Builds rox, rix and rux for macOS and Linux on arm64 and amd64: one archive per platform with
+# all three binaries, plus checksums.txt, which self-update checks downloads against.
 #
 # Self-update downloads r-x_<version>_<os>_<arch>.tar.gz, so keep name_template and the
 # archive format in step with internal/selfupdate.
@@ -29,9 +29,18 @@ builds:
     flags: [-trimpath]
     ldflags: ["-s -w -X main.version=v{{ .Version }}"]
     mod_timestamp: "{{ .CommitTimestamp }}"
+  - id: rux
+    main: ./cmd/rux
+    binary: rux
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux]
+    goarch: [arm64, amd64]
+    flags: [-trimpath]
+    ldflags: ["-s -w -X main.version=v{{ .Version }}"]
+    mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
-  - ids: [rox, rix]
+  - ids: [rox, rix, rux]
     formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files: [README.md]
@@ -59,11 +68,11 @@ release:
     ```
 
     Or download the archive for your platform, check it against `checksums.txt`, and put
-    `rox` and `rix` on your `PATH`. Both update themselves after that (`rox self-update`, `rix self-update`).
+    `rox`, `rix` and `rux` on your `PATH`. rox and rix update themselves after that (`rox self-update`, `rix self-update`).
 
 homebrew_casks:
   - name: r-x
-    binaries: [rox, rix]
+    binaries: [rox, rix, rux]
     repository:
       owner: rex-agents
       name: homebrew-tap
@@ -71,7 +80,7 @@ homebrew_casks:
     # Without the tap token, publish the release and skip the cask.
     skip_upload: '{{ if index .Env "HOMEBREW_TAP_TOKEN" }}auto{{ else }}true{{ end }}'
     homepage: https://github.com/rex-agents/r-x
-    description: Rex guests (rox) and the vault for their secrets (rix)
+    description: Rex guests (rox), the vault for their secrets (rix), and agents on them (rux)
     caveats: |
       To make every rox and rix command a Rex action, run:
         rox rex install
@@ -81,5 +90,5 @@ homebrew_casks:
         # The binaries aren't notarized, so clear the quarantine Gatekeeper would refuse them for.
         install_steps: |
           if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/rox", "#{staged_path}/rix"]
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/rox", "#{staged_path}/rix", "#{staged_path}/rux"]
           end
