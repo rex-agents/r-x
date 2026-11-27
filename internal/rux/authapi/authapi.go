@@ -19,7 +19,8 @@ type AuthorityInfo struct {
 	URL     string          `json:"url"`
 	Status  string          `json:"status"` // "up", "down", "joining"
 	Host    HostInfo        `json:"host"`
-	Local   bool            `json:"local"` // the authority answering the request
+	Local   bool            `json:"local"`             // the authority answering the request
+	Started string          `json:"started,omitempty"` // RFC 3339 time the authority started, for uptime
 	Threads []ThreadSummary `json:"threads,omitempty"`
 }
 
@@ -49,10 +50,12 @@ type SubAgentSummary struct {
 
 // ThreadSummary is a thread as shown in the pack view.
 type ThreadSummary struct {
-	ID        string            `json:"id"`
-	Project   string            `json:"project,omitempty"`
-	Title     string            `json:"title"`
+	ID      string `json:"id"`
+	Project string `json:"project,omitempty"`
+	Title   string `json:"title"`
+	// Status is the thread's status, or "archived" for an archived thread.
 	Status    string            `json:"status"`
+	Archived  bool              `json:"archived,omitempty"`
 	Authority string            `json:"authority"`
 	Guest     string            `json:"guest,omitempty"`
 	Placement Placement         `json:"placement"`
@@ -69,16 +72,21 @@ const (
 	EventThreadStatus = "thread.status"
 )
 
-// PackEvent is the envelope of every SSE event on GET /api/pack/stream
-// (the SSE "event:" name equals Type; Data is the JSON of the matching payload:
-// Pack for "pack", AuthorityInfo for "pack.delta", ThreadEvent for
-// "thread.event", ThreadSummary for "thread.status").
+// PackEvent is the envelope of every SSE event on GET /api/pack/stream. There is one form:
+//
+//	event: <Type>
+//	data: {"type":"<Type>","data":<payload>}
+//
+// The payload is Pack for "pack", AuthorityInfo (without threads) for "pack.delta",
+// ThreadEvent for "thread.event" and ThreadSummary for "thread.status".
 type PackEvent struct {
 	Type string `json:"type"`
 	Data any    `json:"data"`
 }
 
-// ThreadEvent is a conversation event of a thread, forwarded from the thread's own stream.
+// ThreadEvent is a conversation event of a thread. Event is the stored event record exactly
+// as GET /api/threads/{id}/events and /events/page return it: {"id","ts","src","rseq","ev"}.
+// A sub-agent's conversation is at /api/threads/{thread}/subagents/{id}/events (and /events/page).
 type ThreadEvent struct {
 	Thread    string `json:"thread"`
 	Authority string `json:"authority,omitempty"`

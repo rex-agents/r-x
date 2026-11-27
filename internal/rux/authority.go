@@ -372,3 +372,60 @@ func serveUnix(ln net.Listener, h http.Handler) error {
 	}}
 	return srv.Serve(ln)
 }
+
+// threadModel is the model a thread's runner starts with: the harness engine's provider/model
+// as set, else Claude Code's, defaulting to the host's.
+func (s *server) threadModel(m *threadMeta) string {
+	if m.Engine == "harness" {
+		return m.Model
+	}
+	return s.effectiveModel(m.Model)
+}
+
+// resolveEngine checks a thread's engine and model. The harness engine needs an explicit
+// anthropic/MODEL or openai/MODEL, the providers the model proxy serves.
+func (s *server) resolveEngine(engine, model string) (string, error) {
+	engine = strings.TrimSpace(engine)
+	switch engine {
+	case "", "claude-code":
+		return "", nil
+	case "harness":
+		name, _, err := splitModel(model)
+		if err != nil || (name != "anthropic" && name != "openai") {
+			return "", errors.New("the harness engine takes a model as anthropic/MODEL or openai/MODEL")
+		}
+		return "harness", nil
+	}
+	return "", errors.New(`engine must be "claude-code" or "harness"`)
+}
+
+// spawnSystemPrompt tells a thread it can start sub-agents.
+const spawnSystemPrompt = `You are a project agent: you can start sub-agents, each in its own sandboxed guest with this project's repo checked out, with the rux tools (start_thread, list_threads, send_message, read_thread, interrupt_thread, remove_thread, thread_stats). Use them to run independent work in parallel or to keep risky work out of your own checkout. Write each sub-agent's prompt so that an agent with no other context can do the task. You're told when a sub-agent finishes a turn; read its transcript with read_thread, and remove its guest once its work is pushed. Sub-agents can push branches; only the user merges.`
+
+// maxAgentDepth limits how deep sub-agents can start sub-agents.
+const maxAgentDepth = 3
+
+// depth counts the threads above t.
+func (s *server) depth(t *thread) int {
+	n := 0
+	for id := t.meta.Parent; id != "" && n < 16; n++ {
+		p := s.get(id)
+		if p == nil {
+			break
+		}
+		id = p.meta.Parent
+	}
+	return n
+}
+
+// inScope reports whether owner's MCP tools may act on t. A project's manager manages every
+// worker in the project; any other thread manages the sub-agents it started.
+func (s *server) inScope(owner, t *thread) bool {
+	if t == owner {
+		return false
+	}
+	if owner.meta.Kind == "manager" {
+		return t.meta.Project == owner.meta.Project && t.meta.Kind == ""
+	}
+	return t.meta.Parent == owner.meta.ID
+}
