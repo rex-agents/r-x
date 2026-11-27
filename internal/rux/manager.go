@@ -204,8 +204,8 @@ func (s *server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
-	mgr := s.threadByToken(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
-	if mgr == nil || mgr.meta.Kind != "manager" {
+	mgr := s.threadForToken(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+	if mgr == nil {
 		http.Error(w, "forbidden", 403)
 		return
 	}
@@ -273,7 +273,7 @@ func textContent(s string) []any { return []any{map[string]any{"type": "text", "
 // worker returns a worker thread in the manager's project.
 func (s *server) worker(mgr *thread, id string) (*thread, error) {
 	t := s.get(id)
-	if t == nil || t.meta.Project != mgr.meta.Project || t.meta.Kind != "" {
+	if t == nil || !s.inScope(mgr, t) {
 		return nil, fmt.Errorf("no worker thread %q in this project", id)
 	}
 	return t, nil
@@ -302,7 +302,7 @@ func (s *server) callManagerTool(mgr *thread, name string, raw json.RawMessage) 
 		s.mu.Lock()
 		var ts []*thread
 		for _, t := range s.threads {
-			if t.meta.Project == pid && t.meta.Kind == "" {
+			if s.inScope(mgr, t) {
 				ts = append(ts, t)
 			}
 		}
@@ -342,7 +342,17 @@ func (s *server) callManagerTool(mgr *thread, name string, raw json.RawMessage) 
 		return textContent(b.String()), nil
 
 	case "start_thread":
-		t, err := s.createThread(createReq{Project: pid, Prompt: a.Prompt, Title: a.Title, Branch: a.Branch, Model: a.Model, Effort: a.Effort, Parent: mgr.meta.ID})
+		req := createReq{Project: pid, Prompt: a.Prompt, Title: a.Title, Branch: a.Branch, Model: a.Model, Effort: a.Effort, Parent: mgr.meta.ID, Vault: mgr.meta.Vault}
+		if mgr.meta.Kind != "manager" {
+			// A project agent's sub-agents run the same engine, and can start sub-agents of their own.
+			if s.depth(mgr) >= maxAgentDepth {
+				return nil, fmt.Errorf("sub-agents can be nested %d deep, and this is the deepest", maxAgentDepth)
+			}
+			if mgr.meta.Engine == "harness" {
+				req.Engine, req.Model = "harness", cmpOr(a.Model, mgr.meta.Model)
+			}
+		}
+		t, err := s.createThread(req)
 		if err != nil {
 			return nil, err
 		}
@@ -445,7 +455,7 @@ func (s *server) callManagerTool(mgr *thread, name string, raw json.RawMessage) 
 		s.mu.Lock()
 		var ts []*thread
 		for _, t := range s.threads {
-			if t.meta.Project == pid && t.meta.Kind == "" {
+			if s.inScope(mgr, t) {
 				ts = append(ts, t)
 			}
 		}

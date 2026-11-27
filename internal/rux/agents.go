@@ -113,10 +113,10 @@ func listAgents(sess string) []*subAgent {
 	return out
 }
 
-// headlessSession is the session of sub-agents started outside a Rex terminal (REX_SESSION unset).
-const headlessSession = "headless"
+// panelessSession is the session of sub-agents started outside a Rex terminal (REX_SESSION unset).
+const panelessSession = "headless"
 
-func headless(a *subAgent) bool { return a.Session == headlessSession }
+func paneless(a *subAgent) bool { return a.Session == panelessSession }
 
 // logPath is where a headless agent writes what its pane would show.
 func (a *subAgent) logPath() string { return strings.TrimSuffix(a.path, ".json") + ".log" }
@@ -126,7 +126,7 @@ func currentSession(flagVal string) string {
 		return s
 	}
 	// Outside Rex, sub-agents run headless: no pane, output in a log that rux agent read prints.
-	return headlessSession
+	return panelessSession
 }
 
 func findAgent(sess, id string) *subAgent {
@@ -290,8 +290,8 @@ func agentSpawn(args []string) {
 	if err := a.save(); err != nil {
 		fail("rux agent spawn: %v", err)
 	}
-	if headless(a) {
-		spawnHeadless(a)
+	if paneless(a) {
+		spawnPaneless(a)
 		return
 	}
 
@@ -478,8 +478,8 @@ func agentPane(args []string) {
 	if ctx.Err() != nil {
 		failed("the pane was closed while it started")
 	}
-	if headless(a) {
-		runHeadless(ctx, a, rox, guest)
+	if paneless(a) {
+		runPaneless(ctx, a, rox, guest)
 		return
 	}
 	// Type the agent's command in once the guest's shell is up. Detached, since
@@ -766,8 +766,8 @@ func agentRead(args []string) {
 	}
 	a := findAgent(currentSession(*session), pos[0])
 	if a.Block == "" {
-		if headless(a) {
-			fmt.Printf("[%s: %s]\n%s\n", a.ID, a.Phase, tailLines(headlessLog(a), *n))
+		if paneless(a) {
+			fmt.Printf("[%s: %s]\n%s\n", a.ID, a.Phase, tailLines(panelessLog(a), *n))
 			return
 		}
 		fail("rux agent read: %s has no pane", a.ID)
@@ -862,7 +862,7 @@ func agentStop(args []string) {
 	if a.Block != "" && !launching {
 		rexOut("block", "close", "-s", a.Session, a.Block)
 	}
-	if headless(a) && a.Pane > 0 && !launching {
+	if paneless(a) && a.Pane > 0 && !launching {
 		// No pane to close: end the process that runs the agent.
 		_ = syscall.Kill(a.Pane, syscall.SIGTERM)
 	}
@@ -960,7 +960,7 @@ func agentWait(args []string) {
 			*a = *cur
 		}
 		a.refresh()
-		if headless(a) {
+		if paneless(a) {
 			return a.Phase == "provisioning" || a.Phase == "connecting" || a.Phase == "running"
 		}
 		switch a.Phase {
@@ -1019,8 +1019,8 @@ func agentWait(args []string) {
 	}
 	printTable(os.Stdout, watch)
 	for _, a := range watch {
-		if headless(a) {
-			fmt.Printf("\n--- %s (%s), last lines ---\n%s\n", a.ID, a.Phase, tailLines(headlessLog(a), *lines))
+		if paneless(a) {
+			fmt.Printf("\n--- %s (%s), last lines ---\n%s\n", a.ID, a.Phase, tailLines(panelessLog(a), *lines))
 			continue
 		}
 		if a.Phase == "running" && a.state != "working" && a.Block != "" {
@@ -1194,15 +1194,15 @@ func sshRepo(u string) string {
 
 // ---- headless sub-agents: no Rex, no pane ----
 
-func headlessLog(a *subAgent) string {
+func panelessLog(a *subAgent) string {
 	b, _ := os.ReadFile(a.logPath())
 	return string(b)
 }
 
-// spawnHeadless runs the agent's pane process detached, with its output in a log. It provisions
+// spawnPaneless runs the agent's pane process detached, with its output in a log. It provisions
 // the guest as the pane does, then runs the agent CLI non-interactively; rux agent read prints
 // the log, and wait and stop work as they do for panes.
-func spawnHeadless(a *subAgent) {
+func spawnPaneless(a *subAgent) {
 	log, err := os.OpenFile(a.logPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		fail("rux agent spawn: %v", err)
@@ -1220,8 +1220,8 @@ func spawnHeadless(a *subAgent) {
 	fmt.Printf("The guest takes a minute or two; follow it with: rux agent wait %s, then rux agent read %s\n", a.ID, a.ID)
 }
 
-// headlessCommand is agentCommand in the agent CLI's non-interactive mode.
-func headlessCommand(a *subAgent) string {
+// panelessCommand is agentCommand in the agent CLI's non-interactive mode.
+func panelessCommand(a *subAgent) string {
 	cmd := agentCommand(a)
 	if a.Agent == "codex" {
 		return strings.Replace(cmd, "codex ", "codex exec ", 1)
@@ -1230,13 +1230,13 @@ func headlessCommand(a *subAgent) string {
 }
 
 // runHeadless runs the agent CLI in the guest through rox exec and records how it ended.
-func runHeadless(ctx context.Context, a *subAgent, rox, guest string) {
+func runPaneless(ctx context.Context, a *subAgent, rox, guest string) {
 	a.update(func(a *subAgent) {
 		if a.Phase != "stopped" {
 			a.Guest, a.Phase, a.Started = guest, "running", time.Now()
 		}
 	})
-	script := `cd "$HOME"/` + shQuote(a.Project) + ` 2>/dev/null; ` + headlessCommand(a)
+	script := `cd "$HOME"/` + shQuote(a.Project) + ` 2>/dev/null; ` + panelessCommand(a)
 	cmd := exec.CommandContext(ctx, rox, "exec", guest, "--", "sh", "-lc", script)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	err := cmd.Run()

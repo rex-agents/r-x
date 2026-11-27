@@ -127,6 +127,7 @@ func commandAfterDash(c *cobra.Command, args []string) ([]string, []string, erro
 func upCommand() *cobra.Command {
 	o := &UpOptions{}
 	var boot int
+	credentials := true
 	c := &cobra.Command{
 		Use:   "up [container|linux|macos|fly|railway] [-- COMMAND...]",
 		Short: "start and provision a new guest",
@@ -147,6 +148,7 @@ func upCommand() *cobra.Command {
 				o.Backend = args[0]
 			}
 			o.Command, o.BootTimeout, o.CPUsSet = command, time.Duration(boot)*time.Second, c.Flags().Changed("cpus")
+			o.NoCredentials = !credentials
 			if o.CPUsSet && o.CPUs < 1 {
 				return errors.New("Expected a positive whole number for --cpus")
 			}
@@ -167,6 +169,7 @@ func upCommand() *cobra.Command {
 	f.BoolVar(&o.Rebuild, "rebuild", false, "rebuild the project image before launching")
 	f.BoolVar(&o.NoTailscale, "no-tailscale", false, "keep this guest off the tailnet even when tailscale is configured")
 	f.BoolVar(&o.NoGitAgent, "no-git-agent", false, "give the guest Git keys only while cloning, not for its whole life")
+	f.BoolVar(&credentials, "credentials", true, "sign the guest's agents in; --credentials=false keeps Claude Code and Codex credentials out (Git agent and setup sync still apply)")
 	var ignored bool
 	f.BoolVar(&ignored, "no-app-host", false, "")
 	_ = f.MarkHidden("no-app-host")
