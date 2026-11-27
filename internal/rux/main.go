@@ -46,6 +46,8 @@ func Main(version string, args []string) int {
 		runStatusLine()
 	case "--version", "version":
 		fmt.Println("rux", Version)
+	case "quorum":
+		runQuorum(os.Args[2:])
 	case "serve":
 		runServe(os.Args[2:])
 	case "runner":
@@ -118,6 +120,7 @@ func help(w io.Writer) {
 		}},
 		{"Threads from your phone", []cmd{
 			{"rux serve", "serve the rux web app and run threads in rox guests"},
+			{"rux quorum create|invite|join HOST CODE|leave|status|promote HOST|policy", "join authorities into a pack (see docs/rux/quorum.md)"},
 		}},
 		{"Tools for agents", []cmd{
 			{"rux share FILE... [--caption TEXT]", "show files in the thread (images and videos inline)"},
