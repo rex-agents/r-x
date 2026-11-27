@@ -52,6 +52,28 @@ sync_still_mine() {
     fi
 }
 
+# When a process started, so a PID the system reused is told from the process that held it.
+# Linux has it in /proc; macOS has it from ps. Empty when neither says.
+proc_start() {
+    if [ -r "/proc/$1/stat" ]; then
+        sed 's/^.*) //' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f20
+    else
+        ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' _
+    fi
+}
+
+# Succeeds when the lock record "PID:START" belongs to a process that is gone. A process
+# that can't be told apart from the owner counts as the owner, never as gone.
+lock_owner_gone() {
+    pid=${1%%:*}
+    start=${1#*:}
+    kill -0 "$pid" 2>/dev/null || return 0
+    [ -n "$start" ] || return 1
+    now=$(proc_start "$pid")
+    [ -n "$now" ] || return 1
+    [ "$now" != "$start" ]
+}
+
 sync_done() {
     status=$?
     trap - EXIT
@@ -120,12 +142,16 @@ case "$action" in
         # each path swap in, the old one kept aside so a failure puts it back.
         cd "$HOME"
         mkdir -p .rox
-        # One sync at a time. The lock is a symlink named sync-lock whose target, "PID:TIME", is
+        # One sync at a time. The lock is a symlink named sync-lock whose target, "PID:START", is
         # the owner's record, so creating it is one atomic step and it never exists half made.
         # Nothing but a symlink is ever created, moved or removed at that name: a folder there
-        # (ln -s would put the link inside it) is refused and left alone. A lock is stale only
-        # when its owner is gone or it is older than any sync runs.
-        me="$$:$(date +%s)"
+        # (ln -s would put the link inside it) is refused and left alone.
+        # Only the owner removes its lock, and a lock is reclaimed only when its owner is gone,
+        # never for its age. Reclaiming is serialized by a second symlink, sync-reap: its holder
+        # rereads the lock and removes it only if it is still the very record that was found
+        # dead. A dead owner can't release or replace its lock, and no other reaper runs, so
+        # nothing live can be removed. When reaping can't be settled the run stops instead.
+        me="$$:$(proc_start $$)"
         if [ -d .rox/sync-lock ] && [ ! -L .rox/sync-lock ]; then
             echo "~/.rox/sync-lock is a folder, not rix's lock. Leaving it alone" >&2
             exit 1
@@ -143,26 +169,20 @@ case "$action" in
             fi
             [ -L .rox/sync-lock ] || continue
             record=$(readlink .rox/sync-lock 2>/dev/null || true)
-            owner=${record%%:*}
-            if [ -z "$(find .rox/sync-lock -prune -mmin +10 2>/dev/null)" ] &&
-                { [ -z "$owner" ] || kill -0 "$owner" 2>/dev/null; }; then
+            if ! lock_owner_gone "$record"; then
                 echo "Another sync is running" >&2
                 exit 1
             fi
-            # Stale. Take it over by renaming it, which only one sync can do, then check that
-            # what moved is the lock judged stale. If it was a live replacement, put it back
-            # and stop: this run has no lock, so it touches nothing else.
-            dead=.rox/sync-lock.dead.$$
-            rm -f "$dead"
-            mv .rox/sync-lock "$dead" 2>/dev/null || continue
-            moved=$(readlink "$dead" 2>/dev/null || true)
-            if [ "$moved" != "$record" ]; then
-                ln -s "$moved" .rox/sync-lock 2>/dev/null || true
-                rm -f "$dead"
-                echo "Another sync is running" >&2
+            if ! ln -s "$me" .rox/sync-reap 2>/dev/null; then
+                echo "Another sync is clearing a dead lock. Try again; if this lasts, remove ~/.rox/sync-reap" >&2
                 exit 1
             fi
-            rm -f "$dead"
+            trap 'if [ "$(readlink "$HOME/.rox/sync-reap" 2>/dev/null || true)" = "$me" ]; then rm -f "$HOME/.rox/sync-reap"; fi' EXIT
+            if [ "$(readlink .rox/sync-lock 2>/dev/null || true)" = "$record" ]; then
+                rm -f .rox/sync-lock
+            fi
+            rm -f .rox/sync-reap
+            trap - EXIT
         done
         trap sync_done EXIT
         # An earlier sync that died mid-swap leaves its undo folder: restore it first, and

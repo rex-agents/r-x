@@ -481,30 +481,41 @@ func TestGuestSyncUndoesInstallsWhenStaleRemovalFails(t *testing.T) {
 	}
 }
 
+// startTicks is a process's start time as the guest script reads it from /proc.
+func startTicks(t *testing.T, pid int) string {
+	t.Helper()
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		t.Skip("no /proc:", err)
+	}
+	rest := string(data[strings.LastIndex(string(data), ") ")+2:])
+	return strings.Fields(rest)[19]
+}
+
+func ageSymlink(t *testing.T, path string, d time.Duration) {
+	t.Helper()
+	stamp := time.Now().Add(-d).Format("200601021504.05")
+	if out, err := exec.Command("touch", "-h", "-t", stamp, path).CombinedOutput(); err != nil {
+		t.Skip("touch -h unsupported:", string(out))
+	}
+}
+
+func lockedHome(t *testing.T, record string) string {
+	home := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(home, ".rox"), 0o755)
+	_ = os.Symlink(record, filepath.Join(home, ".rox/sync-lock"))
+	return home
+}
+
 func TestGuestSyncLocks(t *testing.T) {
 	tarball := syncTar(t, map[string]string{"x": "1"}, true)
-	age := func(path string, d time.Duration) {
-		if d == 0 {
-			return
-		}
-		stamp := time.Now().Add(-d).Format("200601021504.05")
-		if out, err := exec.Command("touch", "-h", "-t", stamp, path).CombinedOutput(); err != nil {
-			t.Skip("touch -h unsupported:", string(out))
-		}
-	}
-	// A lock as this rix makes it: one symlink, whole from the moment it exists.
-	link := func(t *testing.T, pid string, d time.Duration) string {
-		home := t.TempDir()
-		_ = os.MkdirAll(filepath.Join(home, ".rox"), 0o755)
-		lock := filepath.Join(home, ".rox/sync-lock")
-		_ = os.Symlink(pid+":1", lock)
-		age(lock, d)
-		return home
-	}
 	me := strconv.Itoa(os.Getpid())
-	// A live or still-initializing lock is never removed, and nothing is changed under it.
+	live := lockedHome(t, me+":"+startTicks(t, os.Getpid()))
+	ageSymlink(t, live+"/.rox/sync-lock", 3*time.Hour) // a live sync is never stale for its age
+	// A live lock is never removed, and nothing is changed under it.
 	for name, home := range map[string]string{
-		"live owner": link(t, me, 0),
+		"live owner, however old": live,
+		"live owner, no start":    lockedHome(t, me+":"),
 	} {
 		if _, err := guestSh(t, home, tarball, "sync", "x", "--"); err == nil || sys.IsFile(home+"/x") {
 			t.Errorf("%s: ran beside a live sync", name)
@@ -516,17 +527,57 @@ func TestGuestSyncLocks(t *testing.T) {
 			t.Errorf("%s: used the staging folder", name)
 		}
 	}
-	// A dead owner, a lock too old to be a running sync (a PID reused after a restart), and
-	// an old lock that never got an owner all give way.
+	// A dead owner, and a PID reused by a process that started later, give way.
 	for name, home := range map[string]string{
-		"dead owner": link(t, "999999", 0),
-		"old lock":   link(t, me, time.Hour),
+		"dead owner":    lockedHome(t, "999999:1"),
+		"reused PID":    lockedHome(t, me+":1"),
+		"dead, no time": lockedHome(t, "999999:"),
 	} {
 		if out, err := guestSh(t, home, tarball, "sync", "x", "--"); err != nil || readFile(t, home+"/x") != "1" {
 			t.Errorf("%s: %v %s", name, err, out)
 		}
-		if _, err := os.Lstat(filepath.Join(home, ".rox/sync-lock")); err == nil {
-			t.Errorf("%s: lock left behind", name)
+		for _, left := range []string{".rox/sync-lock", ".rox/sync-reap"} {
+			if _, err := os.Lstat(filepath.Join(home, left)); err == nil {
+				t.Errorf("%s: %s left behind", name, left)
+			}
+		}
+	}
+}
+
+func TestGuestSyncReclaimIsSerialized(t *testing.T) {
+	tarball := syncTar(t, map[string]string{"x": "1"}, true)
+	me := strconv.Itoa(os.Getpid())
+	// Someone else is reclaiming, alive or not: this run stops and removes neither symlink.
+	for name, reap := range map[string]string{"live reaper": me + ":" + startTicks(t, os.Getpid()), "dead reaper": "999999:1"} {
+		home := lockedHome(t, "999998:1")
+		_ = os.Symlink(reap, filepath.Join(home, ".rox/sync-reap"))
+		if _, err := guestSh(t, home, tarball, "sync", "x", "--"); err == nil || sys.IsFile(home+"/x") {
+			t.Errorf("%s: went on", name)
+		}
+		for _, keep := range []string{".rox/sync-lock", ".rox/sync-reap"} {
+			if _, err := os.Lstat(filepath.Join(home, keep)); err != nil {
+				t.Errorf("%s: removed %s", name, keep)
+			}
+		}
+	}
+	// Many runs find the same dead lock together: one wins, nobody leaves a mess.
+	home := lockedHome(t, "999999:1")
+	results := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		go func() { _, err := guestSh(t, home, tarball, "sync", "x", "--"); results <- err }()
+	}
+	won := 0
+	for i := 0; i < 8; i++ {
+		if <-results == nil {
+			won++
+		}
+	}
+	if won == 0 || readFile(t, home+"/x") != "1" {
+		t.Errorf("%d won, x=%q", won, readFile(t, home+"/x"))
+	}
+	for _, left := range []string{".rox/sync-lock", ".rox/sync-reap", ".rox/sync-work"} {
+		if _, err := os.Lstat(filepath.Join(home, left)); err == nil {
+			t.Errorf("left %s", left)
 		}
 	}
 }
