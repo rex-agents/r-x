@@ -37,6 +37,8 @@ type runner struct {
 	notes                    string // project notes, appended to claude's system prompt
 	project                  string // project name
 	role                     string // "" for a worker, "manager" for a project's manager
+	modelProxy               string // the authority's base URL for /proxy/...; when set, claude gets it and the thread token instead of model keys
+	engine                   string // "" or claude-code runs claude -p; "harness" runs rux headless (the harness) in its place
 	httpBase                 string // the server's runner listener, e.g. http://192.168.65.1:7701
 
 	ready        chan struct{} // closed once the workspace is cloned or created
@@ -87,6 +89,8 @@ func runRunner(args []string) {
 	fs.StringVar(&r.repo, "repo", "", "repository to clone into --dir (default: an empty git repo)")
 	fs.StringVar(&r.branch, "branch", "", "branch to clone (default: the remote's default)")
 	fs.StringVar(&r.role, "role", "", `"manager" to run a project's manager (rux MCP tools for its workers)`)
+	fs.StringVar(&r.engine, "engine", "", `"harness" runs rux's own agent loop instead of claude -p (model: anthropic/… or openai/…)`)
+	fs.StringVar(&r.modelProxy, "model-proxy", "", "the authority's base URL, e.g. http://192.168.65.1:7701: claude and codex use its /proxy/... with the thread token instead of model keys")
 	fs.Parse(args)
 	if r.serverURL == "" || r.thread == "" || r.token == "" {
 		log.Fatal("runner: --server, --thread and --token are required")
@@ -404,7 +408,8 @@ func (r *runner) startClaude() error {
 		"--permission-prompts", "none",
 	}
 	tools := r.allowedTools
-	if r.role == "manager" && r.httpBase != "" {
+	if r.httpBase != "" && r.engine != "harness" {
+		// Every thread gets the authority's tools for starting and managing sub-agents.
 		cfg, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{"rux": map[string]any{
 			"type": "http", "url": r.httpBase + "/mcp", "headers": map[string]string{"Authorization": "Bearer " + r.token}}}})
 		args = append(args, "--mcp-config", string(cfg))
@@ -419,7 +424,7 @@ func (r *runner) startClaude() error {
 	if r.effort != "" {
 		args = append(args, "--effort", r.effort)
 	}
-	prompt := shareSystemPrompt
+	prompt := shareSystemPrompt + "\n\n" + spawnSystemPrompt
 	if r.role == "manager" {
 		prompt = strings.ReplaceAll(managerSystemPrompt, "PROJECT", cmpOr(r.project, "this project")) + "\n\n" + shareSystemPrompt
 	}
@@ -432,9 +437,30 @@ func (r *runner) startClaude() error {
 	} else {
 		args = append(args, "--session-id", r.sessionID)
 	}
-	cmd := exec.Command(r.claudeBin, args...)
+	bin := r.claudeBin
+	if r.engine == "harness" {
+		// rux's own loop speaks the same stream-json, so nothing downstream changes.
+		exe, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		bin = exe
+		args = []string{"headless", "--model", r.model, "--dir", r.dir, "--system", prompt, "--session-id", r.sessionID,
+			"--state", r.stateDir}
+		if r.effort != "" {
+			args = append(args, "--effort", r.effort)
+		}
+		if r.modelProxy != "" {
+			args = append(args, "--model-proxy", r.modelProxy)
+		}
+		if r.httpBase != "" {
+			args = append(args, "--mcp", r.httpBase+"/mcp")
+		}
+	}
+	cmd := exec.Command(bin, args...)
 	cmd.Dir = r.dir
-	cmd.Env = append(os.Environ(), r.gitEnv...)
+	cmd.Env = r.modelEnv(append(os.Environ(), r.gitEnv...))
+	cmd.Env = append(cmd.Env, "RUX_THREAD_TOKEN="+r.token)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
