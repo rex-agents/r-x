@@ -19,7 +19,10 @@ type leaderVault struct {
 // NewLeaderVault returns the "leader" VaultSource for a quorum node.
 func NewLeaderVault(n *quorum.Node) VaultSource { return &leaderVault{node: n, thread: "proxy"} }
 
-func (v *leaderVault) Credential(ctx context.Context, provider string) (Credential, error) {
+func (v *leaderVault) Credential(ctx context.Context, thread, provider string) (Credential, error) {
+	if thread == "" {
+		thread = v.thread
+	}
 	var names []string
 	switch provider {
 	case "anthropic":
@@ -31,7 +34,7 @@ func (v *leaderVault) Credential(ctx context.Context, provider string) (Credenti
 	}
 	var last error
 	for _, n := range names {
-		s, err := v.node.Vault().Get(ctx, v.thread, n)
+		s, err := v.node.Vault().Get(ctx, thread, n)
 		if err == nil && s.Value != "" {
 			return credentialFor(s.Value), nil
 		}

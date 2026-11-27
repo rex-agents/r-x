@@ -363,3 +363,22 @@ func mcpTools(ctx context.Context, url, token string) ([]harness.Tool, error) {
 	}
 	return out, nil
 }
+
+func hasFlag(args []string, name string) bool {
+	for _, a := range args {
+		if a == name {
+			return true
+		}
+	}
+	return false
+}
+
+func without(args []string, name string) []string {
+	var out []string
+	for _, a := range args {
+		if a != name {
+			out = append(out, a)
+		}
+	}
+	return out
+}
