@@ -42,7 +42,7 @@ type Credential struct {
 // quorum adds one that asks the vault host's authority ("leader"). Provider is "anthropic"
 // or "openai". Implementations needn't cache: the proxy holds results for vaultTTL.
 type VaultSource interface {
-	Credential(ctx context.Context, provider string) (Credential, error)
+	Credential(ctx context.Context, thread, provider string) (Credential, error)
 }
 
 // SetVaultSource registers a vault source under a name ("local", "leader").
@@ -88,8 +88,8 @@ func (p *modelProxy) forget(vault string) {
 	}
 }
 
-func (p *modelProxy) credential(ctx context.Context, vault, provider string) (Credential, error) {
-	key := vault + "/" + provider
+func (p *modelProxy) credential(ctx context.Context, vault, thread, provider string) (Credential, error) {
+	key := vault + "/" + provider + "/" + thread
 	p.mu.Lock()
 	c, ok := p.cache[key]
 	p.mu.Unlock()
@@ -102,7 +102,7 @@ func (p *modelProxy) credential(ctx context.Context, vault, provider string) (Cr
 	if src == nil {
 		return Credential{}, fmt.Errorf("vault source %q isn't available on this authority", vault)
 	}
-	cred, err := src.Credential(ctx, provider)
+	cred, err := src.Credential(ctx, thread, provider)
 	if err != nil {
 		return Credential{}, err
 	}
@@ -166,7 +166,7 @@ func (s *server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	t.mu.Lock()
 	meta := t.meta
 	t.mu.Unlock()
-	cred, err := p.credential(r.Context(), s.vaultFor(&meta), provider)
+	cred, err := p.credential(r.Context(), s.vaultFor(&meta), meta.ID, provider)
 	if err != nil {
 		log.Printf("model proxy: thread %s, %s: %v", meta.ID, provider, err)
 		http.Error(w, "rux has no "+provider+" credential for this thread: "+err.Error(), http.StatusBadGateway)
@@ -265,7 +265,7 @@ func credentialFor(value string) Credential {
 	return Credential{Kind: "api_key", Value: value}
 }
 
-func (v *localVault) Credential(ctx context.Context, provider string) (Credential, error) {
+func (v *localVault) Credential(ctx context.Context, thread, provider string) (Credential, error) {
 	var names []string
 	switch provider {
 	case "anthropic":

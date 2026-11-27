@@ -78,7 +78,9 @@ func Main(version string, args []string) int {
 	case "sandbox":
 		runSandbox(os.Args[2:])
 	case "agent":
-		if isAgentSubcommand(os.Args[2:]) {
+		if hasFlag(os.Args[2:], "--headless") {
+			runHeadless(without(os.Args[2:], "--headless")) // the harness without a UI, in stream-json
+		} else if isAgentSubcommand(os.Args[2:]) {
 			agentCmdFn(os.Args[2:])
 		} else {
 			harnessFn(os.Args[2:]) // rux agent [PROMPT] [--model ...]: the harness, in this context

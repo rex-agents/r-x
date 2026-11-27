@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/rex-agents/r-x/internal/rux/quorum"
 	"net/http"
 	"os"
 	"runtime"
@@ -47,10 +48,19 @@ func (s *server) SetPackSource(p PackSource) {
 func (s *server) packSource() PackSource {
 	s.packMu.Lock()
 	defer s.packMu.Unlock()
-	if s.pack == nil {
-		s.pack = &localPack{s: s}
+	if s.pack != nil { // set by SetPackSource
+		return s.pack
 	}
-	return s.pack
+	if s.node != nil && s.node.InPack() {
+		if s.packAdapter == nil {
+			s.packAdapter = &quorumPack{s: s, PackAdapter: quorum.NewPackAdapter(s.node)}
+		}
+		return s.packAdapter
+	}
+	if s.packLocal == nil {
+		s.packLocal = &localPack{s: s}
+	}
+	return s.packLocal
 }
 
 // packHub fans events of this authority's threads out to subscribers.

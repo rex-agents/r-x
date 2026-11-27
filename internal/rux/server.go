@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/rex-agents/r-x/internal/rux/authapi"
+	"github.com/rex-agents/r-x/internal/rux/quorum"
 	"io"
 	"io/fs"
 	"log"
@@ -54,10 +55,14 @@ type server struct {
 	started      time.Time // when this authority started
 	hub          packHub
 	packMu       sync.Mutex
-	pack         PackSource             // see authority_pack.go
+	pack         PackSource // see authority_pack.go
+	packAdapter  PackSource // the quorum's view, once this authority is in a pack
+	packLocal    PackSource
 	vaults       map[string]VaultSource // by name: "local", and "leader" once a quorum adds it
 	vaultDefault string                 // the vault source threads use unless they say otherwise
 	proxy        *modelProxy
+	node         *quorum.Node // this authority's place in a pack; nil without quorum wiring
+	inner        http.Handler // the web app's routes, without user checks and federation
 
 	mu       sync.Mutex
 	threads  map[string]*thread
@@ -146,6 +151,8 @@ func runServe(args []string) {
 	claudeBin := flags.String("claude", "claude", "claude binary on this host, used only to list the models Claude Code offers")
 	ghOn := flags.Bool("github", true, "give guests GitHub access and list repos with the token from rix credential github")
 	proxyOn := flags.Bool("model-proxy", true, "give guests the model proxy instead of model keys")
+	quorumListen := flags.String("quorum-listen", "0.0.0.0:7710", "listen address for other authorities in a pack")
+	quorumURLFlag := flags.String("quorum-url", "", "where other authorities reach the quorum listener (default: the tailnet address, port 7710)")
 	vaultDef := flags.String("vault", "", `default vault source for model keys: "local" (this host's rix) or "leader" (default: authority.json, else local)`)
 	flags.Parse(args)
 	s.started = time.Now()
@@ -207,63 +214,8 @@ func runServe(args []string) {
 		log.Print("warning: --allow-user not set; anyone who can reach the web app can use it")
 	}
 
-	app := http.NewServeMux()
-	static, _ := fs.Sub(webFS, "web")
-	app.Handle("GET /", http.FileServerFS(static))
-	app.HandleFunc("GET /api/threads", s.handleList)
-	app.HandleFunc("POST /api/threads", s.handleCreate)
-	app.HandleFunc("GET /api/threads/{id}", s.handleGet)
-	app.HandleFunc("GET /api/threads/{id}/events", s.handleEvents)
-	app.HandleFunc("GET /api/threads/{id}/events/page", s.handleEventsPage)
-	app.HandleFunc("POST /api/threads/{id}/messages", s.handleMessage)
-	app.HandleFunc("POST /api/threads/{id}/interrupt", s.handleInterrupt)
-	app.HandleFunc("POST /api/threads/{id}/sleep", s.handleSleep)
-	app.HandleFunc("POST /api/threads/{id}/wake", s.handleWake)
-	app.HandleFunc("POST /api/threads/{id}/destroy", s.handleDestroy)
-	app.HandleFunc("POST /api/threads/{id}/archive", s.handleThreadArchive)
-	app.HandleFunc("DELETE /api/threads/{id}", s.handleThreadDelete)
-	app.HandleFunc("POST /api/projects/{id}/cleanup", s.handleProjectCleanup)
-	app.HandleFunc("POST /api/projects/{id}/archive", s.handleProjectArchive)
-	app.HandleFunc("GET /api/repos", s.handleRepos)
-	app.HandleFunc("GET /api/projects", s.handleProjects)
-	app.HandleFunc("POST /api/projects", s.handleProjectCreate)
-	app.HandleFunc("GET /api/projects/{id}", s.handleProjectGet)
-	app.HandleFunc("PATCH /api/projects/{id}", s.handleProjectUpdate)
-	app.HandleFunc("POST /api/projects/{id}/manager", s.handleManagerMessage)
-	app.HandleFunc("POST /api/threads/{id}/ui/{ui}/answer", s.handleUIAnswer)
-	app.HandleFunc("GET /api/models", s.handleModels)
-	app.HandleFunc("GET /api/tools", s.handleToolsList)
-	app.HandleFunc("POST /api/threads/{id}/settings", s.handleSettings)
-	app.HandleFunc("GET /api/threads/{id}/assets/{file}", s.handleAssetGet)
-	app.HandleFunc("GET /api/overview", s.handleOverview)
-	app.HandleFunc("GET /api/overview/stream", s.handleOverviewStream)
-	app.HandleFunc("GET /api/threads/{id}/subagents/{sub}/events", s.subAgent(s.handleEvents))
-	app.HandleFunc("GET /api/threads/{id}/subagents/{sub}/events/page", s.subAgent(s.handleEventsPage))
-	app.HandleFunc("GET /api/pack", s.handlePack)
-	app.HandleFunc("GET /api/pack/stream", s.handlePackStream)
-
-	guest := http.NewServeMux()
-	guest.HandleFunc("GET /runner", s.handleRunner)
-	guest.HandleFunc("GET /git-credential", s.handleGitCredential)
-	guest.HandleFunc("POST /assets", s.handleAssetUpload)
-	guest.HandleFunc("/mcp", s.handleMCP)
-	guest.HandleFunc("POST /ui", s.handleUIPost)
-	if s.proxy != nil {
-		guest.HandleFunc("/proxy/{provider}/{path...}", s.handleProxy)
-	}
-	guest.HandleFunc("GET /tools", s.handleGuestTools)
-	guest.HandleFunc("POST /tools/run", s.handleGuestToolRun)
-	guest.HandleFunc("GET /tools/runs/{run}", s.handleGuestToolStatus)
-	guest.HandleFunc("GET /dl/rux-runner", func(w http.ResponseWriter, r *http.Request) {
-		path, err := s.runnerFor(guestOS(r.URL.Query().Get("os")), guestArch(r.URL.Query().Get("arch")))
-		if err != nil {
-			log.Printf("serving the runner: %v", err)
-			http.Error(w, err.Error(), 503)
-			return
-		}
-		http.ServeFile(w, r, path)
-	})
-
+	app, guest := s.routes()
+	s.inner = app
 	go s.statsLoop()
 	go s.sleepLoop()
 	go fetchContainerStats() // warm the cache so the first monitor view is instant
@@ -284,9 +236,19 @@ func runServe(args []string) {
 		host = "127.0.0.1"
 	}
 	s.registerAuthority("http://" + net.JoinHostPort(host, port))
-	go func() { log.Fatal(serveUnix(sockLn, s.userOnly(app))) }()
+	qln, err := net.Listen("tcp", *quorumListen)
+	if err != nil {
+		log.Printf("warning: no quorum listener on %s (%v); this authority can't join a pack", *quorumListen, err)
+	}
+	if err := s.startQuorum(context.Background(), quorumOptions{Listener: qln, Advertise: quorumURL(*quorumURLFlag)}); err != nil {
+		log.Fatalf("quorum: %v", err)
+	}
+	if err := s.node.ServeAdmin(context.Background()); err != nil {
+		log.Printf("warning: no quorum admin socket (%v), so rux quorum can't manage this authority while it runs", err)
+	}
+	go func() { log.Fatal(serveUnix(sockLn, s.userOnly(s.federate(app)))) }()
 	log.Printf("authority %s: web app on %s and %s (backend %s, data %s)", s.authName(), s.selfURL, sockLn.Addr(), s.backend, s.dataDir)
-	log.Fatal(http.Serve(ln, s.userOnly(app)))
+	log.Fatal(http.Serve(ln, s.userOnly(s.federate(app))))
 }
 
 // containerNetwork reads the gateway and subnet of Apple container's default network.
@@ -633,12 +595,12 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Kind, req.Parent = "", ""
-	t, err := s.createThread(req)
+	view, err := s.createPlaced(r.Context(), req)
 	if err != nil {
 		httpErr(w, errorCode(err), err.Error())
 		return
 	}
-	writeJSONResp(w, 201, s.viewOf(t))
+	writeJSONResp(w, 201, view)
 }
 
 func (s *server) createThread(req createReq) (*thread, error) {
@@ -1437,4 +1399,65 @@ func (s *server) stopLocal(t *thread) {
 	if v, ok := localProcs.LoadAndDelete(t.meta.ID); ok {
 		v.(*exec.Cmd).Process.Kill()
 	}
+}
+
+// routes builds the web app's routes and the guest listener's.
+func (s *server) routes() (app, guest *http.ServeMux) {
+	app = http.NewServeMux()
+	static, _ := fs.Sub(webFS, "web")
+	app.Handle("GET /", http.FileServerFS(static))
+	app.HandleFunc("GET /api/threads", s.handleList)
+	app.HandleFunc("POST /api/threads", s.handleCreate)
+	app.HandleFunc("GET /api/threads/{id}", s.handleGet)
+	app.HandleFunc("GET /api/threads/{id}/events", s.handleEvents)
+	app.HandleFunc("GET /api/threads/{id}/events/page", s.handleEventsPage)
+	app.HandleFunc("POST /api/threads/{id}/messages", s.handleMessage)
+	app.HandleFunc("POST /api/threads/{id}/interrupt", s.handleInterrupt)
+	app.HandleFunc("POST /api/threads/{id}/sleep", s.handleSleep)
+	app.HandleFunc("POST /api/threads/{id}/wake", s.handleWake)
+	app.HandleFunc("POST /api/threads/{id}/destroy", s.handleDestroy)
+	app.HandleFunc("POST /api/threads/{id}/archive", s.handleThreadArchive)
+	app.HandleFunc("DELETE /api/threads/{id}", s.handleThreadDelete)
+	app.HandleFunc("POST /api/projects/{id}/cleanup", s.handleProjectCleanup)
+	app.HandleFunc("POST /api/projects/{id}/archive", s.handleProjectArchive)
+	app.HandleFunc("GET /api/repos", s.handleRepos)
+	app.HandleFunc("GET /api/projects", s.handleProjects)
+	app.HandleFunc("POST /api/projects", s.handleProjectCreate)
+	app.HandleFunc("GET /api/projects/{id}", s.handleProjectGet)
+	app.HandleFunc("PATCH /api/projects/{id}", s.handleProjectUpdate)
+	app.HandleFunc("POST /api/projects/{id}/manager", s.handleManagerMessage)
+	app.HandleFunc("POST /api/threads/{id}/ui/{ui}/answer", s.handleUIAnswer)
+	app.HandleFunc("GET /api/models", s.handleModels)
+	app.HandleFunc("GET /api/tools", s.handleToolsList)
+	app.HandleFunc("POST /api/threads/{id}/settings", s.handleSettings)
+	app.HandleFunc("GET /api/threads/{id}/assets/{file}", s.handleAssetGet)
+	app.HandleFunc("GET /api/overview", s.handleOverview)
+	app.HandleFunc("GET /api/overview/stream", s.handleOverviewStream)
+	app.HandleFunc("GET /api/threads/{id}/subagents/{sub}/events", s.subAgent(s.handleEvents))
+	app.HandleFunc("GET /api/threads/{id}/subagents/{sub}/events/page", s.subAgent(s.handleEventsPage))
+	app.HandleFunc("GET /api/pack", s.handlePack)
+	app.HandleFunc("GET /api/pack/stream", s.handlePackStream)
+
+	guest = http.NewServeMux()
+	guest.HandleFunc("GET /runner", s.handleRunner)
+	guest.HandleFunc("GET /git-credential", s.handleGitCredential)
+	guest.HandleFunc("POST /assets", s.handleAssetUpload)
+	guest.HandleFunc("/mcp", s.handleMCP)
+	guest.HandleFunc("POST /ui", s.handleUIPost)
+	if s.proxy != nil {
+		guest.HandleFunc("/proxy/{provider}/{path...}", s.handleProxy)
+	}
+	guest.HandleFunc("GET /tools", s.handleGuestTools)
+	guest.HandleFunc("POST /tools/run", s.handleGuestToolRun)
+	guest.HandleFunc("GET /tools/runs/{run}", s.handleGuestToolStatus)
+	guest.HandleFunc("GET /dl/rux-runner", func(w http.ResponseWriter, r *http.Request) {
+		path, err := s.runnerFor(guestOS(r.URL.Query().Get("os")), guestArch(r.URL.Query().Get("arch")))
+		if err != nil {
+			log.Printf("serving the runner: %v", err)
+			http.Error(w, err.Error(), 503)
+			return
+		}
+		http.ServeFile(w, r, path)
+	})
+	return app, guest
 }

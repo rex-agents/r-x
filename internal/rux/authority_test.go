@@ -23,7 +23,7 @@ type fakeVault struct {
 	calls atomic.Int32
 }
 
-func (f *fakeVault) Credential(ctx context.Context, provider string) (Credential, error) {
+func (f *fakeVault) Credential(ctx context.Context, thread, provider string) (Credential, error) {
 	f.calls.Add(1)
 	return f.cred, f.err
 }
@@ -199,7 +199,7 @@ func TestLocalVaultOrder(t *testing.T) {
 		agent:   func(a, s string) string { return "" },
 		env:     func(string) string { return "" },
 	}
-	if _, err := v.Credential(context.Background(), "anthropic"); err == nil || !strings.Contains(err.Error(), "rix secret set") {
+	if _, err := v.Credential(context.Background(), "t", "anthropic"); err == nil || !strings.Contains(err.Error(), "rix secret set") {
 		t.Errorf("missing key error = %v", err)
 	}
 	v.agent = func(a, s string) string {
@@ -208,17 +208,17 @@ func TestLocalVaultOrder(t *testing.T) {
 		}
 		return ""
 	}
-	if c, err := v.Credential(context.Background(), "anthropic"); err != nil || c.Kind != "oauth" {
+	if c, err := v.Credential(context.Background(), "t", "anthropic"); err != nil || c.Kind != "oauth" {
 		t.Errorf("rix auth claude token: %v %v", c, err)
 	}
 	v.secrets = func(names ...string) (map[string]string, error) {
 		return map[string]string{"ANTHROPIC_API_KEY": "sk-ant-api03-Y"}, nil
 	}
-	if c, _ := v.Credential(context.Background(), "anthropic"); c.Kind != "api_key" || c.Value != "sk-ant-api03-Y" {
+	if c, _ := v.Credential(context.Background(), "t", "anthropic"); c.Kind != "api_key" || c.Value != "sk-ant-api03-Y" {
 		t.Errorf("a rix secret should win over the agent file: %v", c)
 	}
 	v.env = func(n string) string { return map[string]string{"OPENAI_API_KEY": "sk-O"}[n] }
-	if c, _ := v.Credential(context.Background(), "openai"); c.Value != "sk-O" {
+	if c, _ := v.Credential(context.Background(), "t", "openai"); c.Value != "sk-O" {
 		t.Errorf("env fallback: %v", c)
 	}
 }

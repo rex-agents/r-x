@@ -64,8 +64,7 @@ func quorumMain(args []string) error {
 		fmt.Fprint(os.Stderr, quorumUsage)
 		os.Exit(2)
 	}
-	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, ".rux")
+	dir := authorityHome()
 	cmd, rest := rest[0], rest[1:]
 	need := func(n int, what string) error {
 		if len(rest) < n {
