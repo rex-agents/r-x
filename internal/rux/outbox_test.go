@@ -108,7 +108,7 @@ func outboxLen(th *thread) int {
 	return len(th.outbox)
 }
 
-func waitFor(t *testing.T, what string, f func() bool) {
+func waitOutbox(t *testing.T, what string, f func() bool) {
 	t.Helper()
 	for i := 0; i < 400; i++ {
 		if f() {
@@ -151,7 +151,7 @@ func TestOutboxBacklogReplayAndAck(t *testing.T) {
 	}
 	// Disconnect before any ack: nothing is lost.
 	fr.c.CloseNow()
-	waitFor(t, "disconnect", func() bool { th.mu.Lock(); defer th.mu.Unlock(); return !th.meta.Connected })
+	waitOutbox(t, "disconnect", func() bool { th.mu.Lock(); defer th.mu.Unlock(); return !th.meta.Connected })
 	if got := outboxLen(th); got != n+1 {
 		t.Fatalf("outbox after disconnect = %d, want %d", got, n+1)
 	}
@@ -171,7 +171,7 @@ func TestOutboxBacklogReplayAndAck(t *testing.T) {
 		t.Fatalf("live message = %q", live[0].Text)
 	}
 	fr2.ack(t, append(second, live...))
-	waitFor(t, "acks", func() bool { return outboxLen(th) == 0 })
+	waitOutbox(t, "acks", func() bool { return outboxLen(th) == 0 })
 }
 
 // The outbox survives a server restart, and acked messages don't come back.
@@ -207,7 +207,7 @@ func TestOutboxLegacyRunnerNoAck(t *testing.T) {
 	_, th, srv := testServer(t)
 	fr := dialRunner(t, srv, false)
 	fr.take(t, 1) // the prompt
-	waitFor(t, "implicit ack", func() bool { return outboxLen(th) == 0 })
+	waitOutbox(t, "implicit ack", func() bool { return outboxLen(th) == 0 })
 }
 
 // An asleep thread keeps a message for the runner that connects after the wake.
@@ -407,7 +407,7 @@ func TestSetupFailedStatus(t *testing.T) {
 		t.Fatalf("status %q setup_failed %v wake %q", st, sf, wake)
 	}
 	dialRunner(t, srv, true)
-	waitFor(t, "connect", func() bool { th.mu.Lock(); defer th.mu.Unlock(); return th.meta.Connected })
+	waitOutbox(t, "connect", func() bool { th.mu.Lock(); defer th.mu.Unlock(); return th.meta.Connected })
 	if th.view().Status != "failed" {
 		t.Fatalf("reconnect changed a failed checkout to %q", th.view().Status)
 	}
@@ -417,5 +417,46 @@ func TestSetupFailedStatus(t *testing.T) {
 	th.mu.Unlock()
 	if th.view().Status != "idle" {
 		t.Fatalf("after a good retry status = %q", th.view().Status)
+	}
+}
+
+// A torn tail from a crash doesn't swallow the next record, and queueing the prompt again
+// after a crash (outbox committed, PromptSent not saved) adds no second initial message.
+func TestOutboxTornTailAndPromptWindow(t *testing.T) {
+	_, th, _ := testServer(t)
+	th.mu.Lock()
+	th.queueLocked(wireMsg{T: "user", ID: "a", Text: "a"})
+	th.mu.Unlock()
+	f, _ := os.OpenFile(th.outboxPath(), os.O_APPEND|os.O_WRONLY, 0o600)
+	f.WriteString(`{"op":"add","id":"torn","msg":{"t":"us`) // crash mid-write
+	f.Close()
+	re, err := openThread(th.dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	re.mu.Lock()
+	re.queueLocked(wireMsg{T: "user", ID: "b", Text: "b"})
+	re.meta.PromptSent = false // the crash came before the flag was saved
+	re.queuePromptLocked()
+	re.mu.Unlock()
+	re2, _ := openThread(th.dir, nil)
+	ids := []string{}
+	for _, it := range re2.outbox {
+		ids = append(ids, it.ID)
+	}
+	if strings.Join(ids, ",") != "prompt,a,b" {
+		t.Fatalf("outbox ids = %v", ids)
+	}
+}
+
+// A new runner still takes legacy messages that carry no id (from a server before acks),
+// runs them once, and doesn't ack them.
+func TestRunnerLegacyServerMessage(t *testing.T) {
+	r := newTestRunner(t, "", filepath.Join(t.TempDir(), "w"))
+	if r.accept(wireMsg{T: "user", Text: "old style"}) {
+		t.Error("no id, so nothing to ack")
+	}
+	if len(r.inQ) != 1 || r.inQ[0].msg.Text != "old style" {
+		t.Fatalf("queue %+v", r.inQ)
 	}
 }

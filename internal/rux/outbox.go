@@ -33,11 +33,18 @@ func (t *thread) writeRecLocked(rec outRec) error {
 		return nil
 	}
 	if t.outLog == nil {
-		f, err := os.OpenFile(t.outboxPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		f, err := os.OpenFile(t.outboxPath(), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 		if err != nil {
 			return err
 		}
 		t.outLog = f
+		// A crash can leave a torn last line with no newline; start this record on its own line.
+		if st, err := f.Stat(); err == nil && st.Size() > 0 {
+			last := make([]byte, 1)
+			if _, err := f.ReadAt(last, st.Size()-1); err == nil && last[0] != '\n' {
+				f.Write([]byte{'\n'})
+			}
+		}
 	}
 	b, err := json.Marshal(rec)
 	if err != nil {

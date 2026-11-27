@@ -1171,7 +1171,6 @@ func (s *server) provisionRox(t *thread) {
 		s.provisionShared(t, m)
 		return
 	}
-	before := s.roxNames()
 	// The runner clones the repo itself, with the GitHub token rix hands out, so rox
 	// starts an empty guest. --no-git-agent keeps rox from forwarding the host's SSH
 	// keys into it. --agents claude installs Claude Code, which rix signs in through
@@ -1198,15 +1197,8 @@ func (s *server) provisionRox(t *thread) {
 		}
 	})
 	t.mu.Lock()
-	if t.meta.Guest == "" {
-		for n := range s.roxNames() {
-			if !before[n] {
-				t.meta.Guest = n
-				t.saveMeta()
-				break
-			}
-		}
-	}
+	// The guest is the name rox up printed. It's not guessed from a list of guests, which
+	// could pick one that another thread was starting at the same moment.
 	guest, connected := t.meta.Guest, t.meta.Connected
 	t.appendLocked("rux", 0, ruxEv("rux_guest", "name", guest))
 	if err != nil {
@@ -1287,36 +1279,6 @@ func scanLinesCR(data []byte, atEOF bool) (int, []byte, error) {
 		return len(data), data, nil
 	}
 	return 0, nil, nil
-}
-
-func (s *server) roxNames() map[string]bool {
-	out := map[string]bool{}
-	b, err := exec.Command(s.roxBin, "ls", "--all-projects", "--json").Output()
-	if err != nil {
-		return out
-	}
-	var v any
-	if json.Unmarshal(b, &v) != nil {
-		return out
-	}
-	var walk func(any)
-	walk = func(v any) {
-		switch x := v.(type) {
-		case []any:
-			for _, e := range x {
-				walk(e)
-			}
-		case map[string]any:
-			if n, ok := x["name"].(string); ok {
-				out[n] = true
-			}
-			for _, e := range x {
-				walk(e)
-			}
-		}
-	}
-	walk(v)
-	return out
 }
 
 // ---- local backend (no sandbox; for exercising the app without Rox) ----
