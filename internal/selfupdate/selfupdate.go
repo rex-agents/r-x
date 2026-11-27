@@ -1,4 +1,4 @@
-// Package selfupdate replaces the running rox or rix with the latest release.
+// Package selfupdate replaces the running rox, rix or rox-rex with the latest release.
 //
 // Releases are GitHub releases of rex-agents/r-x, built by goreleaser: one archive per
 // OS and architecture holding both binaries, and a checksums.txt of their SHA-256s.

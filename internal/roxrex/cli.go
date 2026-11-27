@@ -12,6 +12,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/rex-agents/r-x/internal/contract"
+	"github.com/rex-agents/r-x/internal/rox"
+	"github.com/rex-agents/r-x/internal/selfupdate"
 	"github.com/rex-agents/r-x/internal/sys"
 	"github.com/rex-agents/r-x/internal/ui"
 )
@@ -35,6 +37,12 @@ func Main(version string, args []string) int {
 		return 0
 	}
 	root := RootCommand(version)
+	updater := &selfupdate.Updater{Program: "rox-rex", Version: version, StateDir: rox.StateRoot(), Mode: func() string { return "notify" }}
+	var check bool
+	update := &cobra.Command{Use: "self-update", Short: "install the latest rox-rex release", Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error { return updater.SelfUpdate(check) }}
+	update.Flags().BoolVar(&check, "check", false, "only say whether a newer release is out")
+	root.AddCommand(update)
 	root.SetArgs(args)
 	if err := root.Execute(); err != nil {
 		var code exitCode
