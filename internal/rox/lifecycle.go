@@ -988,6 +988,11 @@ func Reconnect(name string, force bool) error {
 		if g.GuestSocket == "" || g.Phase == "removing" {
 			return fmt.Errorf("%s did not get far enough to start a Rex server", name)
 		}
+		// Only a guest whose first boot finished is ready. A failed or interrupted boot may be
+		// missing agents, credentials, its Rex server or its host entry, so it is not promoted.
+		if g.Phase != "ready" {
+			return fmt.Errorf("%s did not finish setting up (phase %s). Remove it with rox down %s and launch it again", name, g.Phase, name)
+		}
 		g.Stopped = false
 		g.MustSave()
 		restored, err := resume(g, savedTailnet(g, ""), 120*time.Second, force)
@@ -1022,18 +1027,34 @@ func Stop(name string) error {
 		if g.Backend == "railway" {
 			return fmt.Errorf("Railway sandboxes can't be stopped and started again. Remove %s with rox down", name)
 		}
+		b := backendFor(g)
+		// Saved state and live connections change only once the backend is really stopped.
+		err := ui.Run("Stopping "+g.Name, "Stopped "+g.Name, func(*ui.Step) error {
+			state, err := b.State(g)
+			if err != nil {
+				return err
+			}
+			if state != "running" {
+				return nil
+			}
+			if err := b.Stop(g); err != nil {
+				// A timeout can still have stopped it, so ask again before giving up.
+				if after, serr := b.State(g); serr == nil && after != "running" {
+					return nil
+				}
+				return err
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("%w (%s keeps its saved state and connections)", err, name)
+		}
 		g.Stopped = true
 		g.MustSave()
 		stopFunnels(g, nil)
 		closeGitForward(g)
 		closeTunnel(g)
-		b := backendFor(g)
-		return ui.Run("Stopping "+g.Name, "Stopped "+g.Name, func(*ui.Step) error {
-			if state, err := b.State(g); err != nil || state != "running" {
-				return err
-			}
-			return b.Stop(g)
-		})
+		return nil
 	})
 }
 
