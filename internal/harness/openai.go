@@ -22,6 +22,8 @@ type OpenAI struct {
 	APIKey  string
 	// Headers are extra request headers.
 	Headers map[string]string
+	// Effort is sent as reasoning_effort (low, medium or high) to providers that take it.
+	Effort string
 }
 
 func (p *OpenAI) Name() string { return firstNonEmpty(p.Label, "openai") + "/" + p.Model }
@@ -90,6 +92,12 @@ func (c *openaiConv) Step(ctx context.Context, tools []ToolSpec, onDelta func(De
 		"messages":       c.messages,
 		"stream":         true,
 		"stream_options": map[string]any{"include_usage": true},
+	}
+	if e := c.p.Effort; e != "" && (c.p.Label == "openai" || c.p.Label == "openrouter") {
+		if e == "xhigh" || e == "max" {
+			e = "high"
+		}
+		body["reasoning_effort"] = e
 	}
 	if len(tools) > 0 {
 		var ts []oaTool

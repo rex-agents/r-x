@@ -58,21 +58,58 @@ agents in a sidebar and the selected one's transcript beside it.
 - When you quit, rux offers to remove the guests it started, and saves every transcript to
   `~/.rux/sessions/TIME/`.
 
+The window is quiet: the conversation, the agents in a strip above the prompt once there are
+sub-agents, and the prompt, with the selected agent's model and effort on its top border and where it
+works on its bottom border. Most things can be clicked: an agent in the strip, the model (opens the
+picker), a tool call (opens its output), the buttons on approvals and on quitting, and the selected
+sub-agent's pane, shell and stop buttons.
+
 | Key | Does |
 | --- | --- |
 | `enter` | send to the selected agent (`alt+enter` for a new line) |
 | `tab` / `shift+tab` | next / previous agent |
 | `esc` | interrupt the selected agent |
-| `ctrl+o` | expand tool output and thinking |
+| `ctrl+o` | commands: every action below, to pick, search or click |
+| `ctrl+l` | model and effort for the selected agent |
+| `?` | shortcuts (on an empty prompt) |
+| `ctrl+e` | open every tool call |
 | `pgup` / `pgdn`, mouse wheel | scroll |
-| `/stop [NAME]` | stop a sub-agent and remove its guest |
 | `ctrl+c` | clear the prompt; on an empty prompt, quit |
 
-### Models: Claude Code, Claude, or anything OpenAI-compatible
+| Command | Does |
+| --- | --- |
+| `/model [PROVIDER/MODEL]` | the selected agent's model (no argument: the picker) |
+| `/agent-model [PROVIDER/MODEL]` | the model new sub-agents start with |
+| `/effort LEVEL` | the selected agent's effort: low, medium, high, xhigh, max or auto |
+| `/pane [NAME]` | open an agent in a Rex pane beside rux (`rux view`), live, where you can message and interrupt it |
+| `/shell [NAME]` | open a shell in a sub-agent's guest, in a Rex pane |
+| `/stop [NAME]` | stop a sub-agent and remove its guest |
+
+The model picker lists a few picks with what each is good for, every provider's models under
+"Other models" (or type to search them all), and the effort, which `←` `→` change.
+
+### Remote hosts
+
+Every model loop runs where rux runs; only tool calls go to the guests. The lead can start a
+sub-agent's guest on one of your Rex remote hosts (`spawn_agent` with `host`; `list_hosts` lists them),
+which rox puts on the tailnet so rux reaches it with `rox exec`. An existing guest on another host works
+the same way. Run rux itself on a remote host (in a Rex pane there) to use that host's rix.
+
+### Models: Claude Code, Codex, Claude, or anything OpenAI-compatible
 
 Name a model as `provider/model`. The lead uses `--model`; the sub-agents use `--agent-model`
 (default: the lead's), and the lead can pick one per agent. Without `--model`, rux uses
 `anthropic/claude-opus-5-5` when there's an Anthropic API key, and otherwise `claude-code`.
+
+Change models during a session with `/model`: it picks the selected agent's provider (showing which
+have keys), then its model from the provider's own list (type to filter, or type a model it doesn't
+list). The agent carries on with the conversation so far. `/agent-model` sets the model for sub-agents
+started from then on. Switching waits for the agent's turn to end; `esc` interrupts it.
+
+**`codex`** (or `codex/MODEL`) runs each agent on OpenAI's Codex CLI, headless (`codex exec --json`),
+so your ChatGPT sign-in works. A Codex lead works in Codex's read-only sandbox here, so it can look but
+not change anything; rux's tools reach it over MCP. Codex sub-agents run in their guests without
+Codex's sandbox and sign in with what `rix auth codex` stored.
 
 **`claude-code`** (or `claude-code/MODEL`, such as `claude-code/opus`) runs each agent on Claude Code
 itself, headless, so your Claude subscription works. Claude Code runs its own tools and rux shows its

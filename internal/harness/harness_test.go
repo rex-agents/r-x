@@ -324,3 +324,98 @@ sleep 5
 		t.Fatalf("entries %+v", snap.Entries)
 	}
 }
+
+func TestSwitchCarriesContext(t *testing.T) {
+	first := &scripted{turns: []Turn{{Text: "one", Stop: StopEnd}}}
+	a := NewAgent("x", "x", "lead")
+	ended := make(chan struct{}, 2)
+	a.OnTurnEnd = func(*Agent, string, error) { ended <- struct{}{} }
+	a.Attach(first, "", nil, "here")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Run(ctx)
+	a.Send("you", "hi")
+	<-ended
+	second := &scripted{}
+	a.Attach(second, "", nil, "here")
+	a.Carry("earlier: hi / one")
+	a.Send("you", "again")
+	<-ended
+	if len(second.users) != 1 || !strings.HasPrefix(second.users[0], "earlier: hi / one") || !strings.HasSuffix(second.users[0], "again") {
+		t.Fatalf("second engine got %q", second.users)
+	}
+	if a.ModelName() != "test/scripted" {
+		t.Fatal(a.ModelName())
+	}
+}
+
+func TestCodexEngine(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "codex")
+	// A fake codex exec --json: records its arguments and prompt, and plays a turn.
+	_ = os.WriteFile(fake, []byte(`#!/bin/sh
+d="$(dirname "$0")"
+echo "$@" >> "$d/args"
+cat > "$d/prompt.$#"
+echo '{"type":"thread.started","thread_id":"th1"}'
+echo '{"type":"turn.started"}'
+echo '{"type":"item.completed","item":{"id":"i0","type":"reasoning","text":"plan"}}'
+echo '{"type":"item.started","item":{"id":"i1","type":"command_execution","command":"/bin/zsh -lc '"'"'make test'"'"'","aggregated_output":"","exit_code":null,"status":"in_progress"}}'
+echo '{"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"/bin/zsh -lc '"'"'make test'"'"'","aggregated_output":"FAIL","exit_code":2,"status":"failed"}}'
+echo '{"type":"item.completed","item":{"id":"i2","type":"file_change","changes":[{"path":"a.go","kind":"update"}],"status":"completed"}}'
+echo '{"type":"item.completed","item":{"id":"i3","type":"agent_message","text":"Fixed it."}}'
+echo '{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":4,"output_tokens":3}}'
+`), 0o755)
+	cx := &Codex{Command: func(args []string) *exec.Cmd { return exec.Command(fake, args...) }, Model: "gpt-x", System: "SYS"}
+	a := NewAgent("c", "c", "sub")
+	ended := make(chan string, 2)
+	a.OnTurnEnd = func(_ *Agent, text string, err error) {
+		if err != nil {
+			text = "error: " + err.Error()
+		}
+		ended <- text
+	}
+	a.AttachRunner(cx, "here")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Run(ctx)
+	a.Send("you", "fix it")
+	if got := <-ended; got != "Fixed it." {
+		t.Fatalf("final %q", got)
+	}
+	a.Send("you", "again")
+	<-ended
+	args, _ := os.ReadFile(filepath.Join(dir, "args"))
+	lines := strings.Split(strings.TrimSpace(string(args)), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "exec --json") || !strings.HasPrefix(lines[1], "exec resume th1 --json") ||
+		!strings.Contains(lines[0], "-m gpt-x") || !strings.Contains(lines[0], `sandbox_mode="read-only"`) {
+		t.Fatalf("args %q", lines)
+	}
+	snap := a.Snapshot()
+	var kinds []string
+	for _, e := range snap.Entries {
+		kinds = append(kinds, e.Kind)
+	}
+	if strings.Join(kinds[:5], ",") != "user,thinking,tool,tool,text" {
+		t.Fatalf("kinds %v", kinds)
+	}
+	if e := snap.Entries[2]; e.Tool != "shell" || e.Label != "make test" || !e.IsError || !strings.Contains(e.Result, "exit code 2") {
+		t.Fatalf("shell entry %+v", e)
+	}
+	if e := snap.Entries[3]; e.Tool != "edit" || e.Result != "update a.go" {
+		t.Fatalf("edit entry %+v", e)
+	}
+	if snap.Usage.Input != 20 || snap.Usage.CacheRead != 8 {
+		t.Fatalf("usage %+v", snap.Usage)
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "prompt.*"))
+	var prompts []string
+	for _, m := range matches {
+		b, _ := os.ReadFile(m)
+		prompts = append(prompts, string(b))
+	}
+	joined := strings.Join(prompts, "|")
+	if !strings.Contains(joined, "SYS\n\n---\n\nfix it") || strings.Count(joined, "SYS") != 1 {
+		t.Fatalf("prompts %q", prompts)
+	}
+}

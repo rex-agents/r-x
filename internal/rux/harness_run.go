@@ -23,18 +23,24 @@ import (
 // machine; only tool calls run in the guests.
 type hrun struct {
 	cfg  harnessConfig
+	mcp  *leadMCP
+	sock string // the control socket, for rux view
 	cwd  string
 	repo string // this directory's origin, if any
 
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu        sync.Mutex
-	lead      *harness.Agent
-	agents    []*harness.Agent // lead first
-	subs      map[string]*subInfo
-	watching  map[string]int // sub-agents a wait_for_agents call covers
-	allowBash bool
+	mu       sync.Mutex
+	lead     *harness.Agent
+	agents   []*harness.Agent // lead first
+	subs     map[string]*subInfo
+	watching map[string]int    // sub-agents a wait_for_agents call covers
+	effort   map[string]string // each agent's effort, by ID; "" is the engine's default
+	// subEffortV is the effort new sub-agents start with, once it's been set.
+	subEffortV   string
+	subEffortSet bool
+	allowBash    bool
 
 	// changed coalesces change notifications for the UI.
 	changed chan struct{}
@@ -50,9 +56,16 @@ type subInfo struct {
 	Dir      string
 	GuestTyp string
 	Task     string
-	// ClaudeCode sub-agents run Claude Code in the guest, signed in by rix.
-	ClaudeCode bool
-	CCModel    string
+	// Host is the Rex remote host the guest runs on; empty for this machine.
+	Host string
+	// Project is the guest's checkout, for rox shell.
+	Project string
+	// CLI is the agent CLI (claude or codex) a sub-agent runs in its guest, signed in by
+	// rix; empty for model APIs, whose loop runs here.
+	CLI string
+	// Model is the engine it was started with, as provider/model or claude-code[/MODEL].
+	Model string
+	exec  *harness.Guest
 }
 
 type approval struct {
@@ -72,7 +85,7 @@ const (
 
 func newRun(cfg harnessConfig, leadModel string) (*hrun, error) {
 	cwd, _ := os.Getwd()
-	r := &hrun{cfg: cfg, cwd: cwd, subs: map[string]*subInfo{}, watching: map[string]int{},
+	r := &hrun{cfg: cfg, cwd: cwd, subs: map[string]*subInfo{}, watching: map[string]int{}, effort: map[string]string{},
 		changed: make(chan struct{}, 1), approvals: make(chan *approval)}
 	r.ctx, r.cancel = context.WithCancel(context.Background())
 	if out, err := exec.Command("git", "-C", cwd, "remote", "get-url", "origin").Output(); err == nil {
@@ -81,35 +94,8 @@ func newRun(cfg harnessConfig, leadModel string) (*hrun, error) {
 	lead := harness.NewAgent("lead", "lead", "lead")
 	r.wire(lead)
 	r.lead, r.agents = lead, []*harness.Agent{lead}
-	if model, ok := claudeCodeModel(leadModel); ok {
-		claude, err := exec.LookPath("claude")
-		if err != nil {
-			return nil, errors.New("claude-code runs Claude Code, which isn't installed")
-		}
-		mcp, err := r.serveLeadMCP()
-		if err != nil {
-			return nil, err
-		}
-		lead.AttachRunner(&harness.ClaudeCode{
-			Command: func(args []string) *exec.Cmd {
-				cmd := exec.Command(claude, args...)
-				cmd.Dir = cwd
-				// wait_for_agents can take as long as the sub-agents do.
-				cmd.Env = append(os.Environ(), "MCP_TOOL_TIMEOUT=7200000")
-				return cmd
-			},
-			Model:  model,
-			System: r.leadSystem(true),
-			// Looking around and the rux tools run freely; Bash, edits and the rest ask you.
-			AllowedTools: []string{"Read", "Grep", "Glob", "LS", "TodoWrite", "mcp__rux"},
-			MCPConfig:    mcp.config(),
-		}, "this machine")
-	} else {
-		p, err := cfg.newProvider(leadModel)
-		if err != nil {
-			return nil, err
-		}
-		lead.Attach(p, r.leadSystem(false), append(harness.ReadTools(&harness.Local{WorkDir: cwd}), r.leadTools()...), "this machine")
+	if err := r.attachLead(leadModel); err != nil {
+		return nil, err
 	}
 	go lead.Run(r.ctx)
 	return r, nil
@@ -148,11 +134,15 @@ func (r *hrun) wire(a *harness.Agent) {
 	}
 }
 
-func (r *hrun) leadSystem(claudeCode bool) string {
+func (r *hrun) leadSystem(cli string) string {
 	own := "Your own tools look around here: read_file, grep and list_files run freely; bash asks the user each time."
-	if claudeCode {
+	switch cli {
+	case "claude":
 		own = "You're Claude Code, run by rux. Read, Grep and Glob run freely here; Bash, edits and other tools ask the user " +
 			"each time. Your rux tools (spawn_agent and the rest) start and follow the sub-agents."
+	case "codex":
+		own = "You're Codex, run by rux, in Codex's read-only sandbox here: you can read files and run commands that " +
+			"only look, but not change anything on this machine. Your rux MCP tools (spawn_agent and the rest) start and follow the sub-agents."
 	}
 	repo := r.repo
 	if repo == "" {
@@ -229,6 +219,7 @@ func (r *hrun) leadTools() []harness.Tool {
 					"branch":     str("branch to start from. Default: the repo's default branch"),
 					"guest_type": str("container (default, Apple container), linux (Tart VM), macos (Tart VM), fly or railway"),
 					"guest":      str("an existing guest's name to work in instead of a new one (see list_guests)"),
+					"host":       str("a Rex remote host (see list_hosts) to start the new guest on, instead of this machine"),
 					"model":      str("provider/model for this agent. Default: " + cmpOr(r.cfg.AgentModel, "the lead's model")),
 				})},
 			Label: func(in json.RawMessage) string { return field(in, "name") },
@@ -316,6 +307,14 @@ func (r *hrun) leadTools() []harness.Tool {
 		},
 		{
 			ReadOnly: true,
+			Spec: harness.ToolSpec{Name: "list_hosts", Description: "List the user's Rex hosts: this machine and remote hosts, " +
+				"which spawn_agent can start guests on with host.",
+				Schema: obj(nil, map[string]any{})},
+			Label: func(json.RawMessage) string { return "" },
+			Run:   func(context.Context, json.RawMessage) (string, error) { return rexHostsText() },
+		},
+		{
+			ReadOnly: true,
 			Spec: harness.ToolSpec{Name: "list_guests", Description: "List the user's rox guests, which spawn_agent can reuse with guest.",
 				Schema: obj(nil, map[string]any{})},
 			Label: func(json.RawMessage) string { return "" },
@@ -365,8 +364,8 @@ func (r *hrun) uniqueName(name string) string {
 
 func (r *hrun) spawnTool(_ context.Context, in json.RawMessage) (string, error) {
 	var a struct {
-		Name, Task, Repo, Branch, Guest, Model string
-		GuestType                              string `json:"guest_type"`
+		Name, Task, Repo, Branch, Guest, Model, Host string
+		GuestType                                    string `json:"guest_type"`
 	}
 	if err := json.Unmarshal(in, &a); err != nil {
 		return "", err
@@ -385,10 +384,10 @@ func (r *hrun) spawnTool(_ context.Context, in json.RawMessage) (string, error) 
 	default:
 		repo = sshRepo(repo)
 	}
-	model := cmpOr(a.Model, cmpOr(r.cfg.AgentModel, r.lead.Model))
+	model := cmpOr(a.Model, r.agentModel())
 	var p harness.Provider
-	ccModel, cc := claudeCodeModel(model)
-	if !cc {
+	cli, _, isCLI := agentCLI(model)
+	if !isCLI {
 		var err error
 		if p, err = r.cfg.newProvider(model); err != nil {
 			return "", err
@@ -408,17 +407,22 @@ func (r *hrun) spawnTool(_ context.Context, in json.RawMessage) (string, error) 
 		engine = p.Name()
 	}
 	sub.Model = engine
-	info := &subInfo{Repo: repo, Branch: a.Branch, Guest: a.Guest, Shared: a.Guest != "", GuestTyp: gt, Task: a.Task,
-		ClaudeCode: cc, CCModel: ccModel}
+	info := &subInfo{Repo: repo, Branch: a.Branch, Guest: a.Guest, Shared: a.Guest != "", GuestTyp: gt, Task: a.Task, Host: a.Host,
+		CLI: cli, Model: model}
 	sub.OnTurnEnd = func(s *harness.Agent, text string, err error) { r.subTurnEnded(s, text, err) }
+	effort := r.subEffort()
 	r.mu.Lock()
 	r.agents = append(r.agents, sub)
 	r.subs[name] = info
+	r.effort[sub.ID] = effort
 	r.mu.Unlock()
 	sub.Send("lead", a.Task)
 	go sub.Run(r.ctx)
-	go r.provision(sub, info, p)
+	go r.provision(sub, info)
 	where := "a new " + gt + " guest"
+	if a.Host != "" {
+		where += " on " + a.Host
+	}
 	if info.Shared {
 		where = "the guest " + info.Guest
 	}
@@ -427,7 +431,7 @@ func (r *hrun) spawnTool(_ context.Context, in json.RawMessage) (string, error) 
 }
 
 // provision sets up a sub-agent's guest, then hands it its tools.
-func (r *hrun) provision(a *harness.Agent, s *subInfo, p harness.Provider) {
+func (r *hrun) provision(a *harness.Agent, s *subInfo) {
 	fail := func(format string, args ...any) {
 		msg := fmt.Sprintf(format, args...)
 		a.SetStatus(harness.Failed, msg)
@@ -443,12 +447,20 @@ func (r *hrun) provision(a *harness.Agent, s *subInfo, p harness.Provider) {
 	if s.Repo != "" {
 		project = projectName(s.Repo)
 	}
+	defer func() {
+		r.mu.Lock()
+		s.Project = project
+		r.mu.Unlock()
+	}()
 	if s.Shared {
 		if s.Repo != "" {
 			project += "-" + a.Name
 			args := []string{"add", s.Guest, "--repo", s.Repo, "--project", project}
-			if s.ClaudeCode {
-				args = append(args, "--agents", "claude")
+			if s.Host != "" {
+				args = append(args, "-S", s.Host)
+			}
+			if s.CLI != "" {
+				args = append(args, "--agents", s.CLI)
 			}
 			if s.Branch != "" {
 				args = append(args, "--branch", s.Branch)
@@ -461,6 +473,9 @@ func (r *hrun) provision(a *harness.Agent, s *subInfo, p harness.Provider) {
 		}
 	} else {
 		args := []string{"up", s.GuestTyp}
+		if s.Host != "" {
+			args = append(args, "-S", s.Host)
+		}
 		if s.Repo != "" {
 			args = append(args, "--repo", s.Repo, "--project", project)
 			if s.Branch != "" {
@@ -472,22 +487,23 @@ func (r *hrun) provision(a *harness.Agent, s *subInfo, p harness.Provider) {
 		if s.GuestTyp == "container" {
 			args = append(args, "--memory", "4G")
 		}
-		if s.ClaudeCode {
-			// rox installs Claude Code, and rix signs it in through rox's hooks.
-			args = append(args, "--agents", "claude")
+		if s.CLI != "" {
+			// rox installs the agent CLI, and rix signs it in through rox's hooks.
+			args = append(args, "--agents", s.CLI)
 		}
-		if !remoteRuntime(s.GuestTyp) {
+		// A guest on another host is reached over the tailnet, so it needs Tailscale.
+		if !remoteRuntime(s.GuestTyp) && s.Host == "" {
 			args = append(args, "--no-tailscale")
 		}
-		a.SetStatus(harness.Starting, "starting a "+s.GuestTyp+" guest")
-		before := roxGuestNames(rox, "")
+		a.SetStatus(harness.Starting, "starting a "+s.GuestTyp+" guest"+map[bool]string{true: " on " + s.Host, false: ""}[s.Host != ""])
+		before := roxGuestNames(rox, s.Host)
 		guest, err := r.roxStream(a, rox, args)
 		if err != nil {
 			fail("rox up failed: %v", err)
 			return
 		}
 		if guest == "" {
-			for n := range roxGuestNames(rox, "") {
+			for n := range roxGuestNames(rox, s.Host) {
 				if !before[n] {
 					guest = n
 				}
@@ -531,30 +547,12 @@ func (r *hrun) provision(a *harness.Agent, s *subInfo, p harness.Provider) {
 			a.Note("note", "Couldn't make the branch "+br+": "+lastLine(out))
 		}
 	}
-	if s.ClaudeCode {
-		if out, code, err := ex.Run(r.ctx, "command -v claude", nil, time.Minute); err != nil || code != 0 {
-			fail("%s has no Claude Code (%s). Start a new guest, or run rox add %s --agents claude", s.Guest, lastLine(out), s.Guest)
-			return
-		}
-		a.AttachRunner(&harness.ClaudeCode{
-			Command: func(args []string) *exec.Cmd {
-				quoted := make([]string, len(args))
-				for i, arg := range args {
-					quoted[i] = harness.ShellQuote(arg)
-				}
-				ra := []string{"exec", s.Guest, "--stdin"}
-				if ex.AgentSock != "" {
-					ra = append(ra, "--agent-sock", ex.AgentSock)
-				}
-				ra = append(ra, "--", "bash", "-lc", "cd "+harness.ShellQuote(s.Dir)+" && exec claude "+strings.Join(quoted, " "))
-				return exec.Command(rox, ra...)
-			},
-			Model:           s.CCModel,
-			System:          r.subSystem(a.Name, s),
-			SkipPermissions: true, // it's in a sandbox
-		}, "guest "+s.Guest)
-	} else {
-		a.Attach(p, r.subSystem(a.Name, s), harness.CodingTools(ex), "guest "+s.Guest)
+	r.mu.Lock()
+	s.exec = ex
+	r.mu.Unlock()
+	if err := r.attachSub(a, s, s.Model); err != nil {
+		fail("%v", err)
+		return
 	}
 	a.Note("note", fmt.Sprintf("Working in %s:%s", s.Guest, s.Dir))
 }
@@ -730,7 +728,7 @@ func (r *hrun) statusText(excerpt int) string {
 		if snap.Detail != "" {
 			fmt.Fprintf(&b, " (%s)", snap.Detail)
 		}
-		fmt.Fprintf(&b, ", %s, guest %s", a.Model, cmpOr(s.Guest, "not up yet"))
+		fmt.Fprintf(&b, ", %s, guest %s", a.ModelName(), cmpOr(s.Guest, "not up yet"))
 		if s.Repo != "" {
 			fmt.Fprintf(&b, ", branch rux/%s", a.Name)
 		}
@@ -818,3 +816,28 @@ func transcriptText(entries []harness.Entry, n int) string {
 
 // harnessLogDir is where a session's transcripts are saved when it ends.
 func harnessLogDir() string { return filepath.Join(ruxHome(), "sessions") }
+
+// rexHostsText lists Rex's hosts for the lead.
+func rexHostsText() (string, error) {
+	var out struct {
+		Hosts []struct {
+			Host struct {
+				Label     string   `json:"label"`
+				Endpoints []string `json:"endpoints"`
+			} `json:"host"`
+		} `json:"hosts"`
+	}
+	if err := rexJSON(&out, "hosts", "--json"); err != nil {
+		return "", fmt.Errorf("rex hosts: %v", err)
+	}
+	var b strings.Builder
+	b.WriteString("this machine (default)\n")
+	for _, h := range out.Hosts {
+		name := cmpOr(h.Host.Label, strings.Join(h.Host.Endpoints, ", "))
+		// rox registers its guests as Rex hosts too; those aren't places to start guests.
+		if name != "" && !guestNameRe.MatchString(name) {
+			fmt.Fprintf(&b, "%s  %s\n", name, strings.Join(h.Host.Endpoints, ", "))
+		}
+	}
+	return b.String(), nil
+}

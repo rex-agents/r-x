@@ -13,9 +13,8 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
-	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
+	zone "github.com/lrstanley/bubblezone"
 
 	"github.com/rex-agents/r-x/internal/harness"
 )
@@ -23,29 +22,12 @@ import (
 // rux with no command opens rux's own multi-agent harness: you talk to a lead agent, it
 // starts sub-agents in rox guests, and every agent's conversation is live in one window.
 
-var (
-	hAccent  = lipgloss.Color("141")
-	hGreen   = lipgloss.Color("78")
-	hYellow  = lipgloss.Color("221")
-	hRed     = lipgloss.Color("203")
-	hDim     = lipgloss.Color("244")
-	hFaint   = lipgloss.Color("238")
-	hText    = lipgloss.Color("252")
-	stDim    = lipgloss.NewStyle().Foreground(hDim)
-	stFaint  = lipgloss.NewStyle().Foreground(hFaint)
-	stAccent = lipgloss.NewStyle().Foreground(hAccent)
-	stBold   = lipgloss.NewStyle().Bold(true).Foreground(hText)
-)
-
 func runHarness(args []string) {
 	fs := flag.NewFlagSet("rux", flag.ExitOnError)
-	model := fs.String("model", "", "the lead's model, as provider/model or claude-code[/MODEL] (default: "+defaultModel+" with an API key, else claude-code)")
+	model := fs.String("model", "", "the lead's model, as provider/model, claude-code[/MODEL] or codex[/MODEL]")
 	agentModel := fs.String("agent-model", "", "sub-agents' model (default: the lead's)")
 	effort := fs.String("effort", "", "effort for Claude models: low, medium, high (default), xhigh or max")
-	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: rux [--model PROVIDER/MODEL] [--agent-model PROVIDER/MODEL] [PROMPT...]")
-		fs.PrintDefaults()
-	}
+	fs.Usage = func() { help(os.Stderr) }
 	_ = fs.Parse(args)
 	cfg := loadHarnessConfig()
 	if *agentModel != "" {
@@ -63,6 +45,10 @@ func runHarness(args []string) {
 	if err != nil {
 		fail("rux: %v", err)
 	}
+	if _, err := r.serveControl(); err != nil {
+		fmt.Fprintf(os.Stderr, "rux: no control socket, so panes won't work: %v\n", err)
+	}
+	zone.NewGlobal()
 	m := newHarnessModel(r)
 	if prompt := strings.TrimSpace(strings.Join(fs.Args(), " ")); prompt != "" {
 		r.lead.Send("you", prompt)
@@ -109,8 +95,11 @@ func runHarness(args []string) {
 
 // checkModelKey stops early, with what to do, when the lead's model has no credentials.
 func checkModelKey(cfg harnessConfig, spec string) error {
-	if _, ok := claudeCodeModel(spec); ok {
-		if _, err := exec.LookPath("claude"); err != nil {
+	if cli, _, ok := agentCLI(spec); ok {
+		if _, err := exec.LookPath(cli); err != nil {
+			if cli == "codex" {
+				return fmt.Errorf("%s codex runs Codex, which isn't installed: npm install -g @openai/codex", stAccent.Render("◆"))
+			}
 			return fmt.Errorf("%s claude-code runs Claude Code, which isn't installed: https://code.claude.com/docs/en/setup", stAccent.Render("◆"))
 		}
 		return nil
@@ -144,6 +133,7 @@ func checkModelKey(cfg harnessConfig, spec string) error {
 	}
 	fmt.Fprintf(b, "    %s\n\n", stBold.Render("rix secret set "+pc.Key))
 	fmt.Fprintf(b, "  Or run the agents on Claude Code with your Claude subscription: %s\n", stBold.Render("rux --model claude-code"))
+	fmt.Fprintf(b, "  Or on Codex with your ChatGPT sign-in: %s\n", stBold.Render("rux --model codex"))
 	fmt.Fprintf(b, "  Or use another provider: %s, %s, or a local %s.\n",
 		stBold.Render("rux --model openai/gpt-5"), stBold.Render("openrouter/…"), stBold.Render("ollama/qwen3-coder"))
 	return fmt.Errorf("%s", b.String())
@@ -151,44 +141,59 @@ func checkModelKey(cfg harnessConfig, spec string) error {
 
 type changedMsg struct{}
 type approvalMsg struct{ req *approval }
+type logoTick struct{}
+
+// panel is what opens above the prompt.
+type panel int
+
+const (
+	panelNone panel = iota
+	panelPicker
+	panelPalette
+	panelShortcuts
+)
 
 type harnessModel struct {
-	r        *hrun
-	w, h     int
-	sel      int
-	vp       viewport.Model
-	input    textarea.Model
-	spin     spinner.Model
-	expand   bool
-	follow   bool
-	pending  []*approval
-	quitting bool // asking whether to remove guests
-	flash    string
-	md       *glamour.TermRenderer
-	mdWidth  int
-	mdCache  map[string]string
+	r     *hrun
+	w, h  int
+	sel   int
+	vp    viewport.Model
+	input textarea.Model
+	tr    *transcriptRenderer
+
+	expandAll bool
+	expanded  map[string]map[int]bool // by agent ID, the tool calls opened with a click
+	follow    bool
+	pending   []*approval
+	quitting  bool // asking whether to remove guests
+	flash     string
+	panel     panel
+	picker    *modelPicker
+	palette   *palette
+	phase     float64 // the logo's light
+	zones     map[string]func() tea.Cmd
 
 	removeGuests bool
 }
 
 func newHarnessModel(r *hrun) *harnessModel {
 	ta := textarea.New()
-	ta.Placeholder = "Message the lead…"
+	ta.Placeholder = "Tell the lead what to do"
 	ta.ShowLineNumbers = false
-	ta.Prompt = "❯ "
+	ta.Prompt = ""
 	ta.CharLimit = 0
 	ta.SetHeight(1)
 	ta.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+j")
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	ta.FocusedStyle.Prompt = stAccent
 	ta.FocusedStyle.Placeholder = stFaint
+	ta.BlurredStyle = ta.FocusedStyle
 	ta.Focus()
-	sp := spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(lipgloss.NewStyle().Foreground(hYellow)))
-	return &harnessModel{r: r, input: ta, spin: sp, follow: true, vp: viewport.New(80, 20), mdCache: map[string]string{}}
+	return &harnessModel{r: r, input: ta, tr: newTranscriptRenderer(), follow: true, vp: viewport.New(80, 20),
+		expanded: map[string]map[int]bool{}, zones: map[string]func() tea.Cmd{}}
 }
 
 func (m *harnessModel) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, m.spin.Tick)
+	return tea.Batch(textarea.Blink, m.tr.spin.Tick, tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return logoTick{} }))
 }
 
 func (m *harnessModel) agents() []*harness.Agent {
@@ -205,34 +210,51 @@ func (m *harnessModel) selected() *harness.Agent {
 	return as[m.sel]
 }
 
+func (m *harnessModel) selectAgent(a *harness.Agent) {
+	for i, x := range m.agents() {
+		if x == a {
+			m.sel = i
+		}
+	}
+	m.follow = true
+	m.refresh()
+}
+
+// welcoming is true before the first message, when rux shows the T-rex.
+func (m *harnessModel) welcoming() bool {
+	return m.sel == 0 && len(m.agents()) == 1 && len(m.r.lead.Snapshot().Entries) == 0
+}
+
 func (m *harnessModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
-		m.layout()
+		m.input.SetWidth(max(m.w-6, 10))
+		m.refresh()
+		return m, nil
 	case changedMsg:
 		m.refresh()
+		return m, nil
+	case logoTick:
+		m.phase += 0.12
+		return m, tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return logoTick{} })
 	case approvalMsg:
 		m.pending = append(m.pending, msg.req)
-		for i, a := range m.agents() {
-			if a == msg.req.agent {
-				m.sel = i
-			}
-		}
-		m.refresh()
+		m.selectAgent(msg.req.agent)
+		return m, nil
+	case modelsMsg:
+		m.pickerModels(msg)
+		return m, nil
 	case spinner.TickMsg:
 		var c tea.Cmd
-		m.spin, c = m.spin.Update(msg)
-		cmds = append(cmds, c)
+		m.tr.spin, c = m.tr.spin.Update(msg)
 		if m.anyBusy() {
 			m.refresh()
 		}
-	case tea.MouseMsg:
-		var c tea.Cmd
-		m.vp, c = m.vp.Update(msg)
-		m.follow = m.vp.AtBottom()
 		return m, c
+	case tea.MouseMsg:
+		return m, m.mouse(msg)
 	case tea.KeyMsg:
 		if c, done := m.key(msg); done {
 			return m, c
@@ -245,16 +267,45 @@ func (m *harnessModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+func (m *harnessModel) mouse(msg tea.MouseMsg) tea.Cmd {
+	if msg.Action == tea.MouseActionRelease && msg.Button == tea.MouseButtonLeft {
+		for id, f := range m.zones {
+			if zone.Get(id).InBounds(msg) {
+				return f()
+			}
+		}
+		return nil
+	}
+	if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+		var c tea.Cmd
+		m.vp, c = m.vp.Update(msg)
+		m.follow = m.vp.AtBottom()
+		return c
+	}
+	return nil
+}
+
+// click registers a clickable zone for this frame.
+func (m *harnessModel) click(id, s string, f func() tea.Cmd) string {
+	m.zones[id] = f
+	return zone.Mark(id, s)
+}
+
+func (m *harnessModel) answer(ans approvalAnswer) {
+	if len(m.pending) == 0 {
+		return
+	}
+	m.pending[0].reply <- ans
+	m.pending = m.pending[1:]
+	m.refresh()
+}
+
 // key handles keys that aren't typing. It reports whether the key was used.
 func (m *harnessModel) key(k tea.KeyMsg) (tea.Cmd, bool) {
 	m.flash = ""
 	if len(m.pending) > 0 {
-		req := m.pending[0]
-		ans, ok := map[string]approvalAnswer{"y": allowOnce, "a": allowAlways, "n": deny, "esc": deny}[k.String()]
-		if ok {
-			req.reply <- ans
-			m.pending = m.pending[1:]
-			m.refresh()
+		if ans, ok := map[string]approvalAnswer{"y": allowOnce, "a": allowAlways, "n": deny, "esc": deny}[k.String()]; ok {
+			m.answer(ans)
 		}
 		return nil, true
 	}
@@ -270,17 +321,35 @@ func (m *harnessModel) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		}
 		return nil, true
 	}
+	switch m.panel {
+	case panelPicker:
+		return m.pickerKey(k), true
+	case panelPalette:
+		return m.paletteKey(k), true
+	case panelShortcuts:
+		m.panel = panelNone
+		if k.String() == "esc" || k.String() == "?" {
+			return nil, true
+		}
+	}
 	switch k.String() {
 	case "ctrl+c", "ctrl+d":
 		if m.input.Value() != "" && k.String() == "ctrl+c" {
 			m.input.Reset()
+			m.fitInput()
 			return nil, true
 		}
-		if len(m.r.ownGuests()) > 0 {
-			m.quitting = true
+		return m.quit(), true
+	case "ctrl+o", "ctrl+k":
+		m.openPalette()
+		return nil, true
+	case "ctrl+l":
+		return m.openPicker(m.selected()), true
+	case "?":
+		if m.input.Value() == "" {
+			m.panel = panelShortcuts
 			return nil, true
 		}
-		return tea.Quit, true
 	case "tab", "ctrl+n":
 		m.sel = (m.sel + 1) % len(m.agents())
 		m.follow = true
@@ -297,8 +366,8 @@ func (m *harnessModel) key(k tea.KeyMsg) (tea.Cmd, bool) {
 			m.flash = "Interrupted " + m.selected().Name
 		}
 		return nil, true
-	case "ctrl+o":
-		m.expand = !m.expand
+	case "ctrl+e":
+		m.expandAll = !m.expandAll
 		m.refresh()
 		return nil, true
 	case "pgup", "pgdown", "ctrl+u", "ctrl+b", "ctrl+f", "home", "end":
@@ -332,40 +401,100 @@ func (m *harnessModel) key(k tea.KeyMsg) (tea.Cmd, bool) {
 	return nil, false
 }
 
+func (m *harnessModel) quit() tea.Cmd {
+	if len(m.r.ownGuests()) > 0 {
+		m.quitting = true
+		return nil
+	}
+	return tea.Quit
+}
+
+func (m *harnessModel) subByName(name string) *harness.Agent {
+	if name == "" {
+		if a := m.selected(); a.Role == "sub" {
+			return a
+		}
+		return nil
+	}
+	return m.r.find(name)
+}
+
 func (m *harnessModel) command(text string) tea.Cmd {
 	f := strings.Fields(text)
+	arg := ""
+	if len(f) > 1 {
+		arg = f[1]
+	}
 	switch f[0] {
 	case "/quit", "/exit", "/q":
-		if len(m.r.ownGuests()) > 0 {
-			m.quitting = true
-			return nil
-		}
-		return tea.Quit
+		return m.quit()
 	case "/stop":
-		name := ""
-		if len(f) > 1 {
-			name = f[1]
-		} else if a := m.selected(); a.Role == "sub" {
-			name = a.Name
-		}
-		if name == "" {
-			m.flash = "Usage: /stop NAME"
+		a := m.subByName(arg)
+		if a == nil {
+			m.flash = "Usage: /stop NAME (or select a sub-agent)"
 			return nil
 		}
-		go func() {
-			out, err := m.r.stop(name, true)
-			if err != nil {
-				out = err.Error()
+		m.stopAgent(a)
+	case "/model", "/models":
+		if arg != "" {
+			m.applyModel(m.selected(), arg, "-")
+		} else {
+			return m.openPicker(m.selected())
+		}
+	case "/agent-model":
+		if arg != "" {
+			m.applyModel(nil, arg, "-")
+		} else {
+			return m.openPicker(nil)
+		}
+	case "/effort":
+		if _, ok := effortNames[arg]; !ok || arg == "" {
+			m.flash = "Usage: /effort low|medium|high|xhigh|max|auto"
+			if arg == "auto" {
+				m.applyModel(m.selected(), m.selected().ModelName(), "")
 			}
-			m.r.lead.Note("note", out)
-		}()
-		m.flash = "Stopping " + name + "…"
-	case "/models":
-		m.flash = "Providers: " + strings.Join(m.r.cfg.providerNames(), ", ") + ". Start with rux --model PROVIDER/MODEL"
+			return nil
+		}
+		m.applyModel(m.selected(), m.selected().ModelName(), arg)
+	case "/pane", "/view":
+		m.flash = m.openPane(m.subOrLead(arg))
+	case "/shell":
+		a := m.subByName(arg)
+		if a == nil {
+			m.flash = "Usage: /shell NAME (or select a sub-agent)"
+			return nil
+		}
+		m.flash = m.openShell(a)
+	case "/help":
+		m.panel = panelShortcuts
 	default:
-		m.flash = "Commands: /stop [NAME], /models, /quit"
+		m.flash = "Unknown command. ctrl+o lists them all; ? shows shortcuts"
 	}
 	return nil
+}
+
+func (m *harnessModel) subOrLead(name string) *harness.Agent {
+	if name == "lead" {
+		return m.r.lead
+	}
+	if a := m.subByName(name); a != nil {
+		return a
+	}
+	if name == "" {
+		return m.selected()
+	}
+	return nil
+}
+
+func (m *harnessModel) stopAgent(a *harness.Agent) {
+	m.flash = "Stopping " + a.Name + "…"
+	go func() {
+		out, err := m.r.stop(a.Name, true)
+		if err != nil {
+			out = err.Error()
+		}
+		m.r.lead.Note("note", out)
+	}()
 }
 
 func (m *harnessModel) anyBusy() bool {
@@ -377,51 +506,14 @@ func (m *harnessModel) anyBusy() bool {
 	return false
 }
 
-func (m *harnessModel) sidebarWidth() int {
-	switch {
-	case m.w >= 110:
-		return 30
-	case m.w >= 80:
-		return 24
-	}
-	return 0
-}
-
 func (m *harnessModel) fitInput() {
 	lines := strings.Count(m.input.Value(), "\n") + 1
 	if w := m.input.Width(); w > 0 {
-		lines = max(lines, (len(m.input.Value())+w-1)/w)
+		lines = max(lines, (lipgloss.Width(m.input.Value())+w-1)/w)
 	}
-	h := min(max(lines, 1), 6)
-	if h != m.input.Height() {
+	if h := min(max(lines, 1), 8); h != m.input.Height() {
 		m.input.SetHeight(h)
-		m.layout()
 	}
-}
-
-func (m *harnessModel) layout() {
-	if m.w == 0 {
-		return
-	}
-	main := m.w - m.sidebarWidth()
-	m.input.SetWidth(m.w - 4)
-	// header 1, input box (height+2), footer 1, tabs line when narrow
-	used := 1 + m.input.Height() + 2 + 1
-	if m.sidebarWidth() == 0 {
-		used++
-	}
-	m.vp.Width, m.vp.Height = main-2, max(m.h-used, 3)
-	if m.md == nil || m.mdWidth != m.vp.Width {
-		style := styles.DarkStyleConfig
-		zero := uint(0)
-		style.Document.Margin = &zero
-		style.Document.BlockPrefix, style.Document.BlockSuffix = "", ""
-		style.Code.Prefix, style.Code.Suffix = "", ""
-		m.md, _ = glamour.NewTermRenderer(glamour.WithStyles(style), glamour.WithWordWrap(max(m.vp.Width-4, 20)))
-		m.mdWidth = m.vp.Width
-		m.mdCache = map[string]string{}
-	}
-	m.refresh()
 }
 
 func (m *harnessModel) refresh() {
@@ -429,361 +521,306 @@ func (m *harnessModel) refresh() {
 		return
 	}
 	a := m.selected()
-	m.vp.SetContent(m.renderTranscript(a))
+	if a.Role == "lead" {
+		m.input.Placeholder = "Tell the lead what to do"
+	} else {
+		m.input.Placeholder = "Message " + a.Name
+	}
+	if m.welcoming() {
+		return
+	}
+	m.vp.Width = m.w - 4
+	ex := m.expanded[a.ID]
+	m.vp.SetContent(m.tr.render(a.Snapshot(), m.vp.Width, m.expandAll, ex, "tool:"+a.ID+":"))
 	if m.follow {
 		m.vp.GotoBottom()
 	}
-	if a.Role == "lead" {
-		m.input.Placeholder = "Message the lead…"
-	} else {
-		m.input.Placeholder = "Message " + a.Name + " directly…"
-	}
 }
 
-func (m *harnessModel) markdown(s string) string {
-	if out, ok := m.mdCache[s]; ok {
-		return out
+func (m *harnessModel) toggleEntry(a *harness.Agent, i int) tea.Cmd {
+	if m.expanded[a.ID] == nil {
+		m.expanded[a.ID] = map[int]bool{}
 	}
-	out := s
-	if m.md != nil {
-		if r, err := m.md.Render(s); err == nil {
-			out = strings.Trim(r, "\n")
-		}
-	}
-	m.mdCache[s] = out
-	return out
+	m.expanded[a.ID][i] = !m.expanded[a.ID][i]
+	m.follow = false
+	m.refresh()
+	return nil
 }
 
-func wrapText(s string, w int) string {
-	return lipgloss.NewStyle().Width(max(w, 10)).Render(s)
-}
-
-func hangIndent(s, first, rest string) string {
-	lines := strings.Split(s, "\n")
-	for i := range lines {
-		if i == 0 {
-			lines[i] = first + lines[i]
-		} else {
-			lines[i] = rest + lines[i]
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-func (m *harnessModel) renderTranscript(a *harness.Agent) string {
-	snap := a.Snapshot()
-	w := m.vp.Width
-	var out []string
-	if len(snap.Entries) == 0 {
-		if a.Role == "lead" {
-			out = append(out, m.welcome())
-		} else {
-			out = append(out, stDim.Render("  "+cmpOr(snap.Detail, "starting")))
-		}
-	}
-	for i, e := range snap.Entries {
-		last := i == len(snap.Entries)-1
-		switch e.Kind {
-		case "user":
-			from := cmpOr(e.From, "you")
-			label := stAccent.Render("❯ ")
-			body := wrapText(e.Text, w-4)
-			if from != "you" {
-				label = stDim.Render("◂ "+from) + "\n" + stAccent.Render("  ")
-				if !m.expand && strings.Count(body, "\n") > 12 {
-					body = strings.Join(strings.Split(body, "\n")[:12], "\n") + "\n" + stFaint.Render("… ctrl+o to expand")
-				}
-			}
-			out = append(out, lipgloss.NewStyle().Foreground(hText).Render(hangIndent(body, label, "  ")))
-		case "text":
-			text := strings.TrimSpace(e.Text)
-			if text == "" {
-				continue
-			}
-			var body string
-			if last && snap.Status == harness.Working {
-				body = wrapText(text, w-4) // still streaming
-			} else {
-				body = m.markdown(text)
-			}
-			out = append(out, hangIndent(strings.TrimLeft(body, " "), lipgloss.NewStyle().Foreground(hText).Render("⏺ "), "  "))
-		case "thinking":
-			text := strings.TrimSpace(e.Text)
-			head := stDim.Italic(true).Render("✻ Thinking")
-			if text == "" {
-				if last && snap.Status == harness.Working {
-					out = append(out, head+stDim.Render("…"))
-				}
-				continue
-			}
-			body := wrapText(text, w-4)
-			if !m.expand {
-				lines := strings.Split(body, "\n")
-				if len(lines) > 2 {
-					body = strings.Join(lines[len(lines)-2:], "\n")
-				}
-			}
-			out = append(out, head+"\n"+stFaint.Italic(true).Render(hangIndent(body, "  ", "  ")))
-		case "tool":
-			dot := lipgloss.NewStyle().Foreground(hGreen).Render("⏺")
-			if e.Running {
-				dot = m.spin.View()
-			} else if e.IsError {
-				dot = lipgloss.NewStyle().Foreground(hRed).Render("⏺")
-			}
-			label := strings.ReplaceAll(e.Label, "\n", " ")
-			if lw := w - len(e.Tool) - 6; len(label) > lw && lw > 10 && !m.expand {
-				label = label[:lw-1] + "…"
-			}
-			line := dot + " " + stBold.Render(e.Tool) + stDim.Render("("+label+")")
-			if !e.Running {
-				res := strings.TrimRight(e.Result, "\n")
-				lines := strings.Split(res, "\n")
-				show := 3
-				if m.expand {
-					show = 200
-				}
-				more := ""
-				if len(lines) > show {
-					more = stFaint.Render(fmt.Sprintf("… +%d lines (ctrl+o to expand)", len(lines)-show))
-					lines = lines[:show]
-				}
-				for j := range lines {
-					if len(lines[j]) > w-8 {
-						lines[j] = lines[j][:max(w-9, 1)] + "…"
-					}
-				}
-				st := stDim
-				if e.IsError {
-					st = lipgloss.NewStyle().Foreground(hRed)
-				}
-				body := st.Render(strings.Join(lines, "\n"))
-				if more != "" {
-					body += "\n" + more
-				}
-				line += "\n" + hangIndent(body, stFaint.Render("  ⎿  "), "     ")
-			}
-			out = append(out, line)
-		case "note":
-			out = append(out, stDim.Render(hangIndent(wrapText(e.Text, w-4), "  · ", "    ")))
-		case "error":
-			out = append(out, lipgloss.NewStyle().Foreground(hRed).Render(hangIndent(wrapText(e.Text, w-4), "  ✗ ", "    ")))
-		}
-	}
-	if snap.Status == harness.Working {
-		detail := cmpOr(snap.Detail, "working")
-		if len(detail) > w-20 && w > 30 {
-			detail = detail[:w-21] + "…"
-		}
-		out = append(out, m.spin.View()+" "+stDim.Render(detail+" · esc to interrupt"))
-	} else if snap.Status == harness.Starting && len(snap.Entries) > 0 {
-		out = append(out, m.spin.View()+" "+stDim.Render(cmpOr(snap.Detail, "starting")))
-	}
-	return strings.Join(out, "\n\n") + "\n"
-}
-
-func (m *harnessModel) welcome() string {
-	r := m.r
-	lines := []string{
-		stAccent.Bold(true).Render("◆ rux") + stDim.Render("  multi-agent harness"),
-		"",
-		stDim.Render("Tell the lead what you want done. It plans the work and starts sub-agents, " +
-			"each in its own sandboxed rox guest, and you watch them all here."),
-		"",
-		stDim.Render("  lead       ") + r.lead.Model,
-		stDim.Render("  sub-agents ") + cmpOr(r.cfg.AgentModel, r.lead.Model),
-		stDim.Render("  directory  ") + r.cwd,
-	}
-	if r.repo != "" {
-		lines = append(lines, stDim.Render("  repo       ")+r.repo)
-	}
-	return wrapText(strings.Join(lines, "\n"), m.vp.Width-2)
-}
-
-func (m *harnessModel) statusGlyph(st harness.Status, queued int) string {
-	switch st {
-	case harness.Working, harness.Starting:
-		return m.spin.View()
-	case harness.Waiting:
-		if queued > 0 {
-			return m.spin.View()
-		}
-		return lipgloss.NewStyle().Foreground(hGreen).Render("●")
-	case harness.Failed:
-		return lipgloss.NewStyle().Foreground(hRed).Render("✗")
-	default:
-		return stFaint.Render("○")
-	}
-}
-
-func (m *harnessModel) sidebar(height int) string {
-	w := m.sidebarWidth()
-	var rows []string
-	rows = append(rows, stDim.Render(" AGENTS"), "")
-	for i, a := range m.agents() {
-		snap := a.Snapshot()
-		name := a.Name
-		if len(name) > w-6 {
-			name = name[:w-7] + "…"
-		}
-		nameSt := lipgloss.NewStyle().Foreground(hText)
-		if i == m.sel {
-			nameSt = nameSt.Bold(true).Foreground(hAccent)
-		}
-		marker := " "
-		if i == m.sel {
-			marker = stAccent.Render("▌")
-		}
-		rows = append(rows, marker+m.statusGlyph(snap.Status, snap.Queued)+" "+nameSt.Render(name))
-		sub := string(snap.Status)
-		switch {
-		case snap.Status == harness.Waiting && a.Role == "lead":
-			sub = "ready"
-		case snap.Status == harness.Waiting && snap.Turns > 0:
-			sub = "done · waiting"
-		case snap.Detail != "":
-			sub = snap.Detail
-		}
-		if len(sub) > w-5 {
-			sub = sub[:w-6] + "…"
-		}
-		rows = append(rows, "   "+stDim.Render(sub))
-		if a.Role == "sub" {
-			m.r.mu.Lock()
-			s := m.r.subs[a.Name]
-			guest := ""
-			if s != nil {
-				guest = s.Guest
-			}
-			m.r.mu.Unlock()
-			meta := modelShort(a.Model)
-			if guest != "" {
-				meta += " · " + strings.TrimPrefix(guest, "rv-")
-			}
-			if len(meta) > w-5 {
-				meta = meta[:w-6] + "…"
-			}
-			rows = append(rows, "   "+stFaint.Render(meta))
-		}
-		rows = append(rows, "")
-	}
-	tokens := int64(0)
-	for _, a := range m.agents() {
-		u := a.Snapshot().Usage
-		tokens += u.Input + u.Output
-	}
-	for len(rows) < height-1 {
-		rows = append(rows, "")
-	}
-	rows = rows[:max(height-1, 0)]
-	rows = append(rows, stFaint.Render(fmt.Sprintf(" %s tokens", humanCount(tokens))))
-	return lipgloss.NewStyle().Width(w).Height(height).BorderStyle(lipgloss.NormalBorder()).BorderRight(true).
-		BorderForeground(hFaint).Render(strings.Join(rows, "\n"))
-}
-
-func modelShort(m string) string {
-	if i := strings.LastIndexByte(m, '/'); i >= 0 {
-		return m[i+1:]
-	}
-	return m
-}
-
-func humanCount(n int64) string {
-	switch {
-	case n >= 1_000_000:
-		return fmt.Sprintf("%.1fM", float64(n)/1e6)
-	case n >= 1000:
-		return fmt.Sprintf("%.1fk", float64(n)/1e3)
-	}
-	return fmt.Sprint(n)
-}
-
-func (m *harnessModel) tabs() string {
-	var parts []string
-	for i, a := range m.agents() {
-		snap := a.Snapshot()
-		name := a.Name
-		if i == m.sel {
-			name = stAccent.Bold(true).Render(name)
-		} else {
-			name = stDim.Render(name)
-		}
-		parts = append(parts, m.statusGlyph(snap.Status, snap.Queued)+" "+name)
-	}
-	return " " + strings.Join(parts, stFaint.Render("  │  "))
-}
+// ---- view ----
 
 func (m *harnessModel) View() string {
 	if m.w == 0 {
 		return ""
 	}
+	m.zones = map[string]func() tea.Cmd{}
 	a := m.selected()
-	working, total := 0, 0
-	for _, x := range m.agents()[1:] {
-		total++
-		if st, _ := x.Status(); st == harness.Working || st == harness.Starting {
-			working++
-		}
-	}
-	left := stAccent.Bold(true).Render(" ◆ rux") + stDim.Render("  "+a.Name+" · "+a.Model+" · "+cmpOr(a.Where, "setting up"))
-	right := ""
-	if total > 0 {
-		right = stDim.Render(fmt.Sprintf("%d sub-agent%s · %d working ", total, plural(total), working))
-	}
-	if lipgloss.Width(left)+lipgloss.Width(right) >= m.w {
-		left = lipgloss.NewStyle().MaxWidth(max(m.w-lipgloss.Width(right)-1, 10)).Render(left)
-	}
-	header := left + strings.Repeat(" ", max(m.w-lipgloss.Width(left)-lipgloss.Width(right), 1)) + right
 
-	var bottom string
+	// Bottom up: the prompt, the agents, whatever panel is open.
+	prompt := m.promptBox(a)
+	var above []string
 	switch {
 	case len(m.pending) > 0:
-		req := m.pending[0]
-		label := req.label
-		if len(label) > m.w-20 {
-			label = label[:m.w-21] + "…"
-		}
-		box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(hYellow).Padding(0, 1).Width(m.w - 2)
-		bottom = box.Render(lipgloss.NewStyle().Foreground(hYellow).Render(req.agent.Name+" wants to run "+req.tool+" on this machine:") +
-			"\n" + stBold.Render(label) + "\n" + stDim.Render("y allow · a allow all this session · n deny"))
+		above = append(above, m.approvalPanel())
 	case m.quitting:
-		gs := m.r.ownGuests()
-		box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(hYellow).Padding(0, 1).Width(m.w - 2)
-		bottom = box.Render(fmt.Sprintf("Remove the %d guest%s rux started (%s)? Unpushed work in them is lost.\n", len(gs), plural(len(gs)), strings.Join(gs, ", ")) +
-			stDim.Render("y remove and quit · n keep them and quit · esc cancel"))
-	default:
-		box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(hFaint).Padding(0, 1)
-		bottom = box.Render(m.input.View())
+		above = append(above, m.quitPanel())
+	case m.panel == panelPicker:
+		above = append(above, m.pickerView())
+	case m.panel == panelPalette:
+		above = append(above, m.paletteView())
+	case m.panel == panelShortcuts:
+		above = append(above, m.shortcutsView())
 	}
-	footer := m.flash
-	if footer == "" {
-		hints := []string{"enter send", "tab switch agent", "esc interrupt", "ctrl+o details", "pgup/pgdn scroll", "/stop", "ctrl+c quit"}
-		for len(hints) > 2 && len(strings.Join(hints, " · "))+1 > m.w {
-			hints = append(hints[:len(hints)-2], hints[len(hints)-1])
-		}
-		footer = strings.Join(hints, " · ")
+	if strip := m.agentStrip(); strip != "" {
+		above = append(above, strip)
 	}
-	footer = stFaint.Render(wrapText(" "+footer, m.w))
+	if m.flash != "" {
+		above = append(above, lipgloss.PlaceHorizontal(m.w, lipgloss.Right, stDim.Render(truncate(m.flash, m.w-4))+"  "))
+	}
+	bottom := lipgloss.JoinVertical(lipgloss.Left, append(above, prompt)...)
+	rest := max(m.h-lipgloss.Height(bottom), 3)
 
-	// The transcript gets the rows the rest leaves.
-	vh := m.h - 1 - lipgloss.Height(bottom) - lipgloss.Height(footer)
-	if m.sidebarWidth() == 0 {
-		vh--
-	}
-	if vh = max(vh, 3); vh != m.vp.Height {
-		m.vp.Height = vh
-		if m.follow {
-			m.vp.GotoBottom()
-		}
-	}
-	body := lipgloss.NewStyle().PaddingLeft(1).Render(m.vp.View())
-	if sw := m.sidebarWidth(); sw > 0 {
-		body = lipgloss.JoinHorizontal(lipgloss.Top, m.sidebar(m.vp.Height), body)
+	var body string
+	if m.welcoming() {
+		body = lipgloss.Place(m.w, rest, lipgloss.Center, lipgloss.Center, m.welcome())
 	} else {
-		body = m.tabs() + "\n" + body
+		if m.vp.Height != rest-1 {
+			m.vp.Height = rest - 1
+			if m.follow {
+				m.vp.GotoBottom()
+			}
+		}
+		// Each tool call in view opens with a click.
+		snap := a.Snapshot()
+		for i, e := range snap.Entries {
+			if e.Kind == "tool" || e.Kind == "thinking" || (e.Kind == "user" && e.From != "you" && e.From != "") {
+				i := i
+				m.zones[fmt.Sprintf("tool:%s:%d", a.ID, i)] = func() tea.Cmd { return m.toggleEntry(a, i) }
+			}
+		}
+		body = "\n" + lipgloss.NewStyle().PaddingLeft(2).Render(m.vp.View())
+		body = lipgloss.NewStyle().Height(rest).MaxHeight(rest).Render(body)
 	}
+	return zone.Scan(lipgloss.JoinVertical(lipgloss.Left, body, bottom))
+}
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, body, bottom, footer)
+func (m *harnessModel) welcome() string {
+	r := m.r
+	key := func(k string) string { return stBold.Render(k) }
+	bar := lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(hPink).PaddingLeft(1)
+	row := func(k, v string) string { return stDim.Render(fmt.Sprintf("%-11s", k)) + stText.Render(v) }
+	info := []string{
+		row("lead", prettyModel(r.lead.ModelName())+effortSuffix(r.effortOf(r.lead))),
+		row("sub-agents", prettyModel(r.agentModel())),
+		row("directory", tildePath(r.cwd)),
+	}
+	if r.repo != "" {
+		info = append(info, row("repo", repoDisplayName(r.repo)))
+	}
+	text := lipgloss.JoinVertical(lipgloss.Left,
+		lipgloss.NewStyle().Foreground(hPink).Bold(true).Render("Welcome to rux"),
+		m.click("w:palette", key("ctrl+o"), func() tea.Cmd { m.openPalette(); return nil })+stDim.Render(" for commands · ")+
+			m.click("w:keys", key("?"), func() tea.Cmd { m.panel = panelShortcuts; return nil })+stDim.Render(" for shortcuts"),
+		"",
+		bar.Render(lipgloss.JoinVertical(lipgloss.Left,
+			stDim.Render("Tell the lead what to do. It plans, then starts"),
+			stDim.Render("sub-agents in their own rox guests."),
+			"",
+			strings.Join(info, "\n"),
+		)),
+	)
+	logo := trexLogo(m.phase)
+	switch {
+	case m.w >= lipgloss.Width(logo)+lipgloss.Width(text)+8:
+		return lipgloss.JoinHorizontal(lipgloss.Center, logo, "    ", text)
+	case m.h >= lipgloss.Height(logo)+lipgloss.Height(text)+8 && m.w >= lipgloss.Width(logo)+2:
+		return lipgloss.JoinVertical(lipgloss.Center, logo, "", text)
+	}
+	return text
+}
+
+func tildePath(p string) string {
+	if home, _ := os.UserHomeDir(); home != "" && strings.HasPrefix(p, home) {
+		return "~" + strings.TrimPrefix(p, home)
+	}
+	return p
+}
+
+// promptBox is the input, in a rounded box with the model on its top border and where the
+// agent works on its bottom border. A click on the model opens the picker.
+func (m *harnessModel) promptBox(a *harness.Agent) string {
+	w := m.w
+	border := stFaint
+	if len(m.pending) > 0 {
+		border = lipgloss.NewStyle().Foreground(hYellow)
+	}
+	model := strings.ToLower(prettyModel(a.ModelName()))
+	if e := m.r.effortOf(a); e != "" {
+		model += " · " + strings.ToLower(effortNames[e])
+	}
+	modelLabel := m.click("prompt:model", stAccent.Render(model), func() tea.Cmd { return m.openPicker(m.selected()) })
+	left := ""
+	if a.Role == "sub" {
+		left = stText.Render(a.Name)
+	}
+	where := m.whereLabel(a)
+
+	top := border.Render("╭─")
+	if left != "" {
+		top += " " + left + " "
+	}
+	fill := w - lipgloss.Width(top) - lipgloss.Width(model) - 4
+	top += border.Render(strings.Repeat("─", max(fill, 1))) + " " + modelLabel + " " + border.Render("─╮")
+	bfill := w - lipgloss.Width(where) - 5
+	bottom := border.Render("╰"+strings.Repeat("─", max(bfill, 1))) + " " + stDim.Render(where) + " " + border.Render("─╯")
+	var mid []string
+	for _, line := range strings.Split(m.input.View(), "\n") {
+		pad := w - 4 - lipgloss.Width(line)
+		mid = append(mid, border.Render("│")+" "+line+strings.Repeat(" ", max(pad, 0))+" "+border.Render("│"))
+	}
+	return strings.Join(append(append([]string{top}, mid...), bottom), "\n")
+}
+
+func (m *harnessModel) whereLabel(a *harness.Agent) string {
+	if a.Role == "lead" {
+		w := tildePath(m.r.cwd)
+		if b := gitBranch(m.r.cwd); b != "" {
+			w += " (" + b + ")"
+		}
+		return truncate(w, m.w/2)
+	}
+	m.r.mu.Lock()
+	s := m.r.subs[a.Name]
+	m.r.mu.Unlock()
+	if s == nil || s.Guest == "" {
+		return "setting up"
+	}
+	w := s.Guest
+	if s.Host != "" {
+		w += " on " + s.Host
+	}
+	if s.Repo != "" {
+		w += " (rux/" + a.Name + ")"
+	}
+	return truncate(w, m.w/2)
+}
+
+var branchCache = map[string]string{}
+
+func gitBranch(dir string) string {
+	if b, ok := branchCache[dir]; ok {
+		return b
+	}
+	out, _ := exec.Command("git", "-C", dir, "branch", "--show-current").Output()
+	branchCache[dir] = strings.TrimSpace(string(out))
+	return branchCache[dir]
+}
+
+func (m *harnessModel) glyph(st harness.Status, queued int) string {
+	switch st {
+	case harness.Working, harness.Starting:
+		return m.tr.spin.View()
+	case harness.Waiting:
+		if queued > 0 {
+			return m.tr.spin.View()
+		}
+		return lipgloss.NewStyle().Foreground(hGreen).Render("●")
+	case harness.Failed:
+		return lipgloss.NewStyle().Foreground(hRed).Render("✗")
+	}
+	return stFaint.Render("○")
+}
+
+// agentStrip lists the agents above the prompt, once there are sub-agents. Click one to
+// see it; the selected sub-agent has buttons for a Rex pane and a shell in its guest.
+func (m *harnessModel) agentStrip() string {
+	agents := m.agents()
+	if len(agents) < 2 {
+		return ""
+	}
+	var parts []string
+	for i, a := range agents {
+		snap := a.Snapshot()
+		name := stDim.Render(a.Name)
+		if i == m.sel {
+			name = lipgloss.NewStyle().Foreground(hText).Bold(true).Underline(true).Render(a.Name)
+		}
+		item := m.glyph(snap.Status, snap.Queued) + " " + name
+		if snap.Status == harness.Working && i != m.sel {
+			item += stFaint.Render(" " + truncate(snap.Detail, 18))
+		}
+		i := i
+		parts = append(parts, m.click(fmt.Sprintf("agent:%d", i), item, func() tea.Cmd {
+			m.sel = i
+			m.follow = true
+			m.refresh()
+			return nil
+		}))
+	}
+	strip := " " + strings.Join(parts, "   ")
+	var btns []string
+	if a := m.selected(); a.Role == "sub" {
+		if os.Getenv("REX_SESSION") != "" {
+			btns = append(btns, m.click("btn:pane", stDim.Render("⧉ pane"), func() tea.Cmd { m.flash = m.openPane(a); return nil }))
+			btns = append(btns, m.click("btn:shell", stDim.Render("› shell"), func() tea.Cmd { m.flash = m.openShell(a); return nil }))
+		}
+		btns = append(btns, m.click("btn:stop", stDim.Render("■ stop"), func() tea.Cmd { m.stopAgent(a); return nil }))
+	}
+	right := strings.Join(btns, "  ") + "  "
+	gap := m.w - lipgloss.Width(strip) - lipgloss.Width(right)
+	if gap < 2 {
+		return truncate(strip, m.w)
+	}
+	return strip + strings.Repeat(" ", gap) + right
+}
+
+func button(label string, primary bool) string {
+	st := lipgloss.NewStyle().Padding(0, 1).Foreground(hText).Background(lipgloss.Color("237"))
+	if primary {
+		st = st.Foreground(lipgloss.Color("#1a1a1a")).Background(hPink).Bold(true)
+	}
+	return st.Render(label)
+}
+
+func (m *harnessModel) panelBox(color lipgloss.Color, body string) string {
+	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(color).Padding(0, 1).
+		Width(m.w - 6).MarginLeft(2).Render(body)
+}
+
+func (m *harnessModel) approvalPanel() string {
+	req := m.pending[0]
+	head := lipgloss.NewStyle().Foreground(hYellow).Render(req.agent.Name + " wants to run " + req.tool + " on this machine")
+	btns := m.click("ap:yes", button("Allow  y", true), func() tea.Cmd { m.answer(allowOnce); return nil }) + " " +
+		m.click("ap:all", button("Allow all this session  a", false), func() tea.Cmd { m.answer(allowAlways); return nil }) + " " +
+		m.click("ap:no", button("Deny  n", false), func() tea.Cmd { m.answer(deny); return nil })
+	return m.panelBox(hYellow, head+"\n"+stBold.Render(wrapText(req.label, m.w-12))+"\n\n"+btns)
+}
+
+func (m *harnessModel) quitPanel() string {
+	gs := m.r.ownGuests()
+	head := fmt.Sprintf("Remove the %d guest%s rux started? Unpushed work in them is lost.", len(gs), plural(len(gs)))
+	btns := m.click("q:yes", button("Remove and quit  y", true), func() tea.Cmd { m.removeGuests = true; return tea.Quit }) + " " +
+		m.click("q:no", button("Keep them and quit  n", false), func() tea.Cmd { return tea.Quit }) + " " +
+		m.click("q:esc", button("Cancel  esc", false), func() tea.Cmd { m.quitting = false; return nil })
+	return m.panelBox(hYellow, stText.Render(head)+"\n"+stFaint.Render(strings.Join(gs, ", "))+"\n\n"+btns)
+}
+
+func (m *harnessModel) shortcutsView() string {
+	keys := [][2]string{
+		{"enter", "send to the selected agent"}, {"alt+enter", "new line"},
+		{"tab / shift+tab", "next / previous agent"}, {"esc", "interrupt the selected agent"},
+		{"ctrl+o", "commands"}, {"ctrl+l", "model and effort"},
+		{"ctrl+e", "open every tool call (or click one)"}, {"pgup / pgdn", "scroll (or the mouse wheel)"},
+		{"ctrl+c", "clear the prompt, or quit"},
+		{"/model /agent-model", "change models"}, {"/effort LEVEL", "change effort"},
+		{"/pane [NAME]", "an agent in a Rex pane"}, {"/shell [NAME]", "a shell in its guest"},
+		{"/stop [NAME]", "stop a sub-agent"},
+	}
+	var lines []string
+	for _, k := range keys {
+		lines = append(lines, stBold.Render(fmt.Sprintf("%-20s", k[0]))+stDim.Render(k[1]))
+	}
+	return m.panelBox(hFaint, strings.Join(lines, "\n")+"\n"+stFaint.Render("any key closes"))
 }
 
 // saveSession writes every agent's transcript to ~/.rux/sessions/TIME/.
@@ -805,7 +842,7 @@ func saveSession(r *hrun) string {
 	for _, a := range agents {
 		snap := a.Snapshot()
 		_ = saveJSON(filepath.Join(dir, a.Name+".json"), map[string]any{
-			"name": a.Name, "role": a.Role, "model": a.Model, "where": a.Where, "status": snap.Status,
+			"name": a.Name, "role": a.Role, "model": a.ModelName(), "where": a.Where, "status": snap.Status,
 			"usage": snap.Usage, "entries": snap.Entries,
 		})
 		_ = os.WriteFile(filepath.Join(dir, a.Name+".md"), []byte(transcriptText(snap.Entries, len(snap.Entries))), 0o600)

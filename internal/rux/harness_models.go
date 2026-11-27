@@ -64,6 +64,26 @@ func claudeCodeModel(spec string) (string, bool) {
 	return "", false
 }
 
+// codexEngine runs OpenAI's Codex CLI itself, signed in the way Codex is (ChatGPT works).
+// codex/MODEL picks its model.
+const codexEngine = "codex"
+
+// agentCLI reports whether spec runs an agent CLI (claude for claude-code, codex for codex)
+// rather than a model API, and with which model.
+func agentCLI(spec string) (cli, model string, ok bool) {
+	if m, ok := claudeCodeModel(spec); ok {
+		return "claude", m, true
+	}
+	spec = strings.TrimSpace(spec)
+	if spec == codexEngine {
+		return "codex", "", true
+	}
+	if m, ok := strings.CutPrefix(spec, codexEngine+"/"); ok {
+		return "codex", m, true
+	}
+	return "", "", false
+}
+
 // defaultLead is the lead's model: the configured one, else Claude through the API when
 // there's a key, else Claude Code when it's installed.
 func (c harnessConfig) defaultLead() string {
@@ -75,6 +95,9 @@ func (c harnessConfig) defaultLead() string {
 	}
 	if _, err := exec.LookPath("claude"); err == nil {
 		return claudeCode
+	}
+	if _, err := exec.LookPath("codex"); err == nil {
+		return codexEngine
 	}
 	return defaultModel
 }
@@ -149,6 +172,11 @@ func apiKey(name string) (string, error) {
 
 // newProvider resolves a model to a provider with its key.
 func (c harnessConfig) newProvider(spec string) (harness.Provider, error) {
+	return c.newProviderEffort(spec, c.Effort)
+}
+
+// newProviderEffort is newProvider with an effort for this agent.
+func (c harnessConfig) newProviderEffort(spec, effort string) (harness.Provider, error) {
 	name, model, err := splitModel(spec)
 	if err != nil {
 		return nil, err
@@ -164,12 +192,12 @@ func (c harnessConfig) newProvider(spec string) (harness.Provider, error) {
 	switch pc.Kind {
 	case "anthropic":
 		// Without a key, the SDK falls back to ANTHROPIC_AUTH_TOKEN or an ant auth login profile.
-		return &harness.Anthropic{Model: model, APIKey: key, BaseURL: pc.BaseURL, Effort: c.Effort}, nil
+		return &harness.Anthropic{Model: model, APIKey: key, BaseURL: pc.BaseURL, Effort: effort}, nil
 	case "openai":
 		if pc.Key != "" && key == "" {
 			return nil, fmt.Errorf("%s needs an API key. Store it with rix: rix secret set %s", name, pc.Key)
 		}
-		return &harness.OpenAI{Label: name, Model: model, BaseURL: pc.BaseURL, APIKey: key, Headers: pc.Headers}, nil
+		return &harness.OpenAI{Label: name, Model: model, BaseURL: pc.BaseURL, APIKey: key, Headers: pc.Headers, Effort: effort}, nil
 	}
 	return nil, fmt.Errorf("provider %s has kind %q; use anthropic or openai", name, pc.Kind)
 }

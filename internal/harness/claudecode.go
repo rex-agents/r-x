@@ -39,6 +39,8 @@ type ClaudeCode struct {
 	// Command starts claude with these arguments, here or in a guest.
 	Command func(args []string) *exec.Cmd
 	Model   string
+	// Effort is low, medium, high, xhigh or max.
+	Effort string
 	// System is appended to Claude Code's system prompt.
 	System string
 	// AllowedTools run without asking; with SkipPermissions everything does. Anything
@@ -77,6 +79,9 @@ func (c *ClaudeCode) args() []string {
 	}
 	if c.Model != "" {
 		args = append(args, "--model", c.Model)
+	}
+	if c.Effort != "" {
+		args = append(args, "--effort", c.Effort)
 	}
 	if c.System != "" {
 		args = append(args, "--append-system-prompt", c.System)

@@ -65,6 +65,7 @@ type Agent struct {
 	usage    Usage
 	conv     Conversation
 	runner   TurnRunner
+	carry    string
 	tools    []Tool
 	inbox    []message
 	wake     chan struct{}
@@ -85,6 +86,10 @@ func NewAgent(id, name, role string) *Agent {
 // Attach gives the agent its model and tools; messages sent before are kept.
 func (a *Agent) Attach(p Provider, system string, tools []Tool, where string) {
 	a.mu.Lock()
+	if a.runner != nil {
+		go a.runner.Close()
+	}
+	a.runner = nil
 	a.conv, a.tools, a.Model, a.Where, a.attached = p.New(system), tools, p.Name(), where, true
 	if a.status == Starting {
 		a.status = Waiting
@@ -98,6 +103,10 @@ func (a *Agent) Attach(p Provider, system string, tools []Tool, where string) {
 // AttachRunner gives the agent an engine that runs whole turns itself, such as Claude Code.
 func (a *Agent) AttachRunner(r TurnRunner, where string) {
 	a.mu.Lock()
+	if a.runner != nil && a.runner != r {
+		go a.runner.Close()
+	}
+	a.conv = nil
 	a.runner, a.Model, a.Where, a.attached = r, r.Name(), where, true
 	if a.status == Starting {
 		a.status = Waiting
@@ -106,6 +115,36 @@ func (a *Agent) AttachRunner(r TurnRunner, where string) {
 	a.mu.Unlock()
 	a.poke()
 	a.changedNow()
+}
+
+// Carry gives the next turn context the new engine lacks, such as the conversation so far
+// with another model. It's sent ahead of the next message.
+func (a *Agent) Carry(context string) {
+	a.mu.Lock()
+	a.carry = context
+	a.mu.Unlock()
+}
+
+// Busy reports whether a turn is running.
+func (a *Agent) Busy() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.status == Working
+}
+
+// SetModelName names the engine an agent that's still starting will get.
+func (a *Agent) SetModelName(name string) {
+	a.mu.Lock()
+	a.Model = name
+	a.mu.Unlock()
+	a.changedNow()
+}
+
+// ModelName is the agent's engine, as provider/model.
+func (a *Agent) ModelName() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.Model
 }
 
 // Close stops the agent's engine.
@@ -243,7 +282,12 @@ func (a *Agent) drain() string {
 		}
 	}
 	a.inbox = nil
-	return strings.Join(parts, "\n\n")
+	text := strings.Join(parts, "\n\n")
+	if a.carry != "" {
+		text = a.carry + "\n\n---\n\n" + text
+		a.carry = ""
+	}
+	return text
 }
 
 const maxSteps = 300
