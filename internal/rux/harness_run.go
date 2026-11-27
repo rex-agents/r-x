@@ -66,6 +66,16 @@ type subInfo struct {
 	// Model is the engine it was started with, as provider/model or claude-code[/MODEL].
 	Model string
 	exec  *harness.Guest
+
+	// ctx covers this sub-agent's provisioning and ends when it's stopped.
+	ctx    context.Context
+	cancel context.CancelFunc
+	// done closes when provisioning has returned, so stop knows the guest name is final.
+	done chan struct{}
+	// stopped is sticky: once set, provisioning attaches nothing and reports nothing.
+	stopped bool
+	// cleanup serializes stops, so a retry can't race a stop that's removing the guest.
+	cleanup sync.Mutex
 }
 
 type approval struct {
@@ -239,7 +249,9 @@ func (r *hrun) leadTools() []harness.Tool {
 				if sub == nil {
 					return "", fmt.Errorf("no sub-agent named %s; agent_status lists them", a.Agent)
 				}
-				sub.Send("lead", a.Message)
+				if err := sub.TrySend("lead", a.Message); err != nil {
+					return "", err
+				}
 				return "Sent to " + sub.Name, nil
 			},
 		},
@@ -411,6 +423,8 @@ func (r *hrun) spawnTool(_ context.Context, in json.RawMessage) (string, error) 
 		CLI: cli, Model: model}
 	sub.OnTurnEnd = func(s *harness.Agent, text string, err error) { r.subTurnEnded(s, text, err) }
 	effort := r.subEffort()
+	info.ctx, info.cancel = context.WithCancel(r.ctx)
+	info.done = make(chan struct{})
 	r.mu.Lock()
 	r.agents = append(r.agents, sub)
 	r.subs[name] = info
@@ -418,7 +432,10 @@ func (r *hrun) spawnTool(_ context.Context, in json.RawMessage) (string, error) 
 	r.mu.Unlock()
 	sub.Send("lead", a.Task)
 	go sub.Run(r.ctx)
-	go r.provision(sub, info)
+	go func() {
+		defer close(info.done)
+		r.provision(sub, info)
+	}()
 	where := "a new " + gt + " guest"
 	if a.Host != "" {
 		where += " on " + a.Host
@@ -433,7 +450,13 @@ func (r *hrun) spawnTool(_ context.Context, in json.RawMessage) (string, error) 
 // provision sets up a sub-agent's guest, then hands it its tools.
 func (r *hrun) provision(a *harness.Agent, s *subInfo) {
 	fail := func(format string, args ...any) {
+		if r.isStopped(s) {
+			return // the user stopped it; stop reports and cleans up
+		}
 		msg := fmt.Sprintf(format, args...)
+		if g := r.guestOf(s); g != "" && !s.Shared {
+			msg += " (guest " + g + " was kept; stop_agent removes it)"
+		}
 		a.SetStatus(harness.Failed, msg)
 		a.Note("error", msg)
 		r.subTurnEnded(a, "", errors.New(msg))
@@ -466,7 +489,7 @@ func (r *hrun) provision(a *harness.Agent, s *subInfo) {
 				args = append(args, "--branch", s.Branch)
 			}
 			a.SetStatus(harness.Starting, "cloning into "+s.Guest)
-			if _, err := r.roxStream(a, rox, args); err != nil {
+			if _, err := r.roxStream(a, rox, args, nil); err != nil {
 				fail("rox add failed: %v", err)
 				return
 			}
@@ -496,31 +519,32 @@ func (r *hrun) provision(a *harness.Agent, s *subInfo) {
 			args = append(args, "--no-tailscale")
 		}
 		a.SetStatus(harness.Starting, "starting a "+s.GuestTyp+" guest"+map[bool]string{true: " on " + s.Host, false: ""}[s.Host != ""])
-		before := roxGuestNames(rox, s.Host)
-		guest, err := r.roxStream(a, rox, args)
+		// The guest is recorded the moment rox names it, so stop can remove it even
+		// if rox up fails or is cancelled later. Only a name rox up itself printed
+		// counts as ours; nothing is guessed from the list of guests.
+		_, err := r.roxStream(a, rox, args, func(name string) {
+			r.mu.Lock()
+			if s.Guest == "" {
+				s.Guest = name
+			}
+			r.mu.Unlock()
+		})
 		if err != nil {
 			fail("rox up failed: %v", err)
 			return
 		}
-		if guest == "" {
-			for n := range roxGuestNames(rox, s.Host) {
-				if !before[n] {
-					guest = n
-				}
-			}
-		}
-		if guest == "" {
-			fail("couldn't tell which guest rox up started")
+		if r.guestOf(s) == "" {
+			fail("rox up finished but didn't say which guest it started; check rox ls before starting again")
 			return
 		}
-		r.mu.Lock()
-		s.Guest = guest
-		r.mu.Unlock()
+	}
+	if r.isStopped(s) {
+		return
 	}
 
 	a.SetStatus(harness.Starting, "connecting to "+s.Guest)
 	var g contract.Guest
-	out, err := exec.Command(rox, "inspect", s.Guest, "--json").Output()
+	out, err := exec.CommandContext(s.ctx, rox, "inspect", s.Guest, "--json").Output()
 	if err != nil || json.Unmarshal(out, &g) != nil {
 		fail("couldn't read %s's record: %v", s.Guest, err)
 		return
@@ -543,15 +567,25 @@ func (r *hrun) provision(a *harness.Agent, s *subInfo) {
 	}
 	if s.Repo != "" {
 		br := "rux/" + a.Name
-		if out, code, err := ex.Run(r.ctx, "git switch -c "+harness.ShellQuote(br)+" 2>&1 || git switch "+harness.ShellQuote(br), nil, time.Minute); err != nil || code != 0 {
+		if out, code, err := ex.Run(s.ctx, "git switch -c "+harness.ShellQuote(br)+" 2>&1 || git switch "+harness.ShellQuote(br), nil, time.Minute); err != nil || code != 0 {
+			if r.isStopped(s) {
+				return
+			}
 			a.Note("note", "Couldn't make the branch "+br+": "+lastLine(out))
 		}
 	}
 	r.mu.Lock()
+	if s.stopped {
+		r.mu.Unlock()
+		return
+	}
 	s.exec = ex
 	r.mu.Unlock()
 	if err := r.attachSub(a, s, s.Model); err != nil {
 		fail("%v", err)
+		return
+	}
+	if r.isStopped(s) {
 		return
 	}
 	a.Note("note", fmt.Sprintf("Working in %s:%s", s.Guest, s.Dir))
@@ -559,8 +593,13 @@ func (r *hrun) provision(a *harness.Agent, s *subInfo) {
 
 // roxStream runs rox, showing its latest line as the agent's status, and returns the
 // guest name it printed.
-func (r *hrun) roxStream(a *harness.Agent, rox string, args []string) (string, error) {
-	cmd := exec.CommandContext(r.ctx, rox, args...)
+func (r *hrun) roxStream(a *harness.Agent, rox string, args []string, onGuest func(string)) (string, error) {
+	ctx := r.ctx
+	if s := r.subOf(a); s != nil {
+		ctx = s.ctx
+	}
+	cmd := exec.CommandContext(ctx, rox, args...)
+	cmd.WaitDelay = 5 * time.Second
 	pr, pw := io.Pipe()
 	cmd.Stdout, cmd.Stderr = pw, pw
 	cmd.Env = append(os.Environ(), "NO_COLOR=1")
@@ -577,8 +616,11 @@ func (r *hrun) roxStream(a *harness.Agent, rox string, args []string) (string, e
 			if line == "" {
 				continue
 			}
-			if guest == "" {
-				guest = guestNameRe.FindString(line)
+			if name := launchedGuest(line); guest == "" && name != "" {
+				guest = name
+				if onGuest != nil {
+					onGuest(name)
+				}
 			}
 			tail = append(tail, line)
 			if len(tail) > 8 {
@@ -627,7 +669,7 @@ func (r *hrun) waitTool(ctx context.Context, in json.RawMessage) (string, error)
 	if len(a.Agents) == 0 {
 		r.mu.Lock()
 		for _, s := range r.agents[1:] {
-			if st, _ := s.Status(); st == harness.Working || st == harness.Starting || s.Snapshot().Queued > 0 {
+			if st, _ := s.Status(); st == harness.Working || st == harness.Starting || (!s.Terminal() && s.Snapshot().Queued > 0) {
 				targets = append(targets, s)
 			}
 		}
@@ -668,7 +710,7 @@ func (r *hrun) waitTool(ctx context.Context, in json.RawMessage) (string, error)
 		busy := false
 		for _, t := range targets {
 			snap := t.Snapshot()
-			if snap.Status == harness.Starting || snap.Status == harness.Working || snap.Queued > 0 {
+			if snap.Status == harness.Starting || snap.Status == harness.Working || (snap.Queued > 0 && snap.Status != harness.Stopped && snap.Status != harness.Failed) {
 				busy = true
 			}
 		}
@@ -698,7 +740,20 @@ func (r *hrun) waitTool(ctx context.Context, in json.RawMessage) (string, error)
 		fmt.Fprintf(&b, "## %s (%s)\n", t.Name, snap.Status)
 		switch {
 		case snap.Status == harness.Failed || snap.Err != "":
-			b.WriteString("Error: " + cmpOr(snap.Err, snap.Detail) + "\n\n")
+			b.WriteString("Error: " + cmpOr(snap.Err, snap.Detail) + "\n")
+			if snap.Queued > 0 {
+				fmt.Fprintf(&b, "%d queued message(s) were never read.\n", snap.Queued)
+			}
+			b.WriteString("\n")
+		case snap.Status == harness.Stopped:
+			b.WriteString("Error: stopped before it finished; it won't report.\n")
+			if snap.Queued > 0 {
+				fmt.Fprintf(&b, "%d queued message(s) were never read.\n", snap.Queued)
+			}
+			if snap.Last != "" {
+				b.WriteString("Its last report:\n" + snap.Last + "\n")
+			}
+			b.WriteString("\n")
 		case snap.Last != "":
 			b.WriteString(snap.Last + "\n\n")
 		default:
@@ -746,23 +801,64 @@ func (r *hrun) statusText(excerpt int) string {
 	return b.String()
 }
 
-// stop stops a sub-agent and, unless it worked in an existing guest, removes its guest.
+// isStopped reports whether stop was called for a sub-agent.
+func (r *hrun) isStopped(s *subInfo) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return s.stopped
+}
+
+func (r *hrun) guestOf(s *subInfo) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return s.Guest
+}
+
+func (r *hrun) subOf(a *harness.Agent) *subInfo {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.subs[a.Name]
+}
+
+// stop stops a sub-agent for good and, unless it worked in an existing guest, removes
+// its guest. Stopping is sticky: provisioning that's still running is cancelled and
+// can't revive the agent. The guest is removed only if rox up named it for this agent;
+// if removal fails, its name is kept so stop can be run again.
 func (r *hrun) stop(name string, remove bool) (string, error) {
 	a := r.find(name)
 	if a == nil {
 		return "", fmt.Errorf("no sub-agent named %s", name)
 	}
-	a.Interrupt()
-	a.SetStatus(harness.Stopped, "")
-	r.mu.Lock()
-	s := r.subs[a.Name]
-	r.mu.Unlock()
-	if s.Guest == "" || s.Shared || !remove {
-		return "Stopped " + a.Name + map[bool]string{true: "; kept its guest " + s.Guest, false: ""}[s.Guest != ""], nil
+	s := r.subOf(a)
+	if s == nil {
+		return "", fmt.Errorf("no sub-agent named %s", name)
 	}
-	out, err := exec.Command("rox", "down", s.Guest).CombinedOutput()
+	r.mu.Lock()
+	s.stopped = true
+	r.mu.Unlock()
+	a.Stop()
+	s.cancel()
+	a.Close()
+	// Provisioning may be between rox up naming the guest and returning; wait for it
+	// so the guest we remove is the final one.
+	select {
+	case <-s.done:
+	case <-time.After(30 * time.Second):
+		return "", fmt.Errorf("stopped %s, but its guest is still being set up; run stop_agent again in a moment to remove it", a.Name)
+	}
+	s.cleanup.Lock()
+	defer s.cleanup.Unlock()
+	guest := r.guestOf(s)
+	if guest == "" || s.Shared || !remove {
+		return "Stopped " + a.Name + map[bool]string{true: "; kept its guest " + guest, false: ""}[guest != ""], nil
+	}
+	down := []string{"down"}
+	if s.Host != "" {
+		down = append(down, "-S", s.Host)
+	}
+	out, err := exec.Command("rox", append(down, guest)...).CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("stopped %s, but rox down %s failed: %s", a.Name, s.Guest, lastLine(ansiRe.ReplaceAllString(string(out), "")))
+		return "", fmt.Errorf("stopped %s, but rox down %s failed (stop_agent again retries): %s", a.Name, guest, lastLine(ansiRe.ReplaceAllString(string(out), "")))
 	}
 	r.mu.Lock()
 	s.Guest = ""
