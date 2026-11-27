@@ -15,11 +15,14 @@ phone (PWA) ──HTTPS (tailscale serve)──▶ rux serve        (Mac: web ap
 - Messages to a thread (the first prompt, what you type, a manager's wake-ups) wait in
   `outbox.jsonl` until the runner acks them. The server sends every unacked message each time a
   runner connects, under a stable `id`; the runner stores a message in `~/.rux/THREAD/inbox/` before
-  it acks, and ignores an id it already ran. A dropped connection, a restart or a sleeping guest
-  therefore doesn't lose a message (durable delivery). The runner records a message as run only after
-  claude's stdin has taken all of it; if that fails, it keeps the message and retries with a backoff.
-  A crash after the write but before the record replays that one message on restart: at-least-once,
-  not exactly-once. Runners from
+  it acks, and ignores an id it already dispatched. A dropped connection, a restart or a sleeping
+  guest therefore doesn't lose a message (durable delivery). Delivery to claude has three steps: the
+  runner announces the turn with a `rux_user` event (id as `mid`), writes the whole message to
+  claude's stdin pipe, and then records a `rux_delivered` event with the id. That record means the
+  pipe write completed (dispatch), not that claude has started, finished or even read the turn. If
+  claude can't start or the write fails, the runner keeps the message and retries with a backoff,
+  without announcing it again. A crash after the write but before the `rux_delivered` record replays
+  that one message on restart: at-least-once, not exactly-once. Runners from
   before acks (no `acks` in hello) get each message once, best effort, as before, and a new runner
   still takes messages with no id.
 - If the repo can't be cloned, the thread is `failed` with a `rux_setup_failed` event (the manager is
