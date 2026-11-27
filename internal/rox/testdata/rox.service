@@ -1,0 +1,15 @@
+[Unit]
+Description=Keep rox guests running
+
+[Service]
+ExecStart="/usr/local/bin/rox" "service" "run"
+Environment="PATH=/usr/bin:/bin"
+Environment="XDG_STATE_HOME=/s & t"
+Restart=always
+RestartSec=10
+KillMode=process
+StandardOutput=append:/log/service.log
+StandardError=append:/log/service.log
+
+[Install]
+WantedBy=default.target

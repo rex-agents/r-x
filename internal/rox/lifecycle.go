@@ -1,0 +1,1065 @@
+package rox
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/rex-agents/r-x/internal/contract"
+	"github.com/rex-agents/r-x/internal/sys"
+	"github.com/rex-agents/r-x/internal/ui"
+)
+
+// UpOptions are rox up's and rox add's flags.
+type UpOptions struct {
+	ProjectArgs
+	Backend       string
+	Config        string
+	Image         string
+	CPUs          int
+	CPUsSet       bool
+	Memory        string
+	Engine        string
+	BootTimeout   time.Duration
+	NoHook        bool
+	NoPrebuild    bool
+	Rebuild       bool
+	NoTailscale   bool
+	NoGitAgent    bool
+	NoAgents      bool
+	Agents        string
+	GitKeys       []string
+	GitKnownHosts string
+	OpenShell     bool
+	LocalSettings string
+	// Vault chooses whose rix vault a launch on another host uses: "host" (the default) or "here".
+	Vault   string
+	Command []string
+}
+
+func (o *UpOptions) launch(url string) *contract.Launch {
+	return &contract.Launch{URL: url, GitKeys: o.GitKeys, GitKnownHosts: o.GitKnownHosts, NoGitAgent: o.NoGitAgent}
+}
+
+var memoryPattern = regexp.MustCompile(`(?i)^[0-9]+[KMGT]$`)
+var userPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_.-]*$`)
+
+// remoteOptions carries the launch's options to rox on another host.
+func remoteOptions(o *UpOptions) []string {
+	var out []string
+	add := func(flag, value string) {
+		if value != "" {
+			out = append(out, "--"+flag+"="+value)
+		}
+	}
+	add("config", o.Config)
+	add("image", o.Image)
+	add("engine", o.Engine)
+	add("memory", o.Memory)
+	add("git-known-hosts", o.GitKnownHosts)
+	add("agents", o.Agents)
+	if o.CPUsSet {
+		out = append(out, fmt.Sprintf("--cpus=%d", o.CPUs))
+	}
+	for _, key := range o.GitKeys {
+		out = append(out, "--git-key="+key)
+	}
+	for flag, on := range map[string]bool{"no-hook": o.NoHook, "no-prebuild": o.NoPrebuild, "rebuild": o.Rebuild,
+		"no-tailscale": o.NoTailscale, "no-agents": o.NoAgents, "no-git-agent": o.NoGitAgent} {
+		if on {
+			out = append(out, "--"+flag)
+		}
+	}
+	if o.Vault == "here" {
+		// The host's vault still gives the clone its Git keys; credentials and setup come from here.
+		out = append(out, "--hooks=git")
+	}
+	sortStrings(out)
+	return out
+}
+
+func projectOptions(src *Source) []string {
+	if src == nil {
+		return []string{"--no-project"}
+	}
+	return []string{"--project=" + src.Name, "--repo=" + src.URL, "--branch=" + src.Branch}
+}
+
+// Up starts and provisions a new guest.
+func Up(o *UpOptions) error {
+	if o.Host != "" && strings.TrimSpace(o.Host) == "" {
+		return errors.New("--host needs a Rex host label or address")
+	}
+	if o.Vault != "" && o.Vault != "host" && o.Vault != "here" {
+		return errors.New("Expected host or here for --vault")
+	}
+	if o.Vault == "here" && o.Host == "" {
+		return errors.New("--vault here is for launches on another host with --host")
+	}
+	src, err := ResolveProject(o.ProjectArgs, false)
+	if err != nil {
+		return err
+	}
+	checkout, err := localCheckout(o.ProjectArgs)
+	if err != nil {
+		return err
+	}
+	local := map[string]any{}
+	if src != nil {
+		if local, err = localProjectSettings(o.ProjectArgs, o.LocalSettings); err != nil {
+			return err
+		}
+	}
+	detail := "a guest without a project"
+	if src != nil {
+		detail = src.Name + " · " + src.Branch
+	}
+	if o.Backend != "" {
+		detail += " → " + o.Backend
+	}
+	if o.Host != "" {
+		ui.Header("up", detail+" on "+o.Host)
+		args := append([]string{"up"}, o.Backend)
+		if o.Backend == "" {
+			args = []string{"up"}
+		}
+		args = append(args, projectOptions(src)...)
+		args = append(args, fmt.Sprintf("--boot-timeout=%d", int(o.BootTimeout.Seconds())))
+		if len(local) > 0 {
+			data, _ := json.Marshal(local)
+			args = append(args, "--local-settings="+string(data))
+		}
+		args = append(args, remoteOptions(o)...)
+		if len(o.Command) > 0 {
+			args = append(append(args, "--"), o.Command...)
+		}
+		label := "host"
+		if src != nil {
+			label = src.Name
+		}
+		text, err := dispatch(o.Host, label, args)
+		if err != nil {
+			return err
+		}
+		registerRemoteGuest(text, o.Host)
+		if o.Vault == "here" {
+			applyHere(text)
+		}
+		openRemoteGuest(text)
+		return nil
+	}
+	ui.Header("up", detail)
+	if src == nil {
+		ui.Info("Starting a guest without a project. Add one later with %s", ui.Code("rox add NAME"))
+	}
+	appSession := ""
+	if o.OpenShell {
+		if appSession = os.Getenv("REX_SESSION"); appSession == "" {
+			return errors.New("--open-shell requires a Rex terminal")
+		}
+	}
+	config, err := LoadConfig(o.Config)
+	if err != nil {
+		return err
+	}
+	config.warnMovedSettings()
+	tailnet, err := config.TailnetSettings(o.NoTailscale)
+	if err != nil {
+		return err
+	}
+	flagAgents := AgentSpec{}
+	if o.Agents != "" {
+		if flagAgents, err = ParseAgentFlag(o.Agents); err != nil {
+			return err
+		}
+	}
+
+	var branch *Branch
+	var lease *Lease
+	defer func() { lease.Close() }()
+	projectConfig := map[string]any{}
+	if checkout != "" {
+		// The guest gets this checkout as it is, so its own .rox.json applies, not the remote branch's.
+		if projectConfig, err = ReadProjectFile(filepath.Join(checkout, ProjectConfig), ProjectConfig); err != nil {
+			return err
+		}
+	} else if src != nil {
+		if err := sys.Require("git"); err != nil {
+			return err
+		}
+		if isSSHRemote(src.URL) {
+			lease = fetchLease(o.launch(src.URL))
+		}
+		if branch, err = ReadBranch(src, lease); err != nil {
+			return err
+		}
+		if branch != nil {
+			projectConfig = branch.Settings
+		}
+	}
+	backend := firstNonEmpty(o.Backend, str(local["backend"]), str(projectConfig["backend"]))
+	if backend == "" {
+		return fmt.Errorf("Choose a backend with rox up container, linux, macos, fly or railway, or set \"backend\" in %s", ProjectConfig)
+	}
+	if o.Backend == "" {
+		where := ProjectConfig
+		if str(local["backend"]) != "" {
+			where = LocalConfig
+		}
+		ui.Info("Using the %s backend from %s", ui.Bold(backend), where)
+	}
+	agents := AgentSpec{}
+	if !o.NoAgents {
+		agents = MergeAgents(projectAgents(projectConfig, ProjectConfig), projectAgents(local, LocalConfig), flagAgents)
+	}
+
+	launcherSettings, err := config.Section(backend)
+	if err != nil {
+		return err
+	}
+	projectSection, _ := projectConfig[backend].(map[string]any)
+	localSection, _ := local[backend].(map[string]any)
+	// The branch's settings override the launcher's, the checkout's override the branch's, and flags override all.
+	settings := map[string]any{}
+	for _, layer := range []map[string]any{launcherSettings, projectSection, localSection} {
+		for k, v := range layer {
+			settings[k] = v
+		}
+	}
+	origin := func(key string) string {
+		if _, ok := localSection[key]; ok {
+			return LocalConfig
+		}
+		if _, ok := projectSection[key]; ok {
+			return ProjectConfig
+		}
+		return config.Path
+	}
+	if o.Engine != "" && backend != "container" {
+		return errors.New("--engine applies to the container backend")
+	}
+	engine := ""
+	if backend == "container" {
+		engine = firstNonEmpty(o.Engine, str(settings["engine"]), DefaultEngine())
+		if !contains(Engines, engine) {
+			return errors.New("Choose container, docker or podman as the container engine")
+		}
+	}
+	cpus := o.CPUs
+	if !o.CPUsSet {
+		if raw, ok := settings["cpus"]; ok {
+			n, ok := intSetting(raw)
+			if _, isBool := raw.(bool); !ok || isBool || n < 0 {
+				return fmt.Errorf("Expected a whole number of CPUs for %s.cpus in %s", backend, origin("cpus"))
+			}
+			cpus = n
+		}
+	}
+	memory := o.Memory
+	if memory == "" {
+		if raw, ok := settings["memory"]; ok {
+			m, ok := raw.(string)
+			if !ok || (m != "" && !memoryPattern.MatchString(m)) {
+				return fmt.Errorf("Expected a size such as 4G or 512M for %s.memory in %s", backend, origin("memory"))
+			}
+			memory = m
+		}
+	} else if !memoryPattern.MatchString(memory) {
+		return errors.New("Expected a size such as 4G or 512M for --memory")
+	}
+	var flyCfg *FlySettings
+	var railwayCfg *RailwaySettings
+	image := ""
+	switch backend {
+	case "railway":
+		if railwayCfg, err = railwaySettings(settings, config.Path); err != nil {
+			return err
+		}
+		// Railway sizes sandboxes by plan and runs only its own image, which rox's template builds on.
+		for option, set := range map[string]bool{"image": o.Image != "" || str(settings["image"]) != "", "cpus": cpus != 0, "memory": memory != ""} {
+			if set {
+				return fmt.Errorf("The railway backend takes no %s. Railway sizes sandboxes by plan", option)
+			}
+		}
+	case "fly":
+		if flyCfg, err = flySettings(settings, config.Path); err != nil {
+			return err
+		}
+		// No image means rox's own, which Fly builds and stores in the app's registry.
+		image = firstNonEmpty(o.Image, str(settings["image"]))
+		if strings.HasPrefix(image, "-") {
+			return fmt.Errorf("Expected an image name for --image or fly.image in %s", origin("image"))
+		}
+	default:
+		fallback := ""
+		if engine != "" {
+			fallback = DefaultContainerImage
+		}
+		image = firstNonEmpty(o.Image, str(settings["image"]), fallback)
+		if image == "" || strings.HasPrefix(image, "-") {
+			return fmt.Errorf("Choose a %s image with --image or in %s", backend, origin("image"))
+		}
+	}
+	identity, hostKey, user := "", "", "workspace"
+	if engine == "" && !isCloud(backend) {
+		user = firstNonEmpty(str(settings["user"]), "admin")
+		if identity, err = sys.ConfiguredFile(str(settings["identity"])); err != nil {
+			return err
+		}
+		if hostKey, err = sys.ConfiguredFile(str(settings["host_key"])); err != nil {
+			return err
+		}
+		if identity == "" || hostKey == "" || !userPattern.MatchString(user) {
+			return fmt.Errorf("Configure user, identity and host_key for %s in %s, or run %s", backend, config.Path, ui.Code("rox template "+backend))
+		}
+	}
+	prebuild := true
+	if raw, ok := settings["prebuild"]; ok {
+		b, ok := raw.(bool)
+		if !ok {
+			return fmt.Errorf("Expected true or false for %s.prebuild in %s", backend, origin("prebuild"))
+		}
+		prebuild = b
+	}
+	// A project image holds a remote branch, and a --local launch runs .rox.sh on the copied checkout.
+	prebuild = prebuild && src != nil && !o.NoPrebuild && !o.NoHook && checkout == "" && !isCloud(backend)
+	if o.Rebuild && !prebuild {
+		return errors.New("--rebuild needs a project image, which --no-project, --no-hook, --no-prebuild, --local, prebuild: false and the fly and railway backends disable")
+	}
+
+	required := []string{"rex", "ssh", "ssh-keygen"}
+	switch {
+	case engine != "":
+		required = append(required, engine)
+	case !isCloud(backend):
+		required = append(required, "tart")
+	}
+	if engine == "container" && !sys.Has("container") {
+		return errors.New("Install Apple's container tool (https://github.com/apple/container), or choose --engine docker or --engine podman")
+	}
+	if err := sys.Require(required...); err != nil {
+		return err
+	}
+	probe := NewGuest("", backend, "", "", engine)
+	if err := backendFor(probe).Ensure(); err != nil {
+		return err
+	}
+	if _, err := sys.PrivateDir(StateRoot()); err != nil {
+		return err
+	}
+	if engine != "" {
+		if err := PrepareBaseImage(engine, image); err != nil {
+			return err
+		}
+	}
+	if flyCfg != nil {
+		account, err := flyAccount()
+		if err != nil {
+			return err
+		}
+		flyCfg.App = firstNonEmpty(flyCfg.App, flyAppName(account))
+		if err := ensureFlyApp(flyCfg.App, flyCfg.Org); err != nil {
+			return err
+		}
+		if image == "" {
+			if image, err = flyImage(flyCfg.App); err != nil {
+				return err
+			}
+		}
+	}
+	if railwayCfg != nil {
+		if _, err := railwayCLI(); err != nil {
+			return err
+		}
+	}
+	versions := map[string]string{}
+	if len(agents) > 0 {
+		versions = AgentVersions(agents, false)
+	}
+	prebuilt := ""
+	if prebuild {
+		prebuilt, err = backendFor(probe).Prebuild(&PrebuildRequest{Backend: backend, Base: image, Project: src.Name, URL: src.URL,
+			Branch: src.Branch, Branch_: branch, Rebuild: o.Rebuild, User: user, Identity: identity, HostKey: hostKey,
+			Boot: o.BootTimeout, CPUs: cpus, Memory: memory, Versions: versions, Lease: lease})
+		if err != nil {
+			return err
+		}
+	}
+	lease.Close()
+	lease = nil
+	launchImage := firstNonEmpty(prebuilt, image)
+	if engine != "" && len(versions) > 0 {
+		if launchImage, err = PrepareAgentImage(engine, launchImage, versions); err != nil {
+			return err
+		}
+	}
+
+	slug := "host"
+	if src != nil {
+		slug = src.Name
+	}
+	name := "rv-" + firstNonEmpty(Slugify(slug, 24), "project") + "-" + randomHex(6)
+	g := NewGuest(name, backend, launchImage, user, engine)
+	g.Prebuilt, g.CPUs, g.Memory = prebuilt != "", cpus, memory
+	if flyCfg != nil {
+		g.App, g.Region, g.Disk = flyCfg.App, flyCfg.Region, flyCfg.Disk
+	}
+	if railwayCfg != nil {
+		g.RailwayProject, g.RailwayEnvironment, g.RailwayIdleTimeout = railwayCfg.Project, railwayCfg.Environment, railwayCfg.IdleTimeout
+	}
+	if err := os.Mkdir(g.Directory(), 0o700); err != nil {
+		return err
+	}
+	g.Identity = firstNonEmpty(identity, filepath.Join(g.Directory(), "login"))
+	l, err := lockGuest(g, false)
+	if err != nil {
+		return err
+	}
+	defer l.Unlock()
+	if err := g.Save(); err != nil {
+		return err
+	}
+	fail := func(err error) error {
+		g.Phase = "failed"
+		g.MustSave()
+		if g.Registered {
+			ui.Warn("Rex host %s is available even though setup failed", g.Name)
+		}
+		ui.Hint("Workspace " + g.Name + " was kept. Remove it with " + ui.Code("rox down "+g.Name))
+		return err
+	}
+	if err := bootGuest(g, hostKey, o.BootTimeout, versions, tailnet); err != nil {
+		return fail(err)
+	}
+	if src == nil {
+		if g.SessionID, err = startSession(g, g.Name, g.Home(), o.Command); err != nil {
+			return fail(err)
+		}
+		g.MustSave()
+		if err := attachGuest(g, g.SessionID); err != nil {
+			return fail(err)
+		}
+	}
+	g.Phase = "ready"
+	g.MustSave()
+	var project *Project
+	if src != nil {
+		if project, err = provisionProject(g, src, o, prebuilt != "", checkout); err != nil {
+			return err
+		}
+	}
+	runHook(contract.PostProvision, g, &contract.Launch{NewAgents: sortedAgents(versions)})
+	describeGuest(g, project)
+	l.Unlock()
+	suggestAppHost(g.Name)
+	if appSession != "" {
+		if err := openOrTab(appSession, g, project); err != nil {
+			return fmt.Errorf("%s is ready. Open it on this host with rox shell %s (%v)", g.Name, g.Name, err)
+		}
+	}
+	return nil
+}
+
+func str(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+// bootGuest launches the guest and readies it: Rex server, agents, credentials, tailnet, host entry.
+func bootGuest(g *Guest, hostKey string, boot time.Duration, versions map[string]string, tailnet *Tailnet) error {
+	b := backendFor(g)
+	s := ui.Start("Starting %s", ui.Bold(g.Name))
+	if hostKey != "" {
+		data, err := os.ReadFile(hostKey)
+		if err == nil {
+			err = pinHost(g, string(data))
+		}
+		if err != nil {
+			s.Fail(err)
+			return err
+		}
+	}
+	if err := ensureRuntimeDirs(g); err != nil {
+		s.Fail(err)
+		return err
+	}
+	addr, port, err := b.Launch(g, boot, s)
+	if err == nil {
+		g.Address, g.Port = addr, port
+		g.MustSave()
+		s.Note("waiting for SSH")
+		err = checkGuestOS(g, boot)
+	}
+	var out string
+	if err == nil {
+		out, err = guestStage(g, "prepare", stageOpts{}, g.Name)
+	}
+	if err == nil {
+		paths := sys.Lines(out)
+		if len(paths) != 2 || !strings.HasPrefix(paths[0], "/") || !strings.HasPrefix(paths[1], "/") || strings.ContainsAny(out, ":") {
+			err = errors.New("Guest preparation did not return valid state and socket paths")
+		} else {
+			g.GuestSocket = paths[1]
+			g.MustSave()
+		}
+	}
+	if err != nil {
+		s.Fail(err)
+		return err
+	}
+	s.Done("Started %s %s", ui.Bold(g.Name), ui.Muted("· "+g.Backend+" "+b.Kind()))
+	if len(versions) > 0 {
+		// Before the Rex server starts, so it and every terminal it opens read the credentials.
+		fresh, err := installAgents(g, versions)
+		if err != nil {
+			return err
+		}
+		runHook(contract.PostBoot, g, &contract.Launch{NewAgents: fresh})
+	}
+	err = ui.Run("Starting Rex in the guest", "Rex is running in the guest", func(*ui.Step) error {
+		if _, err := guestStage(g, "server", stageOpts{}, g.GuestSocket); err != nil {
+			return err
+		}
+		return attachGuest(g, "")
+	})
+	if err != nil {
+		return err
+	}
+	if tailnet != nil {
+		if err := enableTailnet(g, tailnet, boot); err != nil {
+			return err
+		}
+	}
+	if err := registerGuest(g); err != nil {
+		return err
+	}
+	shareLauncherHosts(g)
+	return nil
+}
+
+func startSession(g *Guest, label, cwd string, command []string) (string, error) {
+	launch := []string{"rex", "--autostart=false", "-S", "unix://" + g.GuestSocket, "new", label, "-c", cwd, "--json"}
+	if len(command) > 0 {
+		launch = append(append(launch, "--keep-open", "--"), command...)
+	}
+	out, err := guestStage(g, "session", stageOpts{}, launch...)
+	if err != nil {
+		return "", err
+	}
+	var created struct {
+		SessionID string `json:"session_id"`
+	}
+	if json.Unmarshal([]byte(out), &created) != nil || created.SessionID == "" {
+		return "", errors.New("Rex did not return a session ID")
+	}
+	return created.SessionID, nil
+}
+
+// provisionProject clones a project into a ready guest, runs its hook and starts its Rex session.
+func provisionProject(g *Guest, src *Source, o *UpOptions, imageCheckout bool, local string) (*Project, error) {
+	p := g.AddProject(src.Name, src.URL, src.Branch)
+	// Checkouts go in the guest home. A project image prepared the first project's there already.
+	p.Workspace = filepath.Join(g.Home(), p.ID)
+	g.MustSave()
+	err := func() error {
+		// rix starts the guest's Git agent and lends it for the clone, with its pinned server keys.
+		knownHosts := ""
+		agent := ""
+		forward := false
+		if isSSHRemote(src.URL) {
+			reply, err := runHook(contract.PreClone, g, o.launch(src.URL))
+			if err != nil {
+				return err
+			}
+			if reply != nil {
+				agent, forward, knownHosts = reply.AgentSocket, reply.Forward, reply.KnownHosts
+			} else if provider, _ := HookProvider(); provider == "" {
+				ui.Warn("No rix on this machine, so the guest clones %s without Git keys", src.URL)
+			}
+			if knownHosts == "" {
+				knownHosts = gitHostEntries(src.URL)
+			}
+		}
+		pins := filepath.Join(g.Base(), "git_known_hosts")
+		if knownHosts != "" {
+			if _, err := guestRun(g, []string{"bash", "-c", `umask 077; mkdir -p "${1%/*}" && cat > "$1"`, "rox", pins}, knownHosts, 30*time.Second); err != nil {
+				return err
+			}
+		}
+		args := []string{p.Workspace, src.URL, src.Branch, yesNo(agent != ""), pins}
+		if local != "" {
+			args = append(args, "local")
+		}
+		verb := "Cloned"
+		if imageCheckout {
+			verb = "Updated the image's checkout of"
+		}
+		err := ui.Run(fmt.Sprintf("Cloning %s (%s)", src.Name, src.Branch), fmt.Sprintf("%s %s (%s) %s", verb, src.Name, src.Branch, ui.Muted("→ "+p.Workspace)), func(*ui.Step) error {
+			_, err := guestStage(g, "clone", stageOpts{Agent: agent, Timeout: 30 * time.Minute}, args...)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		if local != "" {
+			if err := ui.Run("Copying "+local, "Copied this checkout's work into the guest", func(*ui.Step) error {
+				return sendLocal(g, p.Workspace, local, src.Branch)
+			}); err != nil {
+				return err
+			}
+		}
+		mode := fmt.Sprint(o.NoHook)
+		if imageCheckout {
+			mode = "prebuilt"
+		}
+		hookStep := ui.Start("Setting up %s", p.ID)
+		out, err := guestStage(g, "setup", stageOpts{Timeout: 2 * time.Hour}, p.Workspace, g.Name, g.Backend, g.GuestSocket, mode)
+		if err != nil {
+			hookStep.Fail(err)
+			return err
+		}
+		_ = out
+		switch {
+		case imageCheckout:
+			hookStep.Skip(".rox.sh already ran in the project image")
+		case o.NoHook:
+			hookStep.Skip("Skipped .rox.sh (--no-hook)")
+		default:
+			hookStep.Done("Set up %s", p.ID)
+		}
+		if p.SessionID, err = startSession(g, src.Name, p.Workspace, o.Command); err != nil {
+			return err
+		}
+		g.MustSave()
+		if err := attachGuest(g, p.SessionID); err != nil {
+			return err
+		}
+		p.Phase = "ready"
+		g.MustSave()
+		// After .rox.sh, which runs without Git keys, so only Git and agents in the guest get them.
+		if forward && agent != "" {
+			if err := startGitForward(g, agent); err != nil {
+				ui.Warn("Git in %s can't use your SSH keys: %v", g.Name, err)
+			} else {
+				ui.Done("Git keys forwarded into the guest %s", ui.Muted("· never copied"))
+			}
+		}
+		return nil
+	}()
+	if err != nil {
+		p.Phase = "failed"
+		g.MustSave()
+		ui.Warn("Setting up %s failed. Rex host %s is still available", p.ID, g.Name)
+		ui.Hint("Workspace " + g.Name + " was kept. Remove it with " + ui.Code("rox down "+g.Name))
+		return nil, err
+	}
+	return p, nil
+}
+
+func describeGuest(g *Guest, p *Project) {
+	target := g.Endpoint()
+	if g.Registered {
+		target = g.Name
+	}
+	fields := []ui.Field{{Label: "Workspace", Value: g.Name}, {Label: "Tailnet", Value: g.TailnetName}}
+	if len(g.Agents) > 0 {
+		fields = append(fields, ui.Field{Label: "Agents", Value: DescribeAgents(g.Agents)})
+	}
+	session := g.SessionID
+	if p != nil {
+		fields = append(fields, ui.Field{Label: "Project", Value: p.ID}, ui.Field{Label: "Checkout", Value: p.Workspace})
+		session = p.SessionID
+	}
+	if session != "" {
+		fields = append(fields, ui.Field{Label: "Session", Value: session},
+			ui.Field{Label: "Inspect", Value: ui.Code("rex -S " + target + " session inspect " + session)})
+	} else {
+		fields = append(fields, ui.Field{Label: "Inspect", Value: ui.Code("rex -S " + target + " ls")})
+	}
+	status := g.Phase
+	if g.Stopped {
+		status = "stopped"
+	}
+	ui.Card(g.Name, status, fields)
+}
+
+func openOrTab(session string, g *Guest, p *Project) error {
+	if localApp() != nil {
+		s := g.SessionID
+		if p != nil {
+			s = p.SessionID
+		}
+		return openInApp(g.Name, g.Endpoint(), s, firstNonEmpty(g.TailnetName, g.Endpoint()))
+	}
+	id := ""
+	if p != nil {
+		id = p.ID
+	}
+	return openAppShell(session, g.Name, id)
+}
+
+// applyHere pushes this machine's credentials and agent setup into a guest launched elsewhere.
+func applyHere(text string) {
+	workspace, _, _ := parseProvision(text)
+	if workspace == "" {
+		return
+	}
+	provider, _ := HookProvider()
+	if provider == "" {
+		ui.Warn("--vault here needs rix on this machine")
+		return
+	}
+	s := ui.Start("Applying this machine's vault to %s", workspace)
+	result, err := sys.Try(sys.Cmd{Argv: []string{provider, "apply", workspace, "--quiet"}, Timeout: 10 * time.Minute, Env: map[string]string{"ROX_BIN": selfPath()}})
+	if err == nil && result.Code != 0 {
+		err = &sys.ExitError{Argv: []string{provider}, Result: result, Message: "rix apply failed for " + workspace}
+	}
+	if err != nil {
+		s.Warn("Could not apply this machine's vault to %s: %s", workspace, firstLine(err.Error()))
+		return
+	}
+	s.Done("Applied this machine's credentials and agent setup to %s", workspace)
+}
+
+// Add clones another project into a running guest.
+func Add(name string, o *UpOptions) error {
+	if o.Host != "" && strings.TrimSpace(o.Host) == "" {
+		return errors.New("--host needs a Rex host label or address")
+	}
+	if !NamePattern.MatchString(name) {
+		return fmt.Errorf("Invalid workspace name %q", name)
+	}
+	src, err := ResolveProject(o.ProjectArgs, true)
+	if err != nil {
+		return err
+	}
+	checkout, err := localCheckout(o.ProjectArgs)
+	if err != nil {
+		return err
+	}
+	if o.Host == "" && !IsLocal(name) {
+		host, _, err := findRemoteGuest(name, "")
+		if err != nil {
+			return err
+		}
+		o.Host = host
+	}
+	if o.Host != "" {
+		ui.Header("add", src.Name+" · "+src.Branch+" → "+name+" on "+o.Host)
+		args := append([]string{"add", name}, projectOptions(src)...)
+		args = append(args, remoteOptions(o)...)
+		if len(o.Command) > 0 {
+			args = append(append(args, "--"), o.Command...)
+		}
+		text, err := dispatch(o.Host, src.Name, args)
+		if err != nil {
+			return err
+		}
+		if o.Vault == "here" {
+			applyHere(text)
+		}
+		openRemoteGuest(text)
+		return nil
+	}
+	ui.Header("add", src.Name+" · "+src.Branch+" → "+name)
+	appSession := ""
+	if o.OpenShell {
+		if appSession = os.Getenv("REX_SESSION"); appSession == "" {
+			return errors.New("--open-shell requires a Rex terminal")
+		}
+	}
+	config, err := LoadConfig(o.Config)
+	if err != nil {
+		return err
+	}
+	if err := sys.Require("rex", "ssh"); err != nil {
+		return err
+	}
+	// The added project may list agents of its own.
+	projectConfig := map[string]any{}
+	local, err := localProjectSettings(o.ProjectArgs, o.LocalSettings)
+	if err != nil {
+		return err
+	}
+	if checkout != "" {
+		if projectConfig, err = ReadProjectFile(filepath.Join(checkout, ProjectConfig), ProjectConfig); err != nil {
+			return err
+		}
+	} else if !o.NoAgents {
+		var lease *Lease
+		if isSSHRemote(src.URL) {
+			lease = fetchLease(o.launch(src.URL))
+		}
+		branch, err := ReadBranch(src, lease)
+		lease.Close()
+		if err != nil {
+			return err
+		}
+		if branch != nil {
+			projectConfig = branch.Settings
+		}
+	}
+	flagAgents := AgentSpec{}
+	if o.Agents != "" {
+		if flagAgents, err = ParseAgentFlag(o.Agents); err != nil {
+			return err
+		}
+	}
+	wanted := AgentSpec{}
+	if !o.NoAgents {
+		wanted = MergeAgents(projectAgents(projectConfig, ProjectConfig), projectAgents(local, LocalConfig), flagAgents)
+	}
+	var project *Project
+	var g *Guest
+	err = withGuest(name, false, func(guest *Guest) error {
+		g = guest
+		if g.Stopped {
+			return fmt.Errorf("%s is stopped. Start it with rox start %s before adding a project", name, name)
+		}
+		if g.Phase != "ready" || g.GuestSocket == "" {
+			return fmt.Errorf("%s is %s. Run rox reconnect %s before adding a project", name, g.Phase, name)
+		}
+		if _, err := resume(g, savedTailnet(g, o.Config), 120*time.Second, true); err != nil {
+			return err
+		}
+		missing := AgentSpec{}
+		for agent, version := range wanted {
+			if have, ok := g.Agents[agent]; !ok || (version != "latest" && have != version) {
+				missing[agent] = version
+			}
+		}
+		var fresh []string
+		if len(missing) > 0 {
+			var err error
+			if fresh, err = installAgents(g, AgentVersions(missing, false)); err != nil {
+				return err
+			}
+		}
+		var err error
+		if project, err = provisionProject(g, src, o, false, checkout); err != nil {
+			return err
+		}
+		runHook(contract.PostProvision, g, &contract.Launch{NewAgents: fresh})
+		describeGuest(g, project)
+		return nil
+	})
+	_ = config
+	if err != nil {
+		return err
+	}
+	if appSession != "" {
+		if err := openOrTab(appSession, g, project); err != nil {
+			return fmt.Errorf("%s is ready. Open it with rox shell %s %s (%v)", project.ID, name, project.ID, err)
+		}
+	}
+	return nil
+}
+
+// resume brings a guest back after its runtime, the guest or its tunnel stopped. A guest
+// that's running and reachable is left alone unless force is set. It reports whether
+// anything had to be restored.
+func resume(g *Guest, tailnet *Tailnet, boot time.Duration, force bool) (bool, error) {
+	b := backendFor(g)
+	if err := b.Ensure(); err != nil {
+		return false, err
+	}
+	state, err := b.State(g)
+	if err != nil {
+		return false, err
+	}
+	switch state {
+	case "missing":
+		return false, fmt.Errorf("The %s for %s no longer exists. Remove the workspace with rox down %s", b.Kind(), g.Name, g.Name)
+	case "stopped":
+		s := ui.Start("Starting %s", g.Name)
+		closeTunnel(g)
+		err := b.Start(g, boot)
+		if err == nil {
+			var addr string
+			var port int
+			addr, port, err = waitAddress(b, g, boot, g.Name+" to get an address")
+			if err == nil {
+				g.Address, g.Port = addr, port
+				g.MustSave()
+				err = checkGuestOS(g, boot)
+			}
+		}
+		if err != nil {
+			s.Fail(err)
+			return false, err
+		}
+		s.Done("Started %s", g.Name)
+	default:
+		if !force && reachable(g) {
+			restored := restoreFunnels(g)
+			return restoreGitAccess(g) || restored, nil
+		}
+	}
+	closeTunnel(g)
+	// A tunnel to the old address can pass its check until SSH notices the guest went away.
+	for _, f := range g.Funnels {
+		closeFunnelTunnel(g, f)
+	}
+	closeGitForward(g)
+	err = ui.Run("Reconnecting to Rex in "+g.Name, "Reconnected to Rex in "+g.Name, func(*ui.Step) error { return connect(g, tailnet) })
+	if err != nil {
+		return false, err
+	}
+	if err := registerGuest(g); err != nil {
+		return false, err
+	}
+	shareLauncherHosts(g)
+	restoreFunnels(g)
+	restoreGitAccess(g)
+	return true, nil
+}
+
+// restoreGitAccess asks rix to bring back the guest's Git agent, and forwards it again.
+func restoreGitAccess(g *Guest) bool {
+	if sys.PidAlive(gitForwardPid(g)) {
+		return false
+	}
+	reply, _ := runHook(contract.Resume, g, nil)
+	if reply == nil || reply.AgentSocket == "" || !reply.Forward {
+		return false
+	}
+	if err := startGitForward(g, reply.AgentSocket); err != nil {
+		ui.Warn("Git in %s can't use your SSH keys until this works: %v", g.Name, err)
+		return false
+	}
+	return true
+}
+
+// readyGuest loads a guest for a command that needs it running, restoring it if needed.
+func readyGuest(name string) (*Guest, error) {
+	g, err := LoadGuest(name)
+	if err != nil {
+		return nil, err
+	}
+	if g.Stopped {
+		return nil, fmt.Errorf("%s is stopped. Start it with rox start %s", name, name)
+	}
+	if g.Phase != "ready" {
+		return nil, fmt.Errorf("%s is not ready", name)
+	}
+	if state, err := backendFor(g).State(g); err == nil && state == "running" && reachable(g) {
+		// A restart breaks the tunnel, so a reachable guest is still at its saved address.
+		return g, nil
+	}
+	err = withGuest(name, true, func(guest *Guest) error {
+		g = guest
+		_, err := resume(g, savedTailnet(g, ""), 120*time.Second, false)
+		return err
+	})
+	return g, err
+}
+
+// Reconnect starts the guest if it stopped, and restores its tunnel, Rex server and tailnet node.
+func Reconnect(name string, force bool) error {
+	verb := "reconnect"
+	if !force {
+		verb = "start"
+	}
+	ui.Header(verb, name)
+	return withGuest(name, false, func(g *Guest) error {
+		if g.GuestSocket == "" || g.Phase == "removing" {
+			return fmt.Errorf("%s did not get far enough to start a Rex server", name)
+		}
+		g.Stopped = false
+		g.MustSave()
+		restored, err := resume(g, savedTailnet(g, ""), 120*time.Second, force)
+		if err != nil {
+			return err
+		}
+		if !restored {
+			ui.Skip("%s is running and reachable", name)
+		}
+		g.Phase = "ready"
+		g.MustSave()
+		describeGuest(g, nil)
+		if len(g.Projects) > 0 {
+			var rows [][]string
+			for _, p := range g.Projects {
+				rows = append(rows, []string{p.ID, ui.Phase(p.Phase), p.Workspace})
+			}
+			ui.Say("")
+			ui.Table([]string{"project", "phase", "checkout"}, rows)
+		}
+		return nil
+	})
+}
+
+// Stop stops the guest and keeps it stopped until rox start, deleting nothing.
+func Stop(name string) error {
+	ui.Header("stop", name)
+	return withGuest(name, false, func(g *Guest) error {
+		if g.Phase == "removing" {
+			return fmt.Errorf("%s is being removed", name)
+		}
+		if g.Backend == "railway" {
+			return fmt.Errorf("Railway sandboxes can't be stopped and started again. Remove %s with rox down", name)
+		}
+		g.Stopped = true
+		g.MustSave()
+		stopFunnels(g, nil)
+		closeGitForward(g)
+		closeTunnel(g)
+		b := backendFor(g)
+		return ui.Run("Stopping "+g.Name, "Stopped "+g.Name, func(*ui.Step) error {
+			if state, err := b.State(g); err != nil || state != "running" {
+				return err
+			}
+			return b.Stop(g)
+		})
+	})
+}
+
+// Down deletes a guest, its files and its Rex host entry.
+func Down(name string) error {
+	ui.Header("down", name)
+	return withGuest(name, false, func(g *Guest) error {
+		g.Phase = "removing"
+		g.MustSave()
+		stopFunnels(g, nil)
+		leaveTailnet(g)
+		runHook(contract.Down, g, nil)
+		closeGitForward(g)
+		closeTunnel(g)
+		b := backendFor(g)
+		if err := ui.Run(fmt.Sprintf("Deleting the %s", b.Kind()), fmt.Sprintf("Deleted the %s", b.Kind()), func(*ui.Step) error {
+			return b.Destroy(g)
+		}); err != nil {
+			return err
+		}
+		if g.Registered && !removeRexHost(name) {
+			return fmt.Errorf("Could not remove Rex host %s", name)
+		}
+		closeShellWindows(g)
+		os.RemoveAll(g.Runtime())
+		if err := os.RemoveAll(g.Directory()); err != nil {
+			return err
+		}
+		ui.Done("Removed %s", ui.Bold(name))
+		return nil
+	})
+}
+
+// DownRemote removes a guest on another Rex host, and this machine's host entry for it.
+func DownRemote(name, host string) error {
+	if !NamePattern.MatchString(name) {
+		return errors.New("Name the workspace to remove on another host: rox down NAME --host HOST")
+	}
+	ui.Header("down", name+" on "+host)
+	if _, err := dispatch(host, name, []string{"down", name}); err != nil {
+		return err
+	}
+	if !removeRexHost(name) {
+		return fmt.Errorf("Removed %s on %s, but could not remove its Rex host on this machine", name, host)
+	}
+	return nil
+}

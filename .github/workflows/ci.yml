@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Check go.mod and go.sum are tidy
+        run: go mod tidy -diff
+      - run: go vet ./...
+      - run: go test ./...
+
+  build:
+    # Builds every release archive, as a tag would, without publishing anything.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: check
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean --skip=before
+        env:
+          HOMEBREW_TAP_TOKEN: ""
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r-x-snapshot
+          path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+          retention-days: 7
+
+  integration:
+    # Boots a real Docker guest. Needs Rex on the runner, which the install script provides.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: curl -fsSL https://pkgs.superlogical.com/rex/install.sh | sh -s -- --tarball --channel preview
+      - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: go test -tags integration -timeout 30m ./integration/...

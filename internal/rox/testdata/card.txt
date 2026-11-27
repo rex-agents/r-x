@@ -1,0 +1,6 @@
+
+● rv-web-0123456789ab  ready
+  Workspace  rv-web-0123456789ab
+  Tailnet    rv-web.tail1.ts.net
+  Session    session:abc
+  Inspect    rex -S rv-web-0123456789ab session inspect session:abc

@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "guests": [
+    {
+      "name": "rv-web-0123456789ab",
+      "backend": "container",
+      "engine": "container",
+      "phase": "stopped",
+      "ip": "192.168.64.4",
+      "tailnet": "",
+      "projects": "web:main",
+      "socket": "/home/workspace/.rox/rv-web-0123456789ab/r.sock",
+      "home": "/home/workspace",
+      "user": "workspace",
+      "agents": {
+        "codex": "0.1.0"
+      },
+      "checkouts": [
+        {
+          "id": "web",
+          "name": "web",
+          "url": "u",
+          "workspace": "/home/workspace/web"
+        }
+      ],
+      "funnels": [
+        {
+          "url": "https://x/",
+          "port": 3000
+        }
+      ],
+      "sessions": {
+        "": "session:g",
+        "web": "session:w"
+      }
+    }
+  ]
+}
