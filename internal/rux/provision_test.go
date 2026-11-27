@@ -23,9 +23,10 @@ func fakeRox(t *testing.T, mode string) (log string) {
 echo "$@" >> "` + log + `"
 case "$1" in
 up)
-  echo "Starting ` + fakeGuest + `"
+  [ "` + mode + `" = late ] || echo "Starting ` + fakeGuest + `"
   case "` + mode + `" in
   hang) sleep 1; echo "Started ` + fakeGuest + `"; exit 0 ;;
+  late) sleep 1; echo "Workspace ` + fakeGuest + `"; exit 0 ;;
   fail) echo "boom"; exit 1 ;;
   ok) echo "Started ` + fakeGuest + `"; exit 0 ;;
   silent) echo "an unrelated rv-other-aaaaaaaaaaaa guest exists"; exit 0 ;;
@@ -290,5 +291,39 @@ func TestStopLetsStartedUpFinishAndNeverAttaches(t *testing.T) {
 	}
 	if st, _ := a.Status(); st != harness.Stopped || a.Where != "" {
 		t.Errorf("status %s, where %q", st, a.Where)
+	}
+}
+
+func TestStopBeforeAnyGuestNameCleansUpLateIdentity(t *testing.T) {
+	for _, host := range []string{"", "edge"} {
+		log := fakeRox(t, "late")
+		r := testRun(t)
+		in, _ := json.Marshal(map[string]string{"name": "late", "task": "do it", "repo": "none", "model": "claude-code", "host": host})
+		if _, err := r.spawnTool(context.Background(), in); err != nil {
+			t.Fatal(err)
+		}
+		a := r.find("late")
+		s := r.subOf(a)
+		waitFor(t, "rox up running", func() bool { return strings.Contains(readLog(log), "up ") })
+		if g := r.guestOf(s); g != "" {
+			t.Fatalf("guest %q known before rox printed anything", g)
+		}
+		if _, err := r.stop("late", true); err != nil {
+			t.Fatalf("host %q: %v", host, err)
+		}
+		want := "down " + fakeGuest
+		if host != "" {
+			want = "down -S " + host + " " + fakeGuest
+		}
+		got := readLog(log)
+		if !strings.Contains(got, want) || strings.Contains(got, "inspect") {
+			t.Errorf("host %q: log %q, want %q and no inspect", host, got, want)
+		}
+		if st, _ := a.Status(); st != harness.Stopped || a.Where != "" {
+			t.Errorf("host %q: status %s, where %q", host, st, a.Where)
+		}
+		if r.guestOf(s) != "" {
+			t.Errorf("host %q: guest still recorded", host)
+		}
 	}
 }
