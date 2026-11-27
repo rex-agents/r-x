@@ -104,12 +104,15 @@ func Hook(event, name string, stdin io.Reader, stdout io.Writer) error {
 		out.done("Git agent holds your %s %s %s", source, plural(len(keys), "key", "keys"), keyNames(keys))
 		return write()
 	case contract.PostBoot:
+		if !launch.WantCredentials() {
+			return write()
+		}
 		if err := PushCredentials(c, &g, out); err != nil {
 			return err
 		}
 		return write()
 	case contract.PostProvision:
-		if len(launch.NewAgents) > 0 {
+		if len(launch.NewAgents) > 0 && launch.WantCredentials() {
 			if err := PushCredentials(c, &g, out); err != nil {
 				return err
 			}

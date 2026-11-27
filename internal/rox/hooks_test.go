@@ -198,3 +198,26 @@ func TestShowHooksListsEveryProvider(t *testing.T) {
 		}
 	}
 }
+
+func TestCredentialsFlagReachesEveryProviderAndRemoteLaunches(t *testing.T) {
+	isolate(t)
+	fake := sys.NewFake()
+	defer fake.Install()()
+	g := NewGuest(sampleName, "container", "", "workspace", "docker")
+	o := &UpOptions{NoCredentials: true, Command: []string{"make"}}
+	launch := o.launch("")
+	launch.Command = o.Command
+	postProvision(g, nil, nil, launch)
+	if len(fake.Calls) != 2 {
+		t.Fatalf("calls %v", fake.Calls)
+	}
+	for _, c := range fake.Calls {
+		var rec contract.Guest
+		if json.Unmarshal([]byte(c.Stdin), &rec) != nil || rec.Launch == nil || rec.Launch.WantCredentials() {
+			t.Errorf("%s got %s", c.Argv[0], c.Stdin)
+		}
+	}
+	if !strings.Contains(strings.Join(remoteOptions(o), " "), "--credentials=false") {
+		t.Errorf("remote options %v", remoteOptions(o))
+	}
+}

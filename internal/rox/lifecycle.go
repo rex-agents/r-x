@@ -31,6 +31,7 @@ type UpOptions struct {
 	Rebuild       bool
 	NoTailscale   bool
 	NoGitAgent    bool
+	NoCredentials bool // rox up --credentials=false: hooks push no agent sign-in
 	NoAgents      bool
 	Agents        string
 	GitKeys       []string
@@ -43,7 +44,12 @@ type UpOptions struct {
 }
 
 func (o *UpOptions) launch(url string) *contract.Launch {
-	return &contract.Launch{URL: url, GitKeys: o.GitKeys, GitKnownHosts: o.GitKnownHosts, NoGitAgent: o.NoGitAgent}
+	l := &contract.Launch{URL: url, GitKeys: o.GitKeys, GitKnownHosts: o.GitKnownHosts, NoGitAgent: o.NoGitAgent}
+	if o.NoCredentials {
+		no := false
+		l.Credentials = &no
+	}
+	return l
 }
 
 var memoryPattern = regexp.MustCompile(`(?i)^[0-9]+[KMGT]$`)
@@ -74,6 +80,9 @@ func remoteOptions(o *UpOptions) []string {
 		if on {
 			out = append(out, "--"+flag)
 		}
+	}
+	if o.NoCredentials {
+		out = append(out, "--credentials=false")
 	}
 	if o.Vault == "here" {
 		// The host's vault still gives the clone its Git keys; credentials and setup come from here.
@@ -807,7 +816,9 @@ func Add(name string, o *UpOptions) error {
 		if project, err = provisionProject(g, src, o, false, checkout); err != nil {
 			return err
 		}
-		postProvision(g, project, fresh, &contract.Launch{Config: o.Config, Command: o.Command})
+		addLaunch := o.launch("")
+		addLaunch.Config, addLaunch.Command = o.Config, o.Command
+		postProvision(g, project, fresh, addLaunch)
 		describeGuest(g, project)
 		return nil
 	})

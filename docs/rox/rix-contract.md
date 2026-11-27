@@ -14,6 +14,7 @@ called `rix-contract.md`, so old links keep working.)
 rox runs `PROVIDER hook EVENT NAME` (`ROX_BIN` is set to rox's path) with the guest's record
 (`rox inspect NAME --json`, schema 1, plus a `launch` object with this launch's choices) on stdin,
 and reads one JSON reply from the last JSON line of stdout.
+`launch.credentials: false` (from `rox up --credentials=false`) tells the hook to push no agent credentials; the Git agent and setup sync still happen.
 
 | Event | When | Providers do |
 | --- | --- | --- |
