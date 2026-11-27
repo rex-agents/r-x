@@ -1,10 +1,11 @@
 // rux runs Claude Code agents in sandboxed Rox guests, driven from a mobile web app.
 //
-//	rux         - Claude Code as the lead agent in this Rex pane, which runs sub-agents with rux agent
-//	rux lead PROMPT - the same, starting on PROMPT
+//	rux         - the authority TUI: the pack's hosts, projects, threads and sub-agents (starts the local authority)
+//	rux agent [PROMPT] - the harness: a lead agent that runs sub-agents in rox guests, in this context
+//	rux agent spawn|ls|read|send|wait|focus|stop - sub-agents in Rox guests, in Rex panes, for an orchestrating Claude Code or Codex session
+//	rux lead PROMPT - Claude Code as the lead agent in this Rex pane
 //	rux monitor - sub-agents, guests and the host, from Rex
 //	rux serve   - coordinator + host agent: web app, thread store, launches guests
-//	rux agent   - sub-agents in Rox guests, in Rex panes, for an orchestrating Claude Code or Codex session
 //	rux skill   - install the rux skill that teaches Claude Code or Codex to orchestrate with rux agent
 //	rux runner  - runs inside a guest: owns the claude process and dials home
 //	rux git-credential - git credential helper the runner sets up for its children
@@ -30,8 +31,14 @@ func Main(version string, args []string) int {
 		help(os.Stdout)
 		return 0
 	}
-	if len(os.Args) < 2 || strings.HasPrefix(os.Args[1], "-") && os.Args[1] != "--version" {
-		runHarness(os.Args[1:])
+	switch route(os.Args[1:]) {
+	case routeTUI:
+		tuiFn()
+		return 0
+	case routeDeprecated:
+		rest := strings.Join(os.Args[1:], " ")
+		fmt.Fprintf(os.Stderr, "rux: `rux %s` is deprecated; use `rux agent %s`.\n", rest, rest)
+		harnessFn(os.Args[1:])
 		return 0
 	}
 	switch os.Args[1] {
@@ -65,7 +72,11 @@ func Main(version string, args []string) int {
 	case "sandbox":
 		runSandbox(os.Args[2:])
 	case "agent":
-		runAgentCmd(os.Args[2:])
+		if isAgentSubcommand(os.Args[2:]) {
+			agentCmdFn(os.Args[2:])
+		} else {
+			harnessFn(os.Args[2:]) // rux agent [PROMPT] [--model ...]: the harness, in this context
+		}
 	case "skill":
 		runSkill(os.Args[2:])
 	case "help", "--help", "-h":
@@ -78,10 +89,40 @@ func Main(version string, args []string) int {
 			fmt.Fprintf(os.Stderr, "rux: there's no command %q. To start on a one-word prompt, add a word or quote it with a space.\n\n", os.Args[1])
 			usage()
 		}
-		runHarness(os.Args[1:])
+		fmt.Fprintf(os.Stderr, "rux: `rux PROMPT` is deprecated; use `rux agent PROMPT`.\n")
+		harnessFn(os.Args[1:])
 	}
 	return 0
 }
+
+type routeKind int
+
+const (
+	routeCommand    routeKind = iota // a named command: the switch in Main handles it
+	routeTUI                         // bare rux: the authority TUI
+	routeDeprecated                  // rux PROMPT... or rux --flag ...: the harness, with a notice
+)
+
+// route decides how the arguments after "rux" are handled.
+func route(args []string) routeKind {
+	switch {
+	case len(args) == 0:
+		return routeTUI
+	case strings.HasPrefix(args[0], "-") && args[0] != "--version" && args[0] != "-h" && args[0] != "--help":
+		return routeDeprecated
+	}
+	return routeCommand
+}
+
+// agentSubcommands are the first arguments of rux agent that are commands, not a prompt.
+var agentSubcommands = map[string]bool{
+	"spawn": true, "ls": true, "list": true, "read": true, "send": true, "wait": true,
+	"focus": true, "stop": true, "pane": true, "type": true,
+}
+
+// isAgentSubcommand reports whether rux agent args name a subcommand (spawn, ls, ...);
+// anything else, including no arguments, is the harness: flags and an optional prompt.
+func isAgentSubcommand(args []string) bool { return len(args) > 0 && agentSubcommands[args[0]] }
 
 var commandLike = regexp.MustCompile(`^[a-z][a-z-]*$`)
 
@@ -103,8 +144,11 @@ func help(w io.Writer) {
 		title string
 		cmds  []cmd
 	}{
+		{"The authority", []cmd{
+			{"rux", "open the authority TUI: the pack's hosts, projects, threads and sub-agents (starts the local authority)"},
+		}},
 		{"The harness", []cmd{
-			{"rux [PROMPT]", "talk to a lead agent that runs sub-agents in rox guests, all in one window"},
+			{"rux agent [PROMPT]", "talk to a lead agent that runs sub-agents in rox guests, all in one window, in this context"},
 			{"  --model PROVIDER/MODEL", "the lead's model: claude-code[/MODEL], codex[/MODEL], anthropic/…, openai/…, ollama/…"},
 			{"  --agent-model PROVIDER/MODEL", "the sub-agents' model (default: the lead's)"},
 			{"  --effort LEVEL", "low, medium, high, xhigh or max"},
@@ -113,7 +157,7 @@ func help(w io.Writer) {
 		{"Claude Code as the lead, in Rex", []cmd{
 			{"rux claude [PROMPT]", "make this Rex pane Claude Code, with sub-agents in panes beside it (alias: lead)"},
 			{"rux monitor", "watch this Rex session's sub-agents, guests and host"},
-			{"rux agent spawn|ls|read|send|wait|focus|stop", "run sub-agents in Rex panes (rux agent for details)"},
+			{"rux agent spawn|ls|read|send|wait|focus|stop", "run sub-agents in Rex panes, for an orchestrating Claude Code or Codex"},
 			{"rux skill install|show", "install or print the rux skill for Claude Code or Codex"},
 		}},
 		{"Threads from your phone", []cmd{
@@ -150,6 +194,7 @@ func help(w io.Writer) {
 			fmt.Fprintf(w, "  %-*s  %s\n", width, c.use, d(c.what))
 		}
 	}
+	fmt.Fprintf(w, "\n%s\n", d("rux PROMPT and rux --model ... still work, with a deprecation notice: use rux agent."))
 	fmt.Fprintf(w, "\nIn the harness, %s opens the commands, %s the shortcuts, and %s the model picker.\n", b("ctrl+o"), b("?"), b("ctrl+l"))
 	fmt.Fprintf(w, "Credentials come from rix: %s\n", b("rix secret set ANTHROPIC_API_KEY")+d(", rix auth claude, rix auth github"))
 }
@@ -162,3 +207,10 @@ func isTTY(w io.Writer) bool {
 	st, err := f.Stat()
 	return err == nil && st.Mode()&os.ModeCharDevice != 0
 }
+
+// The entry points Main dispatches to, as variables so tests can observe the routing.
+var (
+	tuiFn      = runAuthorityTUI
+	harnessFn  = runHarness
+	agentCmdFn = runAgentCmd
+)
