@@ -46,6 +46,8 @@ func Main(version string, args []string) int {
 		runStatusLine()
 	case "--version", "version":
 		fmt.Println("rux", Version)
+	case "headless":
+		runHeadless(os.Args[2:])
 	case "authority":
 		runAuthority(os.Args[2:])
 	case "serve":
