@@ -49,8 +49,9 @@ type server struct {
 	models     *modelCache
 	tools      *toolHost
 
-	name         string // this authority's name in the pack
-	selfURL      string // the authority's own HTTP URL, once listening
+	name         string    // this authority's name in the pack
+	selfURL      string    // the authority's own HTTP URL, once listening
+	started      time.Time // when this authority started
 	hub          packHub
 	packMu       sync.Mutex
 	pack         PackSource             // see authority_pack.go
@@ -147,6 +148,7 @@ func runServe(args []string) {
 	proxyOn := flags.Bool("model-proxy", true, "give guests the model proxy instead of model keys")
 	vaultDef := flags.String("vault", "", `default vault source for model keys: "local" (this host's rix) or "leader" (default: authority.json, else local)`)
 	flags.Parse(args)
+	s.started = time.Now()
 	cfg := loadAuthorityConfig(s.dataDir)
 	s.name = cfg.Name
 	s.vaultDefault = cmpOr(*vaultDef, cfg.Vault)
@@ -235,6 +237,8 @@ func runServe(args []string) {
 	app.HandleFunc("GET /api/threads/{id}/assets/{file}", s.handleAssetGet)
 	app.HandleFunc("GET /api/overview", s.handleOverview)
 	app.HandleFunc("GET /api/overview/stream", s.handleOverviewStream)
+	app.HandleFunc("GET /api/threads/{id}/subagents/{sub}/events", s.subAgent(s.handleEvents))
+	app.HandleFunc("GET /api/threads/{id}/subagents/{sub}/events/page", s.subAgent(s.handleEventsPage))
 	app.HandleFunc("GET /api/pack", s.handlePack)
 	app.HandleFunc("GET /api/pack/stream", s.handlePackStream)
 

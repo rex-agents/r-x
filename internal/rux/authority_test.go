@@ -381,3 +381,69 @@ func TestPackShape(t *testing.T) {
 		}
 	}
 }
+
+func TestPlacementRoundTripAndSubAgents(t *testing.T) {
+	s, th, _ := testServer(t)
+	s.name, s.projects, s.started = "mac", map[string]*project{}, time.Now()
+	s.roxBin, s.advertise = "/nonexistent/rox", "127.0.0.1:1"
+	s.attach(th)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/threads", s.handleCreate)
+	mux.HandleFunc("GET /api/pack", s.handlePack)
+	mux.HandleFunc("GET /api/threads/{id}/subagents/{sub}/events/page", s.subAgent(s.handleEventsPage))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/threads", "application/json", strings.NewReader(`{"prompt":"x","placement":{"local":true}}`))
+	if err != nil || resp.StatusCode != 201 {
+		t.Fatalf("create: %v %v", resp, err)
+	}
+	var created struct {
+		ID        string
+		Placement authapi.Placement
+	}
+	json.NewDecoder(resp.Body).Decode(&created)
+	resp.Body.Close()
+	if !created.Placement.Local {
+		t.Errorf("the create reply lost placement.local: %+v", created)
+	}
+	pr, _ := http.Get(srv.URL + "/api/pack")
+	var p authapi.Pack
+	json.NewDecoder(pr.Body).Decode(&p)
+	pr.Body.Close()
+	found := false
+	for _, ts := range p.Authorities[0].Threads {
+		if ts.ID == created.ID {
+			found = true
+			if !ts.Placement.Local {
+				t.Errorf("ThreadSummary.placement = %+v, want local", ts.Placement)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("new thread not in the pack")
+	}
+	if p.Authorities[0].Started == "" {
+		t.Error("started is empty")
+	}
+
+	// A sub-agent's conversation is served under its parent only.
+	child, _ := openThread(filepath.Join(s.dataDir, "threads", "c1"), &threadMeta{ID: "c1", Parent: "t1", Token: "c", Status: "idle"})
+	child.event(json.RawMessage(`{"type":"result"}`))
+	s.threads["c1"] = child
+	for url, want := range map[string]int{"/api/threads/t1/subagents/c1/events/page": 200, "/api/threads/" + created.ID + "/subagents/c1/events/page": 404, "/api/threads/t1/subagents/zz/events/page": 404} {
+		r, err := http.Get(srv.URL + url)
+		if err != nil || r.StatusCode != want {
+			t.Errorf("%s: %v %v", url, r, err)
+		}
+		r.Body.Close()
+	}
+
+	// Archived threads report the status "archived".
+	th.mu.Lock()
+	th.meta.Archived = true
+	th.mu.Unlock()
+	if sum := s.summaryOf(th); sum.Status != "archived" || !sum.Archived {
+		t.Errorf("archived summary = %+v", sum)
+	}
+}
