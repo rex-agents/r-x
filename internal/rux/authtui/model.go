@@ -102,10 +102,11 @@ type Model struct {
 	phase  float64
 
 	// conversation
-	convID string
-	vp     viewport.Model
-	input  textinput.Model
-	follow bool
+	convID  string
+	convSub string // a sub-agent of convID: read-only
+	vp      viewport.Model
+	input   textinput.Model
+	follow  bool
 
 	form *newForm
 	help bool
@@ -211,13 +212,21 @@ func (m *Model) fetchProjects() tea.Cmd {
 	}
 }
 
-func (m *Model) fetchEvents(id string) tea.Cmd {
+func (m *Model) fetchEvents(id, sub string) tea.Cmd {
 	return func() tea.Msg {
-		evs, err := m.c.ThreadEvents(id, 80)
+		var evs []StoredEvent
+		var err error
+		key := id
+		if sub != "" {
+			key = id + "/" + sub
+			evs, err = m.c.SubAgentEvents(id, sub, 80)
+		} else {
+			evs, err = m.c.ThreadEvents(id, 80)
+		}
 		if err != nil {
 			return errMsg{err}
 		}
-		return eventsMsg{id, evs}
+		return eventsMsg{key, evs}
 	}
 }
 
@@ -232,7 +241,7 @@ func (m *Model) allThreads() []authapi.ThreadSummary {
 }
 
 func (m *Model) visible(t authapi.ThreadSummary) bool {
-	return m.archived || t.Status != "archived"
+	return m.archived || (t.Status != "archived" && !t.Archived)
 }
 
 func (m *Model) projectName(id string) string {
@@ -414,14 +423,14 @@ func (m *Model) previewThread() string {
 }
 
 func (m *Model) applyFeed(e SSE) tea.Cmd {
-	name, data := e.Name, []byte(e.Data)
 	var env struct {
 		Type string          `json:"type"`
 		Data json.RawMessage `json:"data"`
 	}
-	if json.Unmarshal(data, &env) == nil && env.Type != "" && len(env.Data) > 0 {
-		name, data = env.Type, env.Data
+	if json.Unmarshal([]byte(e.Data), &env) != nil {
+		return nil
 	}
+	name, data := env.Type, []byte(env.Data)
 	switch name {
 	case authapi.EventPack:
 		var p authapi.Pack
@@ -457,7 +466,7 @@ func (m *Model) applyFeed(e SSE) tea.Cmd {
 			m.bump(te.Thread)
 			if se, ok := decodeStored(te.Event); ok {
 				m.events[te.Thread] = appendEvent(m.events[te.Thread], se)
-				if m.convID == te.Thread {
+				if m.convSlot() == te.Thread {
 					m.refreshConversation()
 				}
 			}
@@ -481,17 +490,14 @@ func appendEvent(evs []StoredEvent, e StoredEvent) []StoredEvent {
 	return evs
 }
 
-// decodeStored accepts either a stored event ({"id","ts","ev"}) or a bare event.
+// decodeStored reads a stored event record: {"id","ts","ev"}.
 func decodeStored(v any) (StoredEvent, bool) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return StoredEvent{}, false
 	}
 	var se StoredEvent
-	if json.Unmarshal(b, &se) == nil && len(se.Ev) > 0 {
-		return se, true
-	}
-	return StoredEvent{Ev: b}, true
+	return se, json.Unmarshal(b, &se) == nil && len(se.Ev) > 0
 }
 
 func (m *Model) upsertThread(t authapi.ThreadSummary) {
@@ -524,3 +530,11 @@ func cmpOr(a, b string) string {
 }
 
 func trim(s string) string { return strings.TrimSpace(s) }
+
+// convSlot is the key of the open conversation in m.events: the thread id, or id/sub-agent.
+func (m *Model) convSlot() string {
+	if m.convSub != "" {
+		return m.convID + "/" + m.convSub
+	}
+	return m.convID
+}

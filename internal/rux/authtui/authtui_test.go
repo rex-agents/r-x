@@ -60,7 +60,7 @@ func newFake(t *testing.T) *fake {
 	})
 	mux.HandleFunc("GET /api/pack/stream", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		b, _ := json.Marshal(f.pack)
+		b, _ := json.Marshal(authapi.PackEvent{Type: authapi.EventPack, Data: f.pack})
 		fmt.Fprintf(w, "event: pack\ndata: %s\n\n", b)
 		w.(http.Flusher).Flush()
 		for {
@@ -81,6 +81,9 @@ func newFake(t *testing.T) *fake {
 			`{"id":4,"ts":4,"ev":{"type":"result","duration_ms":12000,"num_turns":3,"total_cost_usd":0.42}}`,
 		}
 		fmt.Fprintf(w, `{"start":1,"events":[%s]}`, strings.Join(evs, ","))
+	})
+	mux.HandleFunc("GET /api/threads/{id}/subagents/{sub}/events/page", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"start":1,"events":[{"id":1,"ts":1,"ev":{"type":"rux_user","text":"run the tests for %s"}},{"id":2,"ts":2,"ev":{"type":"assistant","message":{"content":[{"type":"text","text":"All green."}]}}}]}`, r.PathValue("sub"))
 	})
 	mux.HandleFunc("POST /api/threads/{id}/messages", func(w http.ResponseWriter, r *http.Request) {
 		var b struct{ Text string }
@@ -316,7 +319,7 @@ func TestDegradedAndVault(t *testing.T) {
 
 func TestFeedEvents(t *testing.T) {
 	m := boot(t, newFake(t), 140, 40)
-	m.Update(feedMsg{SSE{Name: "pack.delta", Data: `{"name":"nuc","url":"u","status":"down","host":{"os":"linux"}}`}})
+	m.Update(feedMsg{SSE{Name: "pack.delta", Data: `{"type":"pack.delta","data":{"name":"nuc","url":"u","status":"down","host":{"os":"linux"}}}`}})
 	if m.pack.Authorities[1].Status != "down" || len(m.pack.Authorities[1].Threads) != 1 {
 		t.Fatalf("delta %+v", m.pack.Authorities[1])
 	}
@@ -332,7 +335,7 @@ func TestFeedEvents(t *testing.T) {
 	}
 	// Live conversation events append.
 	press(m, "enter")
-	m.Update(feedMsg{SSE{Name: "thread.event", Data: `{"thread":"` + m.convID + `","event":{"id":9,"ev":{"type":"assistant","message":{"content":[{"type":"text","text":"streamed reply"}]}}}}`}})
+	m.Update(feedMsg{SSE{Name: "thread.event", Data: `{"type":"thread.event","data":{"thread":"` + m.convID + `","event":{"id":9,"ts":1,"src":"runner","ev":{"type":"assistant","message":{"content":[{"type":"text","text":"streamed reply"}]}}}}}`}})
 	if !strings.Contains(plain(m.View()), "streamed reply") {
 		t.Error("event not shown")
 	}
@@ -351,7 +354,7 @@ func TestStreamOverHTTP(t *testing.T) {
 	if e := <-got; e.Name != "pack" || !strings.Contains(e.Data, `"leader":"mac"`) {
 		t.Fatalf("first event %+v", e)
 	}
-	f.sse <- "event: pack.delta\ndata: {\"name\":\"mac\"}\n\n"
+	f.sse <- "event: pack.delta\ndata: {\"type\":\"pack.delta\",\"data\":{\"name\":\"mac\"}}\n\n"
 	if e := <-got; e.Name != "pack.delta" {
 		t.Fatalf("second event %+v", e)
 	}
@@ -404,5 +407,48 @@ func TestRenderCapture(t *testing.T) {
 	m.act["t1"] = []int{0, 1, 3, 2, 5, 1, 0, 4}
 	if err := os.WriteFile(out, []byte(plain(m.View())+"\n"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSubAgentConversationAndUptime(t *testing.T) {
+	f := newFake(t)
+	f.pack.Authorities[0].Started = "2026-11-27T09:00:00Z" // 1000s after the fake clock? set below
+	m := boot(t, f, 140, 40)
+	m.opts.Now = func() time.Time { return time.Date(2026, 11, 27, 10, 5, 0, 0, time.UTC) }
+	press(m, "right", "down", "right", "right", "enter") // sub-agent "tests"
+	if m.tab != tabThread || m.convSub != "s1" {
+		t.Fatalf("tab %v sub %q", m.tab, m.convSub)
+	}
+	v := plain(m.View())
+	for _, want := range []string{"sub-agent s1", "run the tests for s1", "All green.", "read-only", "up 1h05m"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("lacks %q\n%s", want, v)
+		}
+	}
+	press(m, "x", "enter")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.sent) != 0 {
+		t.Errorf("sub-agent conversation sent %v", f.sent)
+	}
+}
+
+func TestArchivedFlag(t *testing.T) {
+	f := newFake(t)
+	f.pack.Authorities[0].Threads[1].Archived = true // "add dark mode"
+	m := boot(t, f, 140, 40)
+	press(m, "right", "down", "right")
+	for _, n := range m.column(colThread) {
+		if n.name == "add dark mode" {
+			t.Error("archived thread shown")
+		}
+	}
+	press(m, "a")
+	found := false
+	for _, n := range m.column(colThread) {
+		found = found || n.name == "add dark mode"
+	}
+	if !found {
+		t.Error("archived thread hidden with the toggle on")
 	}
 }

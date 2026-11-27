@@ -457,11 +457,11 @@ function route() {
   if (location.hash !== "#/pack") lastWork = location.hash || "#/";
   store.set("rux.mode", "work");
   renderSeg();
-  const m = location.hash.match(/^#\/t\/(.+)$/), pm = location.hash.match(/^#\/p\/([^/]+)(\/settings)?$/), nm = location.hash.match(/^#\/new\/p\/([^/]+)$/);
+  const m = location.hash.match(/^#\/t\/([^/]+)(?:\/s\/(.+))?$/), pm = location.hash.match(/^#\/p\/([^/]+)(\/settings)?$/), nm = location.hash.match(/^#\/new\/p\/([^/]+)$/);
   currentId = m ? decodeURIComponent(m[1]) : null;
   currentProject = pm ? decodeURIComponent(pm[1]) : null;
   renderList();
-  if (m) { document.body.dataset.view = "thread"; showThread(currentId); }
+  if (m) { document.body.dataset.view = "thread"; showThread(currentId, null, m[2] ? decodeURIComponent(m[2]) : null); }
   else if (pm && pm[2]) { document.body.dataset.view = "project"; showProjectSettings(currentProject); }
   else if (pm) { document.body.dataset.view = "project"; showProject(currentProject); }
   else if (nm) { document.body.dataset.view = "new"; showNew(decodeURIComponent(nm[1])); }
@@ -479,7 +479,6 @@ const packDot = (s) => ({ up: "idle", running: "running", working: "running", id
 const packSpark = (n) => { const r = "▁▂▃▄▅▆▇█"; return [...Array(8)].map((_, i) => r[Math.min(7, Math.max(0, Math.round(((n.act?.[i] || 0) / Math.max(1, ...(n.act || [1]))) * 7)))]).join(""); };
 let packState = null, packSel = { host: null, project: null, thread: null }, packArchived = false, packAct = {};
 function packApply(name, data) {
-  if (data && data.type && data.data !== undefined) { name = data.type; data = data.data; }
   if (name === "pack") packState = data;
   else if (!packState) return;
   else if (name === "pack.delta") {
@@ -499,13 +498,13 @@ function showPack() {
   let live = false, since = Date.now(), focus = 0;
   const shift = setInterval(() => { for (const k in packAct) { packAct[k].shift(); packAct[k].push(0); } draw(); }, 5000);
   const es = new EventSource("/api/pack/stream");
-  for (const n of ["pack", "pack.delta", "thread.status", "thread.event"]) es.addEventListener(n, (e) => { try { packApply(n, JSON.parse(e.data)); draw(); } catch {} });
+  for (const n of ["pack", "pack.delta", "thread.status", "thread.event"]) es.addEventListener(n, (e) => { try { const ev = JSON.parse(e.data); packApply(ev.type, ev.data); draw(); } catch {} });
   es.onopen = () => { live = true; since = Date.now(); draw(); };
   es.onerror = () => { live = false; draw(); };
   api("GET", "/api/pack").then(p => { if (!packState) { packState = p; draw(); } }).catch(() => {});
   cleanup = () => { es.close(); clearInterval(shift); };
 
-  const threadsOf = (a) => (a.threads || []).filter(t => packArchived || t.status !== "archived");
+  const threadsOf = (a) => (a.threads || []).filter(t => packArchived || t.status !== "archived" && !t.archived);
   function draw() {
     if (!root.isConnected) return;
     const p = packState;
@@ -520,11 +519,13 @@ function showPack() {
     const thread = projThreads.find(t => t.id === packSel.thread) || projThreads[0];
     packSel.thread = thread?.id || null;
 
+    const loc = hosts.find(a => a.local), started = loc?.started ? new Date(loc.started) : (live ? new Date(since) : null);
+    const up = started ? ago(started).replace("now", "0s") : "";
     const bar = h("div", { class: "pack-bar" },
       h("span", {}, h("span", { class: "dot " + (!live ? "failed" : p.degraded ? "provisioning" : "running") }), !live ? "offline" : p.degraded ? "degraded" : "live"),
       p.leader ? h("span", {}, "leader ", h("b", {}, p.leader)) : null, h("span", {}, "term " + (p.term || 0)),
       h("span", {}, h("span", { class: "dot " + (p.vault_ok ? "idle" : "failed") }), p.vault_ok ? "vault ok" : "vault unreachable"),
-      live ? h("span", {}, "up " + ago(since).replace("now", "0s")) : null, h("span", { class: "spacer" }), h("span", {}, location.host),
+      up ? h("span", {}, "up " + up) : null, h("span", { class: "spacer" }), h("span", {}, location.host),
       h("label", {}, h("input", { type: "checkbox", checked: packArchived, onchange: (e) => { packArchived = e.target.checked; draw(); } }), " archived"));
     const banners = [
       p.degraded ? h("div", { class: "pack-banner warn" }, "degraded: no pack leader is reachable, showing this authority only") : null,
@@ -547,7 +548,7 @@ function showPack() {
     });
     const threadCards = projThreads.map(t => card(t.id === packSel.thread, () => { packSel.thread = t.id; focus = 3; draw(); }, t.status, t.title || t.id,
       `${t.status} · ${t.placement?.local ? "local" : "vm"} · $${(t.cost || 0).toFixed(2)}`, plural((t.subagents || []).length, "sub-agent"), packAct[t.id]));
-    const subCards = (thread?.subagents || []).map(s => card(false, () => {}, s.status, s.name || s.id, s.guest || "no guest", s.status));
+    const subCards = (thread?.subagents || []).map(s => card(false, () => { location.hash = "#/t/" + encodeURIComponent(thread.id) + "/s/" + encodeURIComponent(s.id); }, s.status, s.name || s.id, s.guest || "no guest", s.status));
     const col = (i, title, cards, empty) => h("div", { class: "pack-col" + (focus === i ? " focus" : "") + (focus === i ? " show" : ""), "data-col": i }, h("h3", {}, title), ...(cards.length ? cards : [h("div", { class: "pack-empty" }, empty)]));
     const actions = h("div", { class: "pack-actions" },
       focus > 0 ? h("button", { class: "start", onclick: () => { focus--; draw(); } }, "‹ up") : null,
@@ -886,7 +887,8 @@ const fmtSize = (n) => n >= 1 << 20 ? (n / (1 << 20)).toFixed(1) + " MB" : n >= 
 // ---------- thread ----------
 // showThread shows a thread. With proj, it's that project's page: the
 // manager's conversation, under the project's open threads.
-function showThread(id, proj = null) {
+function showThread(id, proj = null, sub = null) {
+  const evBase = `/api/threads/${id}` + (sub ? `/subagents/${sub}` : "");
   let meta = null, es = null, lastId = 0, closed = false, caughtUp = false;
   const main = $("#main");
   const tx = h("div", { class: "tx" });
@@ -955,7 +957,7 @@ function showThread(id, proj = null) {
     h("div", { class: "opts" }, h("label", {}, "model", modelSel), h("label", {}, "effort", effortSel)),
     strip, fileIn,
     h("div", { class: "composer" }, input, attachBtn, btn));
-  $("#ftr").hidden = false;
+  $("#ftr").hidden = !!sub; // a sub-agent's conversation is read-only
 
   function syncButton() {
     const has = input.value.trim() || attached.length;
@@ -1299,7 +1301,7 @@ function showThread(id, proj = null) {
   tx.prepend(earlier);
   const olderIO = new IntersectionObserver((es) => { if (es.some(e => e.isIntersecting) && caughtUp) loadOlder(); }, { root: main, rootMargin: "800px 0px 0px 0px" });
   olderIO.observe(earlier);
-  const pageURL = (q) => `/api/threads/${id}/events/page?` + new URLSearchParams(q);
+  const pageURL = (q) => `${evBase}/events/page?` + new URLSearchParams(q);
   async function loadLatest() {
     try {
       const q = { min: 200 };
@@ -1337,7 +1339,7 @@ function showThread(id, proj = null) {
 
   function connect() {
     if (closed) return;
-    es = new EventSource(`/api/threads/${id}/events?after=${lastId}`);
+    es = new EventSource(`${evBase}/events?after=${lastId}`);
     es.onmessage = (e) => {
       const se = JSON.parse(e.data);
       if (se.id <= lastId) return;

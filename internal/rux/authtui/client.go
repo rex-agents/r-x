@@ -175,3 +175,13 @@ func (c *Client) Stream(ctx context.Context, path string, fn func(SSE)) error {
 	}
 	return io.EOF
 }
+
+// SubAgentEvents is GET /api/threads/{id}/subagents/{sub}/events/page: a sub-agent's conversation
+// (read-only).
+func (c *Client) SubAgentEvents(id, sub string, min int) ([]StoredEvent, error) {
+	var out struct {
+		Events []StoredEvent `json:"events"`
+	}
+	err := c.do("GET", fmt.Sprintf("/api/threads/%s/subagents/%s/events/page?min=%d", url.PathEscape(id), url.PathEscape(sub), min), nil, &out)
+	return out.Events, err
+}

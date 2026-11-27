@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -108,8 +109,8 @@ func (m *Model) header() string {
 		}
 		pieces = append(pieces, stDim.Render(fmt.Sprintf("term %d", m.pack.Term)), dot(vst)+" "+stDim.Render(vault))
 	}
-	if m.live && !m.since.IsZero() {
-		pieces = append(pieces, stDim.Render("up "+uptime(m.opts.Now().Sub(m.since))))
+	if up := m.authorityUptime(); up != "" {
+		pieces = append(pieces, stDim.Render("up "+up))
 	}
 	pieces = append(pieces, stFaint.Render(m.c.Base))
 	for {
@@ -593,6 +594,9 @@ func (m *Model) threadView(h int) []string {
 	title := m.convID
 	if t != nil {
 		title = dot(t.Status) + " " + stBold.Render(cmpOr(t.Title, t.ID)) + stDim.Render("  "+t.Authority+" · "+t.Status)
+		if m.convSub != "" {
+			title += stDim.Render("  › sub-agent ") + stBold.Render(m.convSub)
+		}
 	}
 	out := []string{fit(" "+title, m.w)}
 	m.vp.Height = max(h-3, 1)
@@ -601,6 +605,9 @@ func (m *Model) threadView(h int) []string {
 	}
 	out = append(out[:min(len(out), h-1)], "")
 	out[len(out)-1] = fit(" "+m.input.View(), m.w)
+	if m.convSub != "" {
+		out[len(out)-1] = fit(stDim.Render(" read-only: a sub-agent's conversation (esc to go back)"), m.w)
+	}
 	for len(out) < h {
 		out = append(out, blank(m.w))
 	}
@@ -681,4 +688,21 @@ func (m *Model) helpView() string {
 	}
 	b = append(b, "", stDim.Render("press any key to close"))
 	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(hFaint).Padding(1, 2).Render(strings.Join(b, "\n"))
+}
+
+// authorityUptime is how long the attached authority has been up (its "started" time), or
+// how long the feed has been connected when the authority doesn't say.
+func (m *Model) authorityUptime() string {
+	for _, a := range m.pack.Authorities {
+		if !a.Local {
+			continue
+		}
+		if t, err := time.Parse(time.RFC3339, a.Started); err == nil {
+			return uptime(m.opts.Now().Sub(t))
+		}
+	}
+	if m.live && !m.since.IsZero() {
+		return uptime(m.opts.Now().Sub(m.since))
+	}
+	return ""
 }

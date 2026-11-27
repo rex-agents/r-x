@@ -140,7 +140,7 @@ func (m *Model) refreshConversation() {
 	}
 	w := max(m.w-4, 20)
 	var lines []string
-	for _, se := range m.events[m.convID] {
+	for _, se := range m.events[m.convSlot()] {
 		for _, s := range summarize(se) {
 			lines = append(lines, renderSummary(s, w)...)
 		}

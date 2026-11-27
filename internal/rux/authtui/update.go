@@ -43,7 +43,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err.Error()
 	case eventsMsg:
 		m.events[msg.id] = msg.evs
-		if m.convID == msg.id {
+		if m.convSlot() == msg.id {
 			m.refreshConversation()
 		}
 	case createdMsg:
@@ -77,7 +77,7 @@ func (m *Model) wantPreview() tea.Cmd {
 		return nil
 	}
 	m.events[id] = []StoredEvent{} // mark as requested
-	return m.fetchEvents(id)
+	return m.fetchEvents(id, "")
 }
 
 func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -145,6 +145,10 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case n == nil:
 		case n.th != nil:
 			return m, m.openThread(n.th.ID)
+		case n.sub != nil:
+			if t := m.selected(colThread); t != nil {
+				return m, m.openConv(t.th.ID, n.sub.ID)
+			}
 		case m.focus+1 < numCols && m.selected(m.focus+1) != nil:
 			m.focus++
 		}
@@ -167,16 +171,22 @@ func (m *Model) move(d int) {
 
 // ---- conversation ----
 
-func (m *Model) openThread(id string) tea.Cmd {
-	m.convID, m.tab, m.follow = id, tabThread, true
+func (m *Model) openThread(id string) tea.Cmd { return m.openConv(id, "") }
+
+// openConv opens a thread's conversation, or one of its sub-agents' (read-only).
+func (m *Model) openConv(id, sub string) tea.Cmd {
+	m.convID, m.convSub, m.tab, m.follow = id, sub, tabThread, true
 	m.input.SetValue("")
 	m.input.Focus()
 	m.layoutConversation()
 	m.refreshConversation()
-	if len(m.events[id]) > 0 {
+	if sub != "" {
+		m.input.Blur()
+	}
+	if len(m.events[m.convSlot()]) > 0 {
 		return textinput.Blink
 	}
-	return tea.Batch(m.fetchEvents(id), textinput.Blink)
+	return tea.Batch(m.fetchEvents(id, sub), textinput.Blink)
 }
 
 func (m *Model) convKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -198,13 +208,16 @@ func (m *Model) convKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case "enter":
 		text := trim(m.input.Value())
-		if text == "" {
+		if text == "" || m.convSub != "" {
 			return m, nil
 		}
 		m.input.SetValue("")
 		id := m.convID
 		m.follow = true
 		return m, func() tea.Msg { return sentMsg{m.c.Send(id, text)} }
+	}
+	if m.convSub != "" {
+		return m, nil // read-only
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(k)
