@@ -116,9 +116,14 @@ protocol (`docs/rox/rix-contract.md`) as a second provider:
   (create the project's Rex session; reply gains `"session"`), `resume` (restore the Rex tunnel),
   `down` (remove the Rex host entry), and `open-shell` (open a shell in the Rex app).
 - The hook program is `rox-rex` (built from this repo, `cmd/rox-rex`), and holds `rexbridge`, Rex
-  host registration, the app-opening code and `rox rex install`.
+  host registration, the app-opening code and `rox-rex install`.
 - rox core uses plain SSH (and the tailnet for guests on other hosts) for `exec`, `shell` and the
   remote host path; remote hosts become authorities (`rox up --host NAME` goes through that host's
   authority when rux is present, else SSH over the tailnet). It never needs Rex.
 - rux uses Rex panes only for `rux claude` / `rux agent spawn` when `REX_SESSION` is set; nothing in a
   guest or an authority requires Rex.
+
+Implemented as: `"hooks": ["rix", "rox-rex"]` (the provider is named `rox-rex`, not `rex`), `ROX_HOOKS`, the
+reply fields `session` and `endpoint`, the `open-shell` event, and a host-transport interface in rox
+(`docs/rox/remote-hosts.md#host-transports`) for the authority to implement. See `docs/rox/rex-hook.md`.
+Without `REX_SESSION`, `rux agent spawn` runs the sub-agent headless and `rux agent read` prints its log.

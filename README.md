@@ -2,18 +2,18 @@
 
 Three static Go binaries. rox and rix replace the Python `rox` script; rux runs agents on them.
 
-- **rox** owns guests: it boots them (Apple container, Docker, Podman, Tart, Fly.io, Railway), wires them to Rex and Tailscale, manages their lifecycle, and installs agent CLIs when a project asks for them.
+- **rox** owns guests: it boots them (Apple container, Docker, Podman, Tart, Fly.io, Railway), wires them to Tailscale (and to Rex, through the optional rox-rex hook), manages their lifecycle, and installs agent CLIs when a project asks for them.
 - **rix** owns the secrets and settings that agents and Git use inside a guest: Git SSH keys, Claude Code and Codex credentials, and synced skills, instructions, MCP servers and settings. rix installs nothing. See [docs/rix/index.md](docs/rix/index.md).
 
 - **rux** is a multi-agent harness on rox and rix. `rux` opens it: you talk to a lead agent that starts sub-agents, each in its own rox guest, and every agent's conversation is live in one window. Agents run on Claude (Anthropic API), any OpenAI-compatible model, Claude Code or Codex, and model keys stay with rix on your machine. `rux claude` makes Claude Code itself the lead, with sub-agents in Rex panes. `rux serve` runs threads you drive from your phone; a thread's guest is stopped when it's been idle and started again by the next message. rux stores no credentials: it gets every one from rix. See [docs/rux/index.md](docs/rux/index.md).
 
-rox works without rix. With rix on `PATH`, rox calls it at fixed points in a guest's life, and rix reaches guests only through `rox exec`. The full rox reference is [docs/rox/index.md](docs/rox/index.md).
+rox works without rix and without Rex. With rix or rox-rex on `PATH`, rox calls them at fixed points in a guest's life (the hook contract), and they reach guests only through `rox exec`. rox-rex holds everything Rex. The full rox reference is [docs/rox/index.md](docs/rox/index.md).
 
 ## Install
 
 ```sh
 brew install rex-agents/tap/r-x        # or download an archive from the releases page
-rox rex install                        # optional: every rox and rix command as a Rex action
+rox-rex install                      # optional, needs Rex: every rox and rix command as a Rex action
 rix migrate                            # coming from Python rox: move keys and credentials
 ```
 
@@ -101,7 +101,7 @@ rix secret import ~/.rux/secrets.env   # move secrets from an older rux
 
 ## Rex actions
 
-`rox rex install` writes `~/.config/rex/rox.lua` and adds `require("rox")` to Rex's `init.lua`. Every rox and rix command becomes an action named `PROGRAM_COMMAND`:
+`rox-rex install` writes `~/.config/rex/rox.lua` and adds `require("rox")` to Rex's `init.lua`. Every rox and rix command becomes an action named `PROGRAM_COMMAND`:
 
 ```sh
 rex do rox_ls                                  # JSON
@@ -112,7 +112,7 @@ rex do rix_status
 
 In the palette, under **Rox** and **Rix**, a missing guest opens a picker. Choices such as the backend or agent open a picker too. Slow or interactive commands open a terminal split beside the pane, so you see rox's own output and type any secret there. Quick ones return their output. `Rox: Add a Guest to the Rex App…` copies the guest's address and opens Add Remote Host in the app.
 
-Updates rewrite the actions when they're installed. `rox rex uninstall` removes them.
+Updates rewrite the actions when they're installed. `rox-rex uninstall` removes them.
 
 ## Development
 
@@ -124,4 +124,4 @@ go test -tags integration ./integration/...     # boots a real Docker guest
 goreleaser release --snapshot --clean           # local release build
 ```
 
-Layout: `cmd/rox`, `cmd/rix`, `cmd/rux`, `internal/rox` (backends, lifecycle, CLI), `internal/rix` (vault, hooks, sync), `internal/rux` (server, runner, agent mode, web app), `internal/contract` (the JSON between them), `internal/ui` (all terminal output), `internal/sys` (the command runner and file helpers), `internal/rexbridge` (the Rex actions), `internal/assets` (embedded Containerfile, guest scripts, skill).
+Layout: `cmd/rox`, `cmd/rix`, `cmd/rox-rex`, `cmd/rux`, `internal/rox` (backends, lifecycle, CLI), `internal/rix` (vault, hooks, sync), `internal/rux` (server, runner, agent mode, web app), `internal/contract` (the JSON between them), `internal/ui` (all terminal output), `internal/sys` (the command runner and file helpers), `internal/rexbridge` (the Rex actions), `internal/assets` (embedded Containerfile, guest scripts, skill).

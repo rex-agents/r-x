@@ -1,4 +1,4 @@
-# Pushing a tag such as v1.2.0 tests rox and rix on macOS and Linux, then builds both for
+# Pushing a tag such as v1.2.0 tests rox, rix and rox-rex on macOS and Linux, then builds both for
 # macOS and Linux on arm64 and amd64 and publishes them as a GitHub release, with
 # checksums.txt and, when HOMEBREW_TAP_TOKEN is set, the Homebrew formula.
 #

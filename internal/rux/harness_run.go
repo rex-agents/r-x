@@ -972,6 +972,10 @@ func rexHostsText() (string, error) {
 			} `json:"host"`
 		} `json:"hosts"`
 	}
+	if os.Getenv("REX_SESSION") == "" {
+		// Without Rex, guests start on this machine, or on the host --host names over SSH.
+		return "this machine (default)\n", nil
+	}
 	if err := rexJSON(&out, "hosts", "--json"); err != nil {
 		return "", fmt.Errorf("rex hosts: %v", err)
 	}

@@ -60,9 +60,10 @@ func shellDirectory(name string, checkouts []checkoutDir, home, key string) (str
 }
 
 func shellCommand(socket, directory, session string) []string {
-	argv := []string{"env", "REX_SERVER=unix://" + socket, "SSH_AUTH_SOCK=" + guestGitSocket(path.Dir(socket))}
+	argv := []string{"env", "SSH_AUTH_SOCK=" + guestGitSocket(path.Dir(socket))}
 	if session != "" {
-		argv = append(argv, "REX_SESSION="+session)
+		// A session means a Rex provider set the guest up, and its server listens at socket.
+		argv = append(argv, "REX_SERVER=unix://"+socket, "REX_SESSION="+session)
 	}
 	return append(argv, "sh", "-c", `cd "$1" && exec "${SHELL:-/bin/sh}" -l`, "rox", directory)
 }
@@ -96,43 +97,6 @@ func Shell(name, key string) error {
 	return sys.R.Replace(argv, map[string]string{"TERM": "xterm-256color"})
 }
 
-func remoteShell(host string, entry contract.Entry, key string) error {
-	if err := sys.Require("ssh", "ssh-keyscan", "rex"); err != nil {
-		return err
-	}
-	var checkouts []checkoutDir
-	for _, c := range entry.Checkouts {
-		checkouts = append(checkouts, checkoutDir{c.ID, c.Name, c.Workspace})
-	}
-	dir, err := shellDirectory(entry.Name, checkouts, entry.Home, key)
-	if err != nil {
-		return err
-	}
-	session := entry.Sessions[""]
-	for _, c := range entry.Checkouts {
-		if c.Workspace == dir {
-			session = entry.Sessions[c.ID]
-		}
-	}
-	s := ui.Start("Connecting to %s on %s through the tailnet", entry.Name, host)
-	t, err := openTailnetSSH(entry)
-	if err != nil {
-		s.Fail(err)
-		return err
-	}
-	defer t.Close()
-	s.End()
-	result, err := sys.Try(sys.Cmd{Argv: t.command(true, "", shellCommand(entry.Socket, dir, session)), Interactive: true,
-		Env: map[string]string{"TERM": "xterm-256color"}})
-	if err != nil {
-		return err
-	}
-	if result.Code != 0 {
-		return exitCode(result.Code)
-	}
-	return nil
-}
-
 // ExitCode is an error that only sets the process's exit status.
 type exitCode int
 
@@ -145,27 +109,6 @@ func ExitStatus(err error) (int, bool) {
 		return int(code), true
 	}
 	return 0, false
-}
-
-func appShell(host, name, key string) error {
-	argv := append(append([]string{"rex", "--autostart=false", "-S", host, "new", "--json", "rox shell " + name, "--"}, remoteRox...), "shell", name)
-	if key != "" {
-		argv = append(argv, key)
-	}
-	created, err := rexJSON(20*time.Second, argv...)
-	if err != nil {
-		return err
-	}
-	session, _ := sessionBlock(created)
-	ui.Info("%s isn't on the tailnet, so its shell opened on %s in Rex session %s", name, host, session)
-	if app := localApp(); app != nil {
-		if sys.Status("rex", "--autostart=false", "-C", app.ID, "do", "session.select", "session_id="+session) == 0 {
-			ui.Done("It's showing in the Rex app")
-			return nil
-		}
-	}
-	ui.Hint("Open it from " + host + " in the Rex app, or run " + ui.Code("rex -S "+host+" session inspect "+session))
-	return nil
 }
 
 // ParseForward reads PORT or LOCAL:GUEST.
@@ -202,20 +145,6 @@ func Forward(name string, ports [][2]int) error {
 	ui.Header("forward", name)
 	for _, p := range ports {
 		ui.Done("%s %s port %d on %s", ui.Accent(fmt.Sprintf("http://localhost:%d", p[0])), ui.Muted("→"), p[1], name)
-	}
-	ui.Info("Press Ctrl-C to stop")
-	return sys.R.Replace(argv, nil)
-}
-
-func remoteForward(host string, entry contract.Entry, ports [][2]int) error {
-	if entry.Tailnet == "" {
-		return fmt.Errorf("%s runs on %s and isn't on the tailnet, so forward its ports from %s", entry.Name, host, host)
-	}
-	ui.Header("forward", entry.Name+" on "+host)
-	argv := []string{"rex", "--autostart=false", "-S", entry.Tailnet, "forward", "new"}
-	for _, p := range ports {
-		ui.Done("%s %s port %d on %s %s", ui.Accent(fmt.Sprintf("http://localhost:%d", p[0])), ui.Muted("→"), p[1], entry.Name, ui.Muted("· through the tailnet"))
-		argv = append(argv, "-L", fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", p[0], p[1]))
 	}
 	ui.Info("Press Ctrl-C to stop")
 	return sys.R.Replace(argv, nil)
@@ -388,7 +317,7 @@ func entryRefs(e contract.Entry) []checkoutRef {
 	return refs
 }
 
-// List prints workspaces here, on one Rex host, or on every reachable one. Inside a checkout,
+// List prints workspaces here, on one host, or on every reachable one. Inside a checkout,
 // only the workspaces with a checkout of that project, unless allProjects.
 func List(scope string, asJSON bool, cwd string, allProjects bool) error {
 	var current *checkoutIdentity
@@ -406,7 +335,7 @@ func List(scope string, asJSON bool, cwd string, allProjects bool) error {
 		order = []string{thisMachine}
 	} else {
 		var err error
-		s := ui.Start("Asking Rex hosts for their workspaces")
+		s := ui.Start("Asking other hosts for their workspaces")
 		if !ui.Fancy() || asJSON {
 			s.End()
 		}
@@ -488,7 +417,7 @@ func Inspect(name string) error {
 func recordFromEntry(host string, e contract.Entry) contract.Guest {
 	r := contract.Guest{Schema: contract.Schema, Name: e.Name, Backend: e.Backend, Engine: e.Engine, Phase: e.Phase,
 		Stopped: e.Phase == "stopped", User: e.User, Home: e.Home, Socket: e.Socket, Agents: e.Agents,
-		Tailnet: e.Tailnet, Endpoint: e.Tailnet, Projects: []contract.Project{}}
+		Tailnet: e.Tailnet, Endpoint: e.Tailnet, Projects: []contract.Project{}, Session: e.Sessions[""]}
 	if e.Socket != "" {
 		r.Base = path.Dir(e.Socket)
 	}
@@ -504,7 +433,7 @@ func recordFromEntry(host string, e contract.Entry) contract.Guest {
 
 // Exec runs argv in the guest over rox's SSH, passing stdin, stdout and the exit status
 // through. It is rix's only way into guests. It never takes the guest's lock, so hooks can
-// use it while rox up holds it. A guest on another host is reached through its tailnet Rex server.
+// use it while rox up holds it. A guest on another host is reached by running rox exec there.
 func Exec(name string, stdin bool, agentSock string, argv []string) error {
 	if len(argv) == 0 {
 		return errors.New("Pass the command to run after --")
@@ -520,19 +449,11 @@ func Exec(name string, stdin bool, agentSock string, argv []string) error {
 		}
 		command = remoteCommand(g, argv, agentSock, false)
 	} else {
-		_, e, err := findRemoteGuest(name, "")
+		host, _, err := findRemoteGuest(name, "")
 		if err != nil {
 			return err
 		}
-		if e.Tailnet == "" {
-			return fmt.Errorf("%s runs on another host and isn't on the tailnet, so it can't be reached from here", name)
-		}
-		t, err := openTailnetSSH(e)
-		if err != nil {
-			return err
-		}
-		defer t.Close()
-		command = t.command(false, agentSock, argv)
+		return remoteExec(host, name, stdin, agentSock, argv)
 	}
 	result, err := sys.Try(sys.Cmd{Argv: command, Passthrough: true, KeepStdin: stdin})
 	if err != nil {
@@ -559,15 +480,12 @@ func Route(command, name, host string, run func(host string, entry contract.Entr
 
 // RouteShell opens a shell in a guest on another host.
 func RouteShell(host string, entry contract.Entry, key string) error {
-	if entry.Tailnet != "" {
-		return remoteShell(host, entry, key)
-	}
-	return appShell(host, entry.Name, key)
+	return remoteShell(host, entry.Name, key)
 }
 
 // RouteForward forwards ports to a guest on another host.
 func RouteForward(host string, entry contract.Entry, ports [][2]int) error {
-	return remoteForward(host, entry, ports)
+	return remoteForward(host, entry.Name, ports)
 }
 
 // RunOnHost runs a rox command on another host.
@@ -595,7 +513,7 @@ func ChooseProjectGuest(cwd string) (string, string, error) {
 	}
 	results, order, problems, err := gatherRecords("all")
 	if err != nil {
-		ui.Warn("Could not check other Rex hosts for workspaces (%v)", err)
+		ui.Warn("Could not check other hosts for workspaces (%v)", err)
 	}
 	for _, host := range order {
 		if host == thisMachine {

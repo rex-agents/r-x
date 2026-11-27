@@ -16,7 +16,8 @@ rox up [container|linux|macos|fly|railway] [flags] [-- COMMAND...]
 
 Starts and provisions a new guest. Inside a Git checkout it also clones the project; use
 `--no-project` for a bare guest. Everything after `--` runs as the command of the project's Rex
-session (kept open when it exits).
+session (kept open when it exits), which needs the [rox-rex hook](rex-hook.md); without it rox says so and
+the command doesn't run.
 
 | Flag | Meaning |
 | --- | --- |
@@ -39,8 +40,8 @@ session (kept open when it exits).
 | `--git-key PATH` (repeatable), `--git-known-hosts FILE` | Git SSH identities and `known_hosts` for rix to use for this launch, replacing rix's configured ones |
 | `--boot-timeout SECONDS` | per readiness check (default 120) |
 | `--config FILE` | use this rox config instead of `~/.config/rox/config.json` (must exist) |
-| `--open-shell` | open the guest's session in the Rex app (inside a Rex terminal; errors outside one) |
-| `-S, --host LABEL`, `--vault host\|here` | launch on another Rex host; see [Remote hosts](remote-hosts.md) |
+| `--open-shell` | open a shell for the guest through the `open-shell` hook (rox-rex: the Rex app, or a Guest tab in this Rex terminal), or `rox shell` here when no provider does |
+| `-S, --host LABEL`, `--vault host\|here` | launch on another host; see [Remote hosts](remote-hosts.md) |
 
 ```sh
 rox up                                  # backend from .rox.json
@@ -49,7 +50,7 @@ rox up fly --agents claude
 rox up container --no-project -- htop
 rox up container --repo https://github.com/owner/web.git --branch dev
 rox up container --local                # include my uncommitted work
-rox up linux -S studio                  # on the Rex host "studio"
+rox up linux -S studio                  # on the host "studio", over SSH
 ```
 
 ### What a launch does
@@ -61,16 +62,16 @@ In order:
 2. Resolve backend, settings and agents.
 3. Make sure the backend's runtime is up; prepare images.
 4. Start the guest and wait for SSH.
-5. Install agents (`post-boot` hook).
-6. Start Rex in the guest; join the tailnet if configured; register the Rex host.
-7. Clone (the `pre-clone` hook gives the guest its Git agent).
-8. Run `.rox.sh`; start the project's Rex session.
-9. Run the `post-provision` hook.
+5. Install agents, then the `post-boot` hook (rix signs them in; rox-rex starts Rex in the guest and joins the tailnet if configured).
+6. Clone (the `pre-clone` hook gives the guest its Git agent).
+7. Run `.rox.sh`.
+8. Run the `post-provision` hook (rix syncs agent setup; rox-rex starts the project's Rex session and registers the Rex host).
+9. With `--open-shell`, the `open-shell` hook.
 
-Each step prints one line. The hooks are described in [The rix contract](rix-contract.md).
+Each step prints one line. The hooks are described in [The hook contract](rix-contract.md); Rex is [a hook](rex-hook.md).
 
 If a launch fails after the guest exists, rox keeps it (phase `failed`); remove it with
-`rox down NAME`. A failed Git clone or `.rox.sh` leaves the Rex host available so you can look around.
+`rox down NAME`. A failed Git clone or `.rox.sh` leaves the guest available so you can look around with `rox shell`.
 
 ## rox add
 

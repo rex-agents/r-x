@@ -36,7 +36,7 @@ Common rox errors and what to do about them. Run any command with `-v` to see wh
 
 - **`NAME is stopped. Start it with rox start NAME`** — `rox stop` was used; `shell`, `cp`, `forward`
   need a running guest.
-- **A guest's tunnel is gone after sleep or restart** — `rox reconnect NAME`, or `rox service install`
+- **A guest's connections are gone after sleep or restart** — `rox reconnect NAME`, or `rox service install`
   (see [Keeping guests running](service.md)).
 - **`The container for NAME no longer exists`** — it was deleted outside rox; `rox down NAME` cleans up.
 - **`rox cp copies into guests on this machine`** — run it on the guest's host.
@@ -49,7 +49,14 @@ Common rox errors and what to do about them. Run any command with `-v` to see wh
 
 ### Hooks and anything else
 
-- **A hook warning** — `rox hooks` shows the provider; run with `--verbose` for details. Without
+- **A hook warning** — `rox hooks` lists the providers; run with `--verbose` for details. Without
   rix, guests clone without your Git keys and agents aren't signed in. See
-  [The rix contract](rix-contract.md).
+  [The hook contract](rix-contract.md).
+- **`Installing Rex in NAME failed`** or **`Rex isn't installed in the guest`** — rox-rex installs Rex on first boot of a
+  Linux guest; a macOS guest needs a template made with `rox template macos --with-rex`. rox works without Rex.
+- **`rox open` or `--open-shell` opens a plain shell** — no provider opened one: install rox-rex, and open the Rex app on this
+  machine or run in a Rex terminal. See [Rex, as a hook](rex-hook.md).
+- **`Could not reach HOST over SSH`** — `-S HOST` is an SSH destination (`ssh HOST rox ls` must work without a prompt) with rox
+  on its PATH; for Rex hosts set `"host_transport": "rox-rex"`.
+- **`The command after -- didn't run`** — it runs in a Rex session, which needs rox-rex; use `rox exec NAME -- COMMAND`.
 - **Anything else** — `rox -v COMMAND` streams the output of every tool rox runs.

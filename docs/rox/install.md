@@ -13,13 +13,14 @@ rox needs these programs on `PATH`, depending on what you launch, and checks the
 
 | When | Programs |
 | --- | --- |
-| Always | `rex`, `ssh`, `ssh-keygen` (plus `git` when a project is cloned from this machine) |
+| Always | `ssh`, `ssh-keygen` (plus `git` when a project is cloned from this machine) |
 | `container` backend | the engine: `docker`, `podman`, or Apple's `container` |
 | `linux`, `macos` backends | `tart` (Apple Silicon Mac only) |
 | `fly` backend | `fly` or `flyctl`, logged in (`fly auth login`) |
 | `railway` backend | `railway`, logged in (`railway login`) |
 | Funnels | `tailscale` on this machine |
-| `rox template` | `tart`, `ssh`, `ssh-keygen`, and `ssh-keyscan` (linux); `ditto` and the Rex app in `/Applications/Rex.app` (macos) |
+| `rox template` | `tart`, `ssh`, `ssh-keygen`, and `ssh-keyscan` (linux); `ditto` and the Rex app in `/Applications/Rex.app` (macos, only with `--with-rex`) |
+| Rex features | the optional [rox-rex](rex-hook.md) hook and `rex`; rox itself never needs them |
 
 ## The rox skill
 
@@ -36,4 +37,4 @@ rox --version
 rox self-update [--check]
 ```
 
-`rox self-update` installs the latest release and refreshes the skill and the Rex actions; `--check` only says whether one is out. Automatic checks happen at most every six hours and follow `"updates"` in the [config](configuration.md) (`"auto"` the default, `"notify"`, `"off"`) or `ROX_UPDATES`.
+`rox self-update` installs the latest release and refreshes the skill (and, with rox-rex installed, the Rex actions); `--check` only says whether one is out. Automatic checks happen at most every six hours and follow `"updates"` in the [config](configuration.md) (`"auto"` the default, `"notify"`, `"off"`) or `ROX_UPDATES`.

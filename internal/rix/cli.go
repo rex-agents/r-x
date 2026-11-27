@@ -25,9 +25,9 @@ func Main(version string, args []string) int {
 	ui.SetProgram("rix")
 	updater := &selfupdate.Updater{Program: "rix", Version: version, StateDir: StateRoot(), Mode: updateMode,
 		After: func(string) {
-			// rox writes rix's Rex actions too, from the rix it finds on PATH.
-			if rox, err := roxBin(); err == nil {
-				sys.Try(sys.Cmd{Argv: []string{rox, "rex", "install", "--refresh"}, Passthrough: true})
+			// rox-rex writes rix's Rex actions too, from the rix it finds on PATH.
+			if p, err := sys.R.LookPath("rox-rex"); err == nil {
+				sys.Try(sys.Cmd{Argv: []string{p, "install", "--refresh"}, Passthrough: true})
 			}
 		}}
 	updater.Auto(args)

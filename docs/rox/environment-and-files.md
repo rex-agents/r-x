@@ -25,12 +25,13 @@ Guest records are the same JSON the Python rox wrote and are read as they are.
 | --- | --- |
 | `ROX_VERBOSE=1` | same as `--verbose` |
 | `ROX_UPDATES` | `auto`, `notify` or `off`; overrides the config's `updates` |
-| `ROX_HOOKS` | hook provider program, or `off`/`none`; overrides the config |
+| `ROX_HOOKS` | hook providers in call order, such as `rix,rox-rex`, or `off`/`none`; overrides the config |
+| `ROX_HOSTS`, `ROX_HOST_TRANSPORT` | the hosts `rox ls --all` asks, and how rox reaches hosts (`ssh` or a program such as `rox-rex`); override the config |
 | `ROX_THEME` | `light` or `dark` terminal theme (otherwise guessed from `COLORFGBG`) |
 | `NO_COLOR`, `TERM=dumb` | plain output |
 | `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` | move the folders above |
-| `REX_CONFIG` | Rex's `init.lua`, for `rox rex install` |
-| `REX_SESSION` | set by Rex terminals; required by `--open-shell` |
+| `REX_CONFIG` | Rex's `init.lua`, for `rox-rex install` |
+| `REX_SESSION` | set by Rex terminals; rox-rex opens a Guest tab in that session for `--open-shell` |
 
 ## Output
 
