@@ -74,7 +74,13 @@ func (s *server) resolvePlacement(p authapi.Placement, vault string) (local bool
 
 // vaultFor is the vault source name a thread's model requests use.
 func (s *server) vaultFor(m *threadMeta) string {
-	return cmpOr(cmpOr(m.Vault, s.vaultDefault), "local")
+	if d := cmpOr(m.Vault, s.vaultDefault); d != "" {
+		return d
+	}
+	if s.node != nil && s.node.InPack() {
+		return "leader" // in a pack the vault host serves model keys
+	}
+	return "local"
 }
 
 // ---- the rux authority command ----
