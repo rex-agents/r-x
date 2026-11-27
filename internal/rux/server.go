@@ -88,7 +88,8 @@ type threadMeta struct {
 	SetupFailed bool      `json:"setup_failed,omitempty"` // the runner couldn't check out the repo, so claude hasn't run
 	Connected   bool      `json:"connected"`
 	Token       string    `json:"token,omitempty"`
-	Vault       string    `json:"vault,omitempty"` // which vault source serves this thread's model keys: "local" or "leader"
+	Vault       string    `json:"vault,omitempty"`  // which vault source serves this thread's model keys: "local" or "leader"
+	Engine      string    `json:"engine,omitempty"` // "" or claude-code: claude -p; "harness": rux's own agent loop (anthropic/… or openai/… models) via the model proxy
 }
 
 type storedEvent struct {
@@ -602,7 +603,8 @@ type createReq struct {
 	Kind, Parent                                 string
 	Title                                        string            `json:"-"` // set by managers; otherwise the prompt's first line
 	Placement                                    authapi.Placement `json:"placement"`
-	Vault                                        string            `json:"vault"` // "local" or "leader"; default: authority.json, else local
+	Vault                                        string            `json:"vault"`  // "local" or "leader"; default: authority.json, else local
+	Engine                                       string            `json:"engine"` // "claude-code" (default) or "harness", which takes a provider/model such as anthropic/claude-sonnet-5-5
 }
 
 type reqError struct {
@@ -661,8 +663,16 @@ func (s *server) createThread(req createReq) (*thread, error) {
 		}
 		req.Model, req.Effort = cmpOr(req.Model, proj.Model), cmpOr(req.Effort, proj.Effort)
 	}
-	var err error
-	if req.Model, req.Effort, err = validSettings(req.Model, req.Effort); err != nil {
+	engine, err := s.resolveEngine(req.Engine, req.Model)
+	if err != nil {
+		return nil, &reqError{400, err.Error()}
+	}
+	if engine == "harness" {
+		_, name, _ := splitModel(req.Model)
+		if _, req.Effort, err = validSettings(name, req.Effort); err != nil {
+			return nil, &reqError{400, err.Error()}
+		}
+	} else if req.Model, req.Effort, err = validSettings(req.Model, req.Effort); err != nil {
 		return nil, &reqError{400, err.Error()}
 	}
 	if req.Repo != "" {
@@ -721,7 +731,7 @@ func (s *server) createThread(req createReq) (*thread, error) {
 		ID: id, Title: title, Project: req.Project, Kind: req.Kind, Parent: req.Parent,
 		Repo: req.Repo, Branch: req.Branch, Prompt: req.Prompt, Model: req.Model, Effort: req.Effort,
 		Status: "provisioning", Backend: s.backend, Created: now, Updated: now, Token: randHex(24),
-		Runtime: req.Runtime, Guest: req.Guest, SharedGuest: req.Guest != "", Vault: vault,
+		Runtime: req.Runtime, Guest: req.Guest, SharedGuest: req.Guest != "", Vault: vault, Engine: engine,
 	}
 	if local {
 		meta.Backend = "local"
@@ -1235,7 +1245,10 @@ func (s *server) runnerCommand(t *threadMeta, serverHost string) string {
 	if t.Branch != "" {
 		extra += " --branch " + shQuote(t.Branch)
 	}
-	if model := s.effectiveModel(t.Model); model != "" {
+	if t.Engine == "harness" {
+		extra += " --engine harness"
+	}
+	if model := s.threadModel(t); model != "" {
 		extra += " --model " + shQuote(model)
 	}
 	if t.Effort != "" {
@@ -1275,6 +1288,10 @@ func (s *server) provisionRox(t *thread) {
 	// rox's hooks before the runner starts.
 	runtime := cmpOr(m.Runtime, "container")
 	args := []string{"up", runtime, "--no-project", "--no-git-agent", "--agents", "claude"}
+	if s.proxy != nil {
+		// The guest's models go through the authority's proxy, so no real sign-in goes in.
+		args = append(args, "--credentials=false")
+	}
 	if !remoteRuntime(runtime) {
 		// Local guests reach the runner listener on the host's own network; remote ones
 		// (Fly, Railway) need the tailnet.
@@ -1391,7 +1408,7 @@ func (s *server) provisionLocal(t *thread) {
 	_, port, _ := net.SplitHostPort(s.advertise)
 	cmd := exec.Command(s.selfBin, "runner", "--server", "ws://127.0.0.1:"+port+"/runner",
 		"--thread", m.ID, "--token", m.Token, "--dir", work, "--state", filepath.Join(t.dir, "runner"),
-		"--repo", m.Repo, "--branch", m.Branch, "--model", s.effectiveModel(m.Model), "--effort", m.Effort, "--role", m.Kind)
+		"--repo", m.Repo, "--branch", m.Branch, "--model", s.threadModel(&m), "--effort", m.Effort, "--role", m.Kind, "--engine", m.Engine)
 	if s.proxy != nil {
 		cmd.Args = append(cmd.Args, "--model-proxy", "http://127.0.0.1:"+port)
 	}

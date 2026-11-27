@@ -47,9 +47,10 @@ over the quorum link) plugs in through the `VaultSource` interface; until then a
 `"vault": "leader"` gets a 502 explaining that the source isn't available. Turn the proxy off with
 `--model-proxy=false`.
 
-Limitation: `rox up --agents claude` still has rix's hook put the Claude Code sign-in in the guest, for
-`rux agent` guests and for threads. Threads ignore it (their runner points `claude` at the proxy), but
-the file is there until rox's hook can skip it for rux threads.
+Thread and sub-agent guests are launched with `rox up --credentials=false`, which sets
+`launch.credentials: false` in the hook payload ([contract](../rox/rix-contract.md)). rix then pushes
+no Claude Code or Codex sign-in into them, and still sets up the Git agent and syncs agent setup. The
+harness's own `rux agent` guests aren't launched that way and still get their sign-in from rix.
 
 ## GitHub access
 
