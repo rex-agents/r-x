@@ -97,9 +97,14 @@ func (s *server) provisionShared(t *thread, m threadMeta) {
 			return
 		}
 	}
-	if out, err := exec.Command(s.roxBin, "exec", m.Guest, "--", "sh", "-lc", "command -v claude").CombinedOutput(); err != nil {
-		fail(fmt.Sprintf("%s has no Claude Code (%s). Pick a guest started with agents claude, or start a new one.",
-			m.Guest, outputLine(string(out), err)))
+	agent, agentName := s.agentOf(m.Model), "Claude Code"
+	if agent == "codex" {
+		agentName = "Codex"
+	}
+	agentBin := "command -v " + agent
+	if out, err := exec.Command(s.roxBin, "exec", m.Guest, "--", "sh", "-lc", agentBin).CombinedOutput(); err != nil {
+		fail(fmt.Sprintf("%s has no %s (%s). Pick a guest started with agents %s, or start a new one.",
+			m.Guest, agentName, outputLine(string(out), err), agent))
 		return
 	}
 	script := `set -a; . "$HOME/.rox/agents.env" 2>/dev/null || true; set +a; ` +
