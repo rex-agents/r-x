@@ -1,14 +1,14 @@
-# Builds README.md and docs/*.md into a site with Jekyll (config in _config.yml). Pull requests
-# that touch the docs only build it; a push to main also deploys it to GitHub Pages.
+# Builds README.md and docs/*.md into a Starlight (Astro) site in site/. Pull requests that touch
+# the docs only build it; a push to main also deploys it to GitHub Pages.
 # One-time setup: Settings -> Pages -> Source: GitHub Actions.
 name: Docs
 
 on:
   push:
     branches: [main]
-    paths: [README.md, docs/**, _config.yml, .github/workflows/docs.yml]
+    paths: [README.md, docs/**, site/**, .github/workflows/docs.yml]
   pull_request:
-    paths: [README.md, docs/**, _config.yml, .github/workflows/docs.yml]
+    paths: [README.md, docs/**, site/**, .github/workflows/docs.yml]
   workflow_dispatch:
 
 permissions:
@@ -21,23 +21,26 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v6
         id: pages
-      - uses: actions/jekyll-build-pages@v1
+      - uses: actions/setup-node@v7
         with:
-          source: ./
-          destination: ./_site
-      # jekyll-relative-links rewrites docs/x.md to /docs/x.html without the project-site base
-      # path (/r-x), so prefix it here.
-      - name: Prefix converted doc links with the base path
-        if: steps.pages.outputs.base_path != ''
-        run: |
-          sudo chown -R "$USER" _site
-          find _site -name '*.html' -exec sed -i -E \
-            's#href="/(docs/|README\.html)#href="${{ steps.pages.outputs.base_path }}/\1#g' {} +
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+      - run: npm run build
+        env:
+          SITE: ${{ steps.pages.outputs.origin }}
+          BASE: ${{ steps.pages.outputs.base_path }}
       - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site/dist
 
   deploy:
     if: github.event_name != 'pull_request'
