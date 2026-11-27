@@ -513,6 +513,7 @@ func TestDeliverRetainsAndRetriesFailedDispatch(t *testing.T) {
 		defer r.inMu.Unlock()
 		return len(r.inQ) == 0
 	})
+	waitOutbox(t, "claude's input", func() bool { b, _ := os.ReadFile(got); return strings.Contains(string(b), "second") })
 	b, _ := os.ReadFile(got)
 	i1, i2 := strings.Index(string(b), "first"), strings.Index(string(b), "second")
 	if i1 < 0 || i2 < i1 {
@@ -524,12 +525,62 @@ func TestDeliverRetainsAndRetriesFailedDispatch(t *testing.T) {
 	r.mu.Lock()
 	var users int
 	for _, l := range r.lines {
-		if strings.Contains(string(l), `"rux_user"`) && strings.Contains(string(l), `"id"`) {
+		if strings.Contains(string(l), `"rux_delivered"`) && strings.Contains(string(l), `"id"`) {
 			users++
 		}
 	}
 	r.mu.Unlock()
 	if users != 2 {
-		t.Fatalf("rux_user events with ids = %d", users)
+		t.Fatalf("rux_delivered events = %d", users)
+	}
+}
+
+// Claude's output is emitted by its own reader, not under the send lock, so a result that
+// arrives at once must still come after the rux_user announcement of the turn it answers,
+// and the delivery record comes after the whole write.
+func TestFastResultStaysAfterUserEvent(t *testing.T) {
+	root := t.TempDir()
+	work := filepath.Join(root, "w")
+	os.MkdirAll(work, 0o755)
+	r := newTestRunner(t, "", work)
+	r.claudeBin = filepath.Join(root, "claude")
+	os.WriteFile(r.claudeBin, []byte("#!/bin/sh\nwhile read l; do echo '{\"type\":\"result\",\"subtype\":\"success\"}'; done\n"), 0o755)
+	close(r.ready)
+	for i := 0; i < 20; i++ {
+		id := fmt.Sprintf("m%d", i)
+		if err := r.sendUser(id, "hi "+id); err != nil {
+			t.Fatal(err)
+		}
+		waitOutbox(t, "result "+id, func() bool {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			n := 0
+			for _, l := range r.lines {
+				if strings.Contains(string(l), `"result"`) {
+					n++
+				}
+			}
+			return n > i
+		})
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	users, results, delivered := 0, 0, 0
+	for _, l := range r.lines {
+		s := string(l)
+		switch {
+		case strings.Contains(s, `"rux_user"`):
+			users++
+		case strings.Contains(s, `"result"`):
+			results++
+			if results > users {
+				t.Fatalf("a result was recorded before its rux_user (%d results, %d users)", results, users)
+			}
+		case strings.Contains(s, `"rux_delivered"`):
+			delivered++
+		}
+	}
+	if users != 20 || delivered != 20 {
+		t.Fatalf("users %d delivered %d", users, delivered)
 	}
 }

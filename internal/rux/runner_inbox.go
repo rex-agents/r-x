@@ -15,7 +15,8 @@ import (
 // The runner keeps the user messages it has accepted in stateDir/inbox, one file each, until
 // claude has been given them. A message the server sends again (it resends every message
 // the runner hasn't acked on each connection) is recognised by its id and not run twice:
-// ids of delivered messages are in the rux_user events, which are on disk too.
+// ids of delivered messages are in rux_delivered events, which are on disk too. rux_user
+// announces a message in the transcript (before claude can answer it); it carries the id as "mid".
 
 var msgIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
@@ -30,16 +31,24 @@ func (r *runner) inboxDir() string { return filepath.Join(r.stateDir, "inbox") }
 func (r *runner) loadInbox() {
 	r.inMu.Lock()
 	defer r.inMu.Unlock()
-	r.seen, r.queued = map[string]bool{}, map[string]bool{}
+	r.seen, r.queued, r.announced = map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, l := range r.lines {
-		if !strings.Contains(string(l), `"rux_user"`) {
+		if !strings.Contains(string(l), `"rux_user"`) && !strings.Contains(string(l), `"rux_delivered"`) {
 			continue
 		}
 		var w struct {
-			Ev struct{ Type, ID string }
+			Ev struct{ Type, ID, Mid string }
 		}
-		if json.Unmarshal(l, &w) == nil && w.Ev.Type == "rux_user" && w.Ev.ID != "" {
+		if json.Unmarshal(l, &w) != nil {
+			continue
+		}
+		switch {
+		case w.Ev.Type == "rux_delivered" && w.Ev.ID != "":
 			r.seen[w.Ev.ID] = true
+		case w.Ev.Type == "rux_user" && w.Ev.ID != "": // from a runner that recorded delivery here
+			r.seen[w.Ev.ID] = true
+		case w.Ev.Type == "rux_user" && w.Ev.Mid != "":
+			r.announced[w.Ev.Mid] = true
 		}
 	}
 	ents, _ := os.ReadDir(r.inboxDir())

@@ -48,7 +48,8 @@ type runner struct {
 	retryDelay   time.Duration // first wait before redelivering a failed message; 0 is 2s
 	inNotify     chan struct{}
 	seen, queued map[string]bool
-	gitEnv       []string // extra environment for git and claude
+	announced    map[string]bool // ids with a rux_user event already
+	gitEnv       []string        // extra environment for git and claude
 
 	mu        sync.Mutex
 	seq       int64
@@ -314,7 +315,7 @@ func (r *runner) handle(m wireMsg, reply func(wireMsg)) {
 }
 
 // sendUser hands a message to claude. It returns nil only once the whole message is written to
-// claude's stdin, and then records it as run (the rux_user event with its id). On any error the
+// claude's stdin, and then records it as delivered (the rux_delivered event with its id). On any error the
 // caller keeps the message and tries again. A crash after the write but before the record means
 // the message runs again after a restart: at-least-once, never silently lost.
 func (r *runner) sendUser(id, text string, files ...attachment) error {
@@ -370,6 +371,18 @@ func (r *runner) sendUser(id, text string, files ...attachment) error {
 			"content": content,
 		},
 	})
+	// The user's turn is announced before the first write, so claude's answer, which the
+	// stdout reader emits without waiting for us, can't land ahead of it. Once per message,
+	// not once per attempt.
+	r.inMu.Lock()
+	announce := id == "" || !r.announced[id]
+	if id != "" {
+		r.announced[id] = true
+	}
+	r.inMu.Unlock()
+	if announce {
+		r.emit(ruxEv("rux_user", "text", text, "images", urls, "mid", id))
+	}
 	if _, err := r.stdin.Write(append(b, '\n')); err != nil {
 		// Part of the line may have gone through. End this claude, so the half line dies with
 		// it and the retry starts a clean process (--resume).
@@ -377,7 +390,9 @@ func (r *runner) sendUser(id, text string, files ...attachment) error {
 		r.retiring = r.cmd
 		return fmt.Errorf("writing to claude: %w", err)
 	}
-	r.emit(ruxEv("rux_user", "text", text, "images", urls, "id", id))
+	if id != "" {
+		r.emit(ruxEv("rux_delivered", "id", id)) // the dedupe record: claude has all of it
+	}
 	return nil
 }
 
