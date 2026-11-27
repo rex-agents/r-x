@@ -5,7 +5,7 @@ Three static Go binaries. rox and rix replace the Python `rox` script; rux runs 
 - **rox** owns guests: it boots them (Apple container, Docker, Podman, Tart, Fly.io, Railway), wires them to Rex and Tailscale, manages their lifecycle, and installs agent CLIs when a project asks for them.
 - **rix** owns the secrets and settings that agents and Git use inside a guest: Git SSH keys, Claude Code and Codex credentials, and synced skills, instructions, MCP servers and settings. rix installs nothing.
 
-- **rux** is a multi-agent harness on rox and rix. `rux` opens it: you talk to a lead agent that starts sub-agents, each in its own rox guest, and every agent's conversation is live in one window. Agents run on Claude (Anthropic API) or any OpenAI-compatible model, and model keys stay with rix on your machine. `rux claude` makes Claude Code itself the lead, with sub-agents in Rex panes. `rux serve` runs threads you drive from your phone; a thread's guest is stopped when it's been idle and started again by the next message. rux stores no credentials: it gets every one from rix. See [docs/rux.md](docs/rux.md).
+- **rux** is a multi-agent harness on rox and rix. `rux` opens it: you talk to a lead agent that starts sub-agents, each in its own rox guest, and every agent's conversation is live in one window. Agents run on Claude (Anthropic API), any OpenAI-compatible model, Claude Code or Codex, and model keys stay with rix on your machine. `rux claude` makes Claude Code itself the lead, with sub-agents in Rex panes. `rux serve` runs threads you drive from your phone; a thread's guest is stopped when it's been idle and started again by the next message. rux stores no credentials: it gets every one from rix. See [docs/rux.md](docs/rux.md).
 
 rox works without rix. With rix on `PATH`, rox calls it at fixed points in a guest's life, and rix reaches guests only through `rox exec`.
 
@@ -89,12 +89,13 @@ Everything rux needs comes from rix on the machine running it:
 ```sh
 rix secret set ANTHROPIC_API_KEY  # the harness's Claude models (or OPENAI_API_KEY, OPENROUTER_API_KEY, …)
 rix auth claude                   # Claude Code in guests (rox up --agents claude, signed in by rix's hooks)
+rix auth codex                    # Codex in guests (rox up --agents codex)
 rix auth github                   # GitHub token for the repo picker and git in guests; without one, gh's login
 rix secret set BUTLER_API_KEY     # secrets that rux actions list in tool.json
 rix secret import ~/.rux/secrets.env   # move secrets from an older rux
 ```
 
-`rix credential github` and `rix secret get NAME... --json` are how rux asks; any tool on this machine can do the same.
+`rix credential github` and `rix secret get NAME... --json` are how rux asks; any tool on this machine can do the same. Details: [docs/rux.md](docs/rux.md#credentials-come-from-rix).
 
 ## Rex actions
 

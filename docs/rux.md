@@ -1,7 +1,15 @@
 # rux
 
-Run Claude Code threads in disposable rox guests, driven from a phone over Tailscale, or give your
-own Claude Code or Codex session sub-agents in Rex panes. rux ships with rox and rix in the r-x release.
+rux runs agents in disposable rox guests. It has three modes:
+
+- **`rux`**: a multi-agent harness in one terminal window: a lead agent, sub-agents in guests, every conversation live
+  (see [rux: the multi-agent harness](#rux-the-multi-agent-harness)).
+- **`rux claude`** and **`rux agent`**: Claude Code (or Codex) as the lead in a Rex pane, with sub-agents in Rex panes
+  (see [rux claude](#rux-claude-claude-code-as-the-lead) and [`rux agent`](#orchestrating-from-claude-code-or-codex-rux-agent)).
+- **`rux serve`**: Claude Code threads in guests, driven from a phone over Tailscale (described first, below).
+
+rux ships with rox and rix in the r-x release, and stores no credentials: see [Credentials come from rix](#credentials-come-from-rix).
+`rux help` lists every command.
 
 ```
 phone (PWA) ──HTTPS (tailscale serve)──▶ rux serve        (Mac: web app, thread store, runs `rox up`)
@@ -61,19 +69,27 @@ agents in a sidebar and the selected one's transcript beside it.
 - **The lead** runs on your machine, in the current directory. It reads code freely (`read_file`,
   `grep`, `list_files`); its `bash` asks you first (`y` allow, `a` allow for the session, `n` deny).
   Its other tools run sub-agents: `spawn_agent`, `message_agent`, `wait_for_agents`, `agent_status`,
-  `read_agent`, `stop_agent` and `list_guests`.
+  `read_agent`, `stop_agent`, `list_guests` and `list_hosts` (see [the lead's tools](#the-leads-tools)). A lead
+  on Claude Code or Codex has its own tools instead, and gets the same rux tools over MCP.
 - **Each sub-agent** works in its own rox guest: a new Apple container (4 GB) by default, or a Linux
   or macOS VM, Fly.io or Railway, or an existing guest. rox clones the repo (this directory's origin
-  by default, over SSH) on a new branch `rux/NAME`. The sub-agent has `bash`, `read_file`,
-  `write_file`, `edit_file`, `grep` and `list_files`, all running in the guest, and pushes its branch
+  by default, over SSH) and rux switches to a new branch `rux/NAME`. A sub-agent on a model API has `bash`,
+  `read_file`, `write_file`, `edit_file`, `grep` and `list_files`, all running in the guest; one on
+  `claude-code` or `codex` runs that CLI in the guest instead. It pushes its branch
   with your key through rix's Git agent. Only you merge.
 - **Reports flow back by themselves.** When a sub-agent ends its turn, its report arrives in the lead's
-  conversation as a message from it, and the lead picks it up.
+  conversation as a message from it, and the lead picks it up. (If the lead is inside `wait_for_agents`
+  for that agent, the report comes back as the tool's result instead.) An interrupt or an error is reported
+  the same way.
 - **You can talk to any agent.** `tab` selects one; what you type goes to it. A working agent reads
   your message after its current tool calls. `esc` interrupts the selected agent.
 - **Every model loop runs on your machine**, so model keys never enter a guest; only tool calls do.
-- When you quit, rux offers to remove the guests it started, and saves every transcript to
+- When you quit (`ctrl+c` on an empty prompt, `ctrl+d`, or `/quit`) and rux started guests, it asks whether to remove them
+  (`y` removes, `n` keeps, `esc` cancels; a guest that was there before is never removed). It prints the kept guests'
+  names (remove them later with `rox down NAME`) and saves every transcript, as `NAME.json` and `NAME.md`, to
   `~/.rux/sessions/TIME/`.
+- Run it with `rux [--model M] [--agent-model M] [--effort LEVEL] [PROMPT...]`; the words after the flags are the lead's
+  first message. A lone lowercase word is taken for a mistyped command, so add a word or quote a one-word prompt with a space.
 
 The window is quiet: the conversation, the agents in a strip above the prompt once there are
 sub-agents, and the prompt, with the selected agent's model and effort on its top border and where it
@@ -86,12 +102,16 @@ sub-agent's pane, shell and stop buttons.
 | `enter` | send to the selected agent (`alt+enter` for a new line) |
 | `tab` / `shift+tab` | next / previous agent |
 | `esc` | interrupt the selected agent |
-| `ctrl+o` | commands: every action below, to pick, search or click |
+| `ctrl+o` (or `ctrl+k`) | commands: every action below, to pick, search or click |
 | `ctrl+l` | model and effort for the selected agent |
 | `?` | shortcuts (on an empty prompt) |
 | `ctrl+e` | open every tool call |
-| `pgup` / `pgdn`, mouse wheel | scroll |
+| `pgup` / `pgdn` (or `ctrl+u` / `ctrl+f`), `home` / `end`, mouse wheel | scroll |
 | `ctrl+c` | clear the prompt; on an empty prompt, quit |
+| `ctrl+d` | quit |
+
+`ctrl+n` and `ctrl+p` also switch agents. While a tool call waits for your approval, `y` allows it, `a` allows that tool
+for the rest of the session, and `n` or `esc` denies it.
 
 | Command | Does |
 | --- | --- |
@@ -100,10 +120,52 @@ sub-agent's pane, shell and stop buttons.
 | `/effort LEVEL` | the selected agent's effort: low, medium, high, xhigh, max or auto |
 | `/pane [NAME]` | open an agent in a Rex pane beside rux (`rux view`), live, where you can message and interrupt it |
 | `/shell [NAME]` | open a shell in a sub-agent's guest, in a Rex pane |
-| `/stop [NAME]` | stop a sub-agent and remove its guest |
+| `/stop [NAME]` | stop a sub-agent and remove its guest (an existing guest it was given is kept) |
+| `/quit` (`/exit`, `/q`) | quit |
+| `/help` | the shortcuts |
+
+`/view` is another name for `/pane`. With no `NAME`, `/pane`, `/shell` and `/stop` use the selected agent (`/shell` and
+`/stop` need a sub-agent; `/pane lead` opens the lead). `/pane` and `/shell` need a Rex terminal.
+`rux view [--sock PATH] [NAME]` is what `/pane` runs: it shows one agent of a running rux, live, and what you type
+there goes to that agent (`esc` interrupts it, `ctrl+e` opens tool calls). It finds rux through its control socket,
+`~/.rux/run/PID.sock` (owner-only), and by default takes the newest.
 
 The model picker lists a few picks with what each is good for, every provider's models under
 "Other models" (or type to search them all), and the effort, which `←` `→` change.
+
+### The lead's tools
+
+A Claude Code or Codex lead gets these as an MCP server named `rux`, on `127.0.0.1` with a random token, for that session
+only. `wait_for_agents` can run for as long as the sub-agents do.
+
+| Tool | Parameters (* required) | Does |
+| --- | --- | --- |
+| `spawn_agent` | `name`*, `task`*, `repo`, `branch`, `guest_type`, `guest`, `host`, `model` | start a sub-agent; returns at once while it sets up. `repo` is `owner/name`, a git URL, or `none` (default: this directory's origin, over SSH). `guest_type` is `container` (default), `linux`, `macos`, `fly` or `railway`; `guest` reuses an existing guest instead; `host` is a Rex remote host; `model` defaults to `--agent-model`. A taken name gets a numeric suffix. |
+| `message_agent` | `agent`*, `message`* | a working agent reads it after its current tool calls. It fails for a stopped or failed agent: start a new one. |
+| `wait_for_agents` | `agents` (names; default: every agent that's starting or working), `timeout_seconds` (default 1800) | wait until they end their turns, and return their reports. It returns early if you message the lead. Stopped or failed agents are never waited on: they come back as errors, with any messages they never read. |
+| `agent_status` | none | each sub-agent's status, guest, model and the start of its last report |
+| `read_agent` | `agent`*, `entries` (default 30) | the end of a sub-agent's transcript |
+| `stop_agent` | `agent`*, `keep_guest` | stop it and remove its guest (see below) |
+| `list_guests` | none | your rox guests (`rox ls --all-projects`), which `spawn_agent` can reuse with `guest` |
+| `list_hosts` | none | this machine and your Rex remote hosts, which `spawn_agent` can start guests on with `host` |
+
+### A sub-agent's life
+
+Its status, in the sidebar and in `agent_status`, is `starting` (its guest is being set up; the detail line shows rox's latest
+output), `working`, `waiting` (its turn is over; it waits for a message), `failed` or `stopped`.
+
+1. `spawn_agent` creates the agent and sends it the task. For a new guest rux runs `rox up RUNTIME --repo … --project …
+   [--branch B] --agents claude|codex` (`--memory 4G` for containers, `--no-project` with no repo, `--no-tailscale`
+   unless the guest or host needs the tailnet); for an existing guest it runs `rox add GUEST --repo …`, which gives the
+   agent its own checkout. It then reads the guest with `rox inspect`, switches to `rux/NAME`, and starts the engine.
+2. If setup fails the agent is `failed`, the lead is told, and a guest rox had already named is kept (`stop_agent`
+   removes it). A missing CLI or sign-in says how to fix it, such as `rox add GUEST --agents codex` or `rix auth codex`.
+3. When a turn ends, its report goes to the lead, and the agent waits for a message from the lead or you.
+4. Stopping (`stop_agent`, `/stop`, the command menu) is final: the agent stays `stopped` and reads no more messages.
+   It works while the guest is still being set up, too: a `rox up` that has started is allowed to finish, so the guest
+   it made is known, and rux removes that guest as soon as rox returns. If removal fails, the guest's name is kept and
+   stopping again retries it. An existing guest is never removed, and `keep_guest` keeps one rux started.
+5. Quitting rux stops every agent and offers to remove the guests.
 
 ### Remote hosts
 
@@ -116,7 +178,8 @@ the same way. Run rux itself on a remote host (in a Rex pane there) to use that 
 
 Name a model as `provider/model`. The lead uses `--model`; the sub-agents use `--agent-model`
 (default: the lead's), and the lead can pick one per agent. Without `--model`, rux uses
-`anthropic/claude-opus-5-5` when there's an Anthropic API key, and otherwise `claude-code`.
+`lead_model` from `~/.rux/harness.json`, else `anthropic/claude-opus-5-5` when there's an Anthropic API key, else
+`claude-code` when `claude` is installed, else `codex` when `codex` is.
 
 Change models during a session with `/model`: it picks the selected agent's provider (showing which
 have keys), then its model from the provider's own list (type to filter, or type a model it doesn't
@@ -145,7 +208,8 @@ rux --model claude-code                 # Claude Code, with your Claude subscrip
 
 Claude goes through the Anthropic Messages API, with adaptive thinking, prompt caching, server-side
 compaction for long sessions, and the server-side refusal fallback on the models that take it.
-`--effort` sets low, medium, high (default), xhigh or max. Every other provider speaks the OpenAI chat
+`--effort` (or `effort` in the config) sets low, medium, high (default), xhigh or max. Each agent has its own,
+which `/effort` or the picker's `←` `→` change (`auto` is the engine's default). Every other provider speaks the OpenAI chat
 completions API with streaming tool calls.
 
 Built in: `anthropic`, `openai`, `openrouter`, `groq`, `deepseek`, `xai`, `together`, `gemini`,
@@ -157,7 +221,9 @@ Anthropic also takes an `ant auth login` profile. rux tells you which secret to 
 rix secret set ANTHROPIC_API_KEY     # create one at https://platform.claude.com/settings/keys
 ```
 
-Add other OpenAI-compatible servers, and set defaults, in `~/.rux/harness.json`:
+Add other OpenAI-compatible servers, and set defaults, in `~/.rux/harness.json` (or the file `RUX_HARNESS_CONFIG` names);
+command-line flags override it. A provider's `kind` is `openai` (the default) or `anthropic`, `key` names the rix secret (then
+environment variable) with its API key, and `headers` adds request headers:
 
 ```json
 {
@@ -172,8 +238,8 @@ Add other OpenAI-compatible servers, and set defaults, in `~/.rux/harness.json`:
 
 ## rux claude: Claude Code as the lead
 
-`rux claude` (alias `rux lead`) runs in a Rex terminal and makes your pane Claude Code itself, as the lead
-agent, with sub-agents that are Claude Code or Codex in their own guests and Rex panes. Use it for your
+`rux claude [--model M] [--no-monitor] [PROMPT]` (alias `rux lead`) runs in a Rex terminal, and needs `claude` installed.
+It makes your pane Claude Code itself, as the lead agent, with sub-agents that are Claude Code or Codex in their own guests and Rex panes. Use it for your
 Claude subscription and Claude Code's own UI. The lead delegates with `rux agent spawn`, follows the
 sub-agents with `rux agent wait`, `read` and `send`, and reports back.
 
@@ -181,8 +247,9 @@ Before starting sub-agents, the lead settles anything you didn't say, in one que
 
 `rux` also:
 - opens `rux monitor` in a short pane below the lead (`--no-monitor` to skip it),
-- shows the sub-agents' states in Claude Code's status line,
-- lets the lead run `rux agent`, `rox ls`, `rox inspect` and `rix status` without asking, and
+- shows the sub-agents' states in Claude Code's status line (`rux statusline`: working, waiting for you, starting, done, failed),
+- lets the lead run `rux agent`, `rux monitor`, `rox ls`, `rox inspect`, `rix status`, `rex hosts`, `git remote`, `git status`
+  and `git log` without asking, and
 - keeps the lead's rux skill current with this rux.
 
 The lead runs on your machine with Claude Code's normal permissions; only the sub-agents run in sandboxes.
@@ -199,12 +266,16 @@ The monitor follows every sub-agent in this Rex session, as Rex reports it: work
 | `o` | open a shell in the guest |
 | `n` | go back to the lead |
 | `tab` | move between agents and guests |
+| `r` | refresh |
+| `q` / `esc` | quit the monitor |
+
+Move with `↑` `↓` (or `j` `k`). `rux agent ls --watch` is the plain-text version.
 
 ### Sub-agent guests
 
 - GitHub repos are cloned over SSH, with your key from rix's Git agent, so private repos work and agents can push.
 - Without a branch, rox uses the repo's default branch.
-- New container guests get 4 GB of memory (`--memory` to change it): an agent and a project's installs need more than Apple container's 1 GB default.
+- New container guests get 4 GB of memory (`rux agent spawn --memory` changes it; the harness always uses 4 GB): an agent and a project's installs need more than Apple container's 1 GB default.
 
 ## Credentials come from rix
 
@@ -303,24 +374,46 @@ An action is a folder `~/.rux/actions/NAME/` with a `tool.json` and a script. `e
 
 ## Orchestrating from Claude Code or Codex (`rux agent`)
 
-In a Rex terminal, rux isn't a harness: your own Claude Code or Codex session is the orchestrator, and rux
-gives it sub-agents. Install the skill once, then ask your agent to fan work out.
+In a Rex terminal, your own Claude Code or Codex session can be the orchestrator, and rux gives it sub-agents in Rex
+panes (`rux claude` starts Claude Code that way and keeps the skill current). For any other session, install the skill
+once, then ask your agent to fan work out.
 
 ```sh
-rux skill install          # into ~/.claude/skills/rux and ~/.codex/skills/rux (--agent claude|codex, --dir DIR)
+rux skill install          # into ~/.claude/skills/rux and ~/.codex/skills/rux
+rux skill show             # print the skill
 ```
 
-The skill teaches the agent these commands (there's no daemon; state is in `~/.rux/agents/<rex session>/`):
+`install` takes `--agent claude|codex` (repeatable; default: each one with a `~/.claude` or `~/.codex`), `--dir SKILLS_DIR`
+and `--force` (replace a `rux` folder that isn't this skill). The skill teaches the agent these commands. There's no
+daemon: state is one JSON file per agent in `~/.rux/agents/<rex session>/`. Every command takes `--session S`
+(default `$REX_SESSION`).
 
-```sh
-rux agent spawn --name api-tests [--repo R] [--branch B] [--host H] [--agent claude|codex] "task..."
-rux agent ls [--watch]          # states from each pane's Rex program status; --watch is the monitor tab
-rux agent wait [ID...] [--any]  # until they stop working; prints the end of each screen
-rux agent read ID [-n 120]
-rux agent send ID "text" | --key enter|escape|down|1
-rux agent focus ID
-rux agent stop ID [--keep-guest]
-```
+| Command | Does |
+| --- | --- |
+| `rux agent spawn --name NAME [flags] PROMPT` | start a sub-agent in a new pane (give the prompt as words, or with `--prompt-file FILE`, `-` for stdin) |
+| `rux agent ls [--json] [--watch]` | ID, agent, state, host, guest, age, push branch and activity; `--watch` refreshes every 2 seconds |
+| `rux agent wait [ID...] [--any] [--timeout D] [-n LINES]` | wait until they stop working (default: every running agent; `--timeout` 10m, then run it again), then print the table and the end of each screen |
+| `rux agent read ID [-n 80]` | the end of the agent's screen |
+| `rux agent send ID [TEXT] [--key KEY] [--no-submit]` | type TEXT and press Enter (`-` reads stdin; several lines go in as one paste); `--key` presses a key instead: enter, escape, up, down, tab, ctrl+c, 1… |
+| `rux agent focus ID` | focus its pane |
+| `rux agent stop ID [--keep-guest]` | close its pane and remove its guest |
+
+`spawn` flags:
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--name` | required | the pane's label and the ID (a taken ID gets `-2`, …) |
+| `--agent claude\|codex` | `claude` | the CLI in the guest |
+| `--repo` | this checkout's origin | `owner/name`, an https URL, or `none` for an empty guest |
+| `--branch` | the repo's default | the branch to start from |
+| `--push` | `rux/ID` | the branch the agent pushes to |
+| `--guest-type` | `container` | `container`, `linux`, `macos`, `fly` or `railway` |
+| `--guest NAME` | | work in an existing guest, in its own checkout; `stop` leaves the guest running |
+| `--host` | this machine | a Rex host to run the guest on |
+| `--memory` | 4G for containers | guest memory, such as `8G` |
+| `--model` | the CLI's | the CLI's model |
+| `--permission-mode` | skipped | `claude --permission-mode`, instead of skipping permission prompts |
+| `--beside` | `$REX_BLOCK` | the pane to open beside |
 
 - `spawn` splits a pane beside yours (then stacks under the newest agent). It runs `rox up` (on `--host` if
   given), then `rox shell` into the guest, and types in `claude --dangerously-skip-permissions` (or `codex
@@ -328,6 +421,14 @@ rux agent stop ID [--keep-guest]
   and permissions dialogs, since the guest is a fresh sandbox.
 - Agents clone the current checkout's `origin` by default and push `rux/<id>`; nobody merges but you.
 - rux drives panes only through Rex (send, capture, program status) and never parses the agent's output.
+- The state is `provisioning`, `connecting`, `failed`, `stopped` or `exited` (its pane closed) until the agent runs. Then it's
+  what the CLI reports to Rex: `working`, `idle`, `blocked:KIND` (it needs you), `done` or `error`, or `quiet` when the pane
+  reports nothing and its screen has stopped changing.
+- `wait` counts `idle`, `done`, `blocked` and `error` as stopped working, but gives an agent 20 seconds after it starts or
+  gets a `send` to take its prompt. It returns at once when nothing is working.
+- `stop` marks the agent stopped first, so a pane that's still setting up can't move it on. If `rox up` is still running, the
+  pane lets it finish, learns the guest's name and removes the guest itself (`stop` waits up to ten minutes, then leaves
+  it to the pane). If removal fails, run `stop` again. `--keep-guest`, or an existing guest, keeps the guest.
 
 ## Run it
 
@@ -337,6 +438,12 @@ tailscale serve --bg 7700       # HTTPS on your tailnet -> 127.0.0.1:7700
 ```
 
 Open the `https://<machine>.<tailnet>.ts.net` URL on your phone, then Share → Add to Home Screen.
+
+`rux serve` flags: `--listen` (default `127.0.0.1:7700`, the web app), `--allow-user LOGIN` (only this Tailscale login through
+`tailscale serve`; recommended), `--runner-listen` (default `0.0.0.0:7701`), `--advertise HOST:PORT`, `--guest-cidrs`,
+`--data DIR` (default `~/.rux`), `--backend rox|local`, `--rox BIN`, `--claude BIN` (only to list the models Claude Code
+offers), `--memory` (default `4G`), `--sleep-after DURATION` (default 15m: stop an idle thread's guest, and start it again on
+the next message; `0` keeps guests running), `--runner-bin PATH` and `--github` (default on).
 
 Guests run the Linux `rux` for their architecture. A release build downloads it from its own release
 the first time a guest asks, checks it against `checksums.txt`, and caches it in `~/.rux/runner/`.
@@ -363,5 +470,33 @@ own token.
 
 ## Not yet
 
-Approvals and push notifications, screenshots, SQLite, multiple hosts, a scheduler, and an MCP facade.
-For now, tools are pre-allowed (`--allowedTools`) and anything else is denied (`--permission-prompts none`).
+For `rux serve` threads: push notifications, SQLite storage, multiple hosts and a scheduler. Tools are pre-allowed
+(`--allowedTools`) and anything else is denied (`--permission-prompts none`), so a thread has no approval prompts.
+
+## Environment and files
+
+| Variable | Used for |
+| --- | --- |
+| `REX_SESSION`, `REX_BLOCK` | set by Rex; `rux claude`, `rux agent`, `/pane` and `/shell` need them (`rux agent --session` replaces the first) |
+| `RUX_HARNESS_CONFIG` | the harness config's path, instead of `~/.rux/harness.json` |
+| `RIX_BIN` | the `rix` binary rux runs for secrets and credentials |
+| `NO_COLOR` | plain `rux help` |
+| `RUX_UI_URL`, `RUX_ASSET_URL`, `RUX_CRED_URL`, `RUX_CRED_TOKEN` | set in a thread's guest for `rux ui`, `share`, `screenshot`, `action` and `git-credential` |
+
+`~/.rux/harness.json` (config), `~/.rux/sessions/` (saved harness transcripts), `~/.rux/run/` (control sockets),
+`~/.rux/agents/SESSION/` (`rux agent` state), `~/.rux/threads/` and `~/.rux/actions/` (`rux serve`), and `~/.rux/runner/`
+(the cached guest binary).
+
+## Troubleshooting
+
+- **rox isn't installed, or `rox up` fails**: the sub-agent is `failed` with rox's last line. Fix the cause and start a new agent.
+  A guest rox had already named is kept; `stop_agent` or `rox down NAME` removes it.
+- **A model needs a key**: rux names the secret, such as `rix secret set OPENAI_API_KEY`.
+- **Codex in a guest isn't signed in**: `rix auth codex`, then `rix apply GUEST`. For Claude Code, `rix auth claude`.
+- **"GUEST has no claude" (or codex)** in an existing guest: `rox add GUEST --agents claude` (or `codex`).
+- **Panes don't open**: `/pane`, `/shell`, `rux claude` and `rux agent` need a Rex terminal. `/pane` also needs the control
+  socket; if rux printed "no control socket", `~/.rux/run` isn't writable.
+- **A sub-agent ignores messages**: if it's `stopped` or `failed` that's final, and `message_agent` says so. Start a new one.
+- **A guest is left over** (after a crash, or `n` on quit): `rox ls`, then `rox down NAME`.
+- **`rux agent wait` returns at once**: nothing was working.
+- **A thread's guest can't reach the server**: check `--advertise` and `--guest-cidrs`.
