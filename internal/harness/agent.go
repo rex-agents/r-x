@@ -76,6 +76,7 @@ type Agent struct {
 	started  time.Time
 	changed  time.Time
 	attached bool
+	stopped  bool // Stop was called: the agent stays Stopped and takes no more messages
 }
 
 // NewAgent makes an agent that's starting. Attach gives it a model and tools.
@@ -86,6 +87,10 @@ func NewAgent(id, name, role string) *Agent {
 // Attach gives the agent its model and tools; messages sent before are kept.
 func (a *Agent) Attach(p Provider, system string, tools []Tool, where string) {
 	a.mu.Lock()
+	if a.stopped {
+		a.mu.Unlock()
+		return
+	}
 	if a.runner != nil {
 		go a.runner.Close()
 	}
@@ -103,6 +108,11 @@ func (a *Agent) Attach(p Provider, system string, tools []Tool, where string) {
 // AttachRunner gives the agent an engine that runs whole turns itself, such as Claude Code.
 func (a *Agent) AttachRunner(r TurnRunner, where string) {
 	a.mu.Lock()
+	if a.stopped {
+		a.mu.Unlock()
+		go r.Close()
+		return
+	}
 	if a.runner != nil && a.runner != r {
 		go a.runner.Close()
 	}
@@ -160,6 +170,10 @@ func (a *Agent) Close() {
 // SetStatus sets a status and a line of detail, such as what's being set up.
 func (a *Agent) SetStatus(s Status, detail string) {
 	a.mu.Lock()
+	if a.stopped && s != Stopped {
+		a.mu.Unlock()
+		return
+	}
 	a.status, a.detail = s, detail
 	if s == Failed {
 		a.lastErr = detail
@@ -181,6 +195,45 @@ func (a *Agent) Send(from, text string) {
 	a.mu.Lock()
 	a.inbox = append(a.inbox, message{from, text})
 	a.entries = append(a.entries, Entry{Kind: "user", From: from, Text: text, At: time.Now()})
+	a.mu.Unlock()
+	a.poke()
+	a.changedNow()
+}
+
+// TrySend queues a message unless the agent is stopped or failed, which never read
+// their messages again; then it says so.
+func (a *Agent) TrySend(from, text string) error {
+	a.mu.Lock()
+	if a.stopped || a.status == Stopped || a.status == Failed {
+		st := a.status
+		a.mu.Unlock()
+		return fmt.Errorf("%s is %s for good, so it can't read messages; start a new agent instead", a.Name, st)
+	}
+	a.inbox = append(a.inbox, message{from, text})
+	a.entries = append(a.entries, Entry{Kind: "user", From: from, Text: text, At: time.Now()})
+	a.mu.Unlock()
+	a.poke()
+	a.changedNow()
+	return nil
+}
+
+// Terminal reports whether the agent is stopped or failed, so nothing queued for it
+// will ever be read.
+func (a *Agent) Terminal() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.stopped || a.status == Stopped || a.status == Failed
+}
+
+// Stop ends the agent for good: it cancels a running turn and stays Stopped whatever
+// else happens, such as a provisioning step finishing later or the turn ending.
+func (a *Agent) Stop() {
+	a.mu.Lock()
+	a.stopped = true
+	if a.cancel != nil {
+		a.cancel()
+	}
+	a.status, a.detail = Stopped, ""
 	a.mu.Unlock()
 	a.poke()
 	a.changedNow()
@@ -296,6 +349,10 @@ func (a *Agent) turn(parent context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	a.mu.Lock()
+	if a.stopped {
+		a.mu.Unlock()
+		return
+	}
 	a.status, a.detail, a.cancel, a.lastErr = Working, "thinking", cancel, ""
 	conv, tools, runner := a.conv, a.tools, a.runner
 	a.mu.Unlock()
@@ -375,7 +432,10 @@ func (a *Agent) turn(parent context.Context) {
 	a.mu.Lock()
 	a.cancel = nil
 	a.turns++
-	a.status, a.detail = Waiting, ""
+	if !a.stopped {
+		a.status, a.detail = Waiting, ""
+	}
+	stopped := a.stopped
 	if final != "" {
 		a.last = final
 	}
@@ -389,10 +449,10 @@ func (a *Agent) turn(parent context.Context) {
 	if interrupted && turnErr == nil && parent.Err() == nil {
 		turnErr = ErrInterrupted
 	}
-	if a.OnTurnEnd != nil && parent.Err() == nil {
+	if a.OnTurnEnd != nil && parent.Err() == nil && !stopped {
 		a.OnTurnEnd(a, final, turnErr)
 	}
-	if queued {
+	if queued && !stopped {
 		a.poke()
 	}
 }
@@ -506,7 +566,10 @@ func (a *Agent) runnerTurn(ctx, parent context.Context, r TurnRunner) {
 	}
 	a.cancel = nil
 	a.turns++
-	a.status, a.detail = Waiting, ""
+	if !a.stopped {
+		a.status, a.detail = Waiting, ""
+	}
+	stopped := a.stopped
 	if final != "" {
 		a.last = final
 	}
@@ -520,10 +583,10 @@ func (a *Agent) runnerTurn(ctx, parent context.Context, r TurnRunner) {
 	if interrupted && parent.Err() == nil {
 		err = ErrInterrupted
 	}
-	if a.OnTurnEnd != nil && parent.Err() == nil {
+	if a.OnTurnEnd != nil && parent.Err() == nil && !stopped {
 		a.OnTurnEnd(a, final, err)
 	}
-	if queued {
+	if queued && !stopped {
 		a.poke()
 	}
 }

@@ -14,6 +14,7 @@ package rux
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -52,7 +54,10 @@ type subAgent struct {
 	Parent    string    `json:"parent_block,omitempty"` // the orchestrator's pane
 	Block     string    `json:"block,omitempty"`
 	Guest     string    `json:"guest,omitempty"`
-	Phase     string    `json:"phase"` // provisioning, connecting, running, failed, stopped, exited
+	Pane      int       `json:"pane_pid,omitempty"`  // the pane process, so stop can wait for it
+	Cleanup   bool      `json:"cleanup,omitempty"`   // stop asked to remove the guest
+	StopDone  bool      `json:"stop_done,omitempty"` // stop has finished, so the pane cleans up after itself
+	Phase     string    `json:"phase"`               // provisioning, connecting, running, failed, stopped, exited
 	Error     string    `json:"error,omitempty"`
 	Created   time.Time `json:"created"`
 	Started   time.Time `json:"started,omitempty"`
@@ -253,7 +258,16 @@ func agentSpawn(args []string) {
 		fail("rux agent spawn: %v", err)
 	}
 	a.ID = cmpOr(slug(*name), "agent")
-	for n, base := 2, a.ID; fileExists(filepath.Join(dir, a.ID+".json")); n++ {
+	// Claim the ID with an exclusive create, so parallel spawns can't take the same one.
+	for n, base := 2, a.ID; ; n++ {
+		f, err := os.OpenFile(filepath.Join(dir, a.ID+".json"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			f.Close()
+			break
+		}
+		if !errors.Is(err, os.ErrExist) {
+			fail("rux agent spawn: %v", err)
+		}
 		a.ID = fmt.Sprintf("%s-%d", base, n)
 	}
 	if a.Repo != "" {
@@ -297,6 +311,11 @@ func agentSpawn(args []string) {
 		fail("rux agent spawn: opening a pane: %v", err)
 	}
 	a.update(func(a *subAgent) { a.Block = out.BlockIDs[0] })
+	if a.Phase == "stopped" {
+		// Stopped while its pane was opening; the stop couldn't see the pane yet.
+		rexOut("block", "close", "-s", a.Session, a.Block)
+		fail("rux agent spawn: %s was stopped while it started", a.ID)
+	}
 	where := "this machine"
 	if a.Host != "" {
 		where = a.Host
@@ -328,13 +347,35 @@ func agentPane(args []string) {
 	}
 	failed := func(format string, args ...any) {
 		msg := fmt.Sprintf(format, args...)
-		a.update(func(a *subAgent) { a.Phase, a.Error = "failed", msg })
+		a.update(func(a *subAgent) {
+			if a.Phase == "stopped" {
+				return // a stop is sticky; it owns the report and the cleanup
+			}
+			if a.Guest != "" && !a.Shared {
+				msg += fmt.Sprintf(" (guest %s was kept; rux agent stop %s removes it)", a.Guest, a.ID)
+			}
+			a.Phase, a.Error = "failed", msg
+		})
 		fmt.Fprintln(os.Stderr, "\nrux: "+msg)
 		os.Exit(1)
 	}
 	rox, err := exec.LookPath("rox")
 	if err != nil {
 		failed("rox isn't on PATH")
+	}
+	// A stop or a closed pane cancels rox add, but not rox up: an up that has begun owns
+	// a guest only its launch line names, so it finishes and the result is recorded.
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT, syscall.SIGPIPE)
+	defer cancel()
+	stopped := false
+	a.update(func(a *subAgent) {
+		stopped = a.Phase == "stopped"
+		if !stopped {
+			a.Pane = os.Getpid()
+		}
+	})
+	if stopped {
+		os.Exit(0)
 	}
 	var guest string
 	if a.Shared {
@@ -349,12 +390,12 @@ func agentPane(args []string) {
 			if a.Branch != "" {
 				add = append(add, "--branch", a.Branch)
 			}
-			if _, err := runShown(rox, add); err != nil {
+			if _, err := runShown(ctx, rox, add, nil); err != nil {
 				failed("rox add failed: %v", err)
 			}
 		} else {
 			check := []string{"exec", guest, "--", "sh", "-lc", "command -v " + a.Agent}
-			if out, err := exec.Command(rox, check...).CombinedOutput(); err != nil {
+			if out, err := exec.CommandContext(ctx, rox, check...).CombinedOutput(); err != nil {
 				failed("%s has no %s (%s). Pick a guest started with it, or a new guest", guest, a.Agent, lastLine(string(out)))
 			}
 		}
@@ -388,23 +429,43 @@ func agentPane(args []string) {
 		if !remoteRuntime(a.GuestType) {
 			up = append(up, "--no-tailscale")
 		}
-		before := roxGuestNames(rox, a.Host)
-		if guest, err = runShown(rox, up); err != nil {
+		// The guest is recorded as soon as rox names it, so a failure or a stop
+		// afterwards can still remove it. Only a name this rox up printed counts.
+		guest, err = runShown(context.WithoutCancel(ctx), rox, up, func(name string) {
+			a.update(func(a *subAgent) {
+				if a.Guest == "" {
+					a.Guest = name
+				}
+			})
+		})
+		if err != nil {
 			failed("rox up failed: %v", err)
 		}
 		if guest == "" {
-			for n := range roxGuestNames(rox, a.Host) {
-				if !before[n] {
-					guest = n
-					break
-				}
-			}
-		}
-		if guest == "" {
-			failed("couldn't tell which guest rox up started")
+			failed("rox up finished but didn't say which guest it started; check rox ls before starting again")
 		}
 	}
-	a.update(func(a *subAgent) { a.Guest, a.Phase = guest, "connecting" })
+	stopped = false
+	a.update(func(a *subAgent) {
+		stopped = a.Phase == "stopped"
+		if !stopped {
+			a.Guest, a.Phase = guest, "connecting"
+		}
+	})
+	if stopped {
+		// Stopped while the guest was coming up. This pane started it and knows its name,
+		// so it removes the guest itself, even if stop stopped waiting.
+		if a.Cleanup && !a.Shared {
+			if err := removeGuest(a); err != nil {
+				fmt.Fprintln(os.Stderr, "rux: "+err.Error())
+				os.Exit(1)
+			}
+		}
+		os.Exit(0)
+	}
+	if ctx.Err() != nil {
+		failed("the pane was closed while it started")
+	}
 	// Type the agent's command in once the guest's shell is up. Detached, since
 	// this process becomes rox shell.
 	typer := exec.Command(selfExe(), "agent", "type", a.path)
@@ -422,25 +483,11 @@ func agentPane(args []string) {
 	if a.Project != "" {
 		argv = append(argv, a.Project)
 	}
+	// From here the pane is rox shell, which a stop can close without waiting.
+	a.update(func(a *subAgent) { a.Pane = 0 })
 	if err := syscall.Exec(rox, argv, os.Environ()); err != nil {
 		failed("rox shell: %v", err)
 	}
-}
-
-func roxGuestNames(rox, host string) map[string]bool {
-	args := []string{"ls", "--all-projects", "--json"}
-	if host != "" {
-		args = []string{"ls", "-S", host, "--json"}
-	}
-	out := map[string]bool{}
-	b, err := exec.Command(rox, args...).Output()
-	if err != nil {
-		return out
-	}
-	for _, n := range guestNameRe.FindAllString(string(b), -1) {
-		out[n] = true
-	}
-	return out
 }
 
 var promptRe = regexp.MustCompile(`[$#%>❯]\s*$`)
@@ -784,28 +831,67 @@ func agentStop(args []string) {
 		usageExit("usage: rux agent stop ID [--keep-guest]")
 	}
 	a := findAgent(currentSession(*session), pos[0])
-	if a.Block != "" {
+	// Mark it stopped first, so a pane that's still provisioning can't move it on.
+	a.update(func(a *subAgent) {
+		a.Phase, a.Cleanup, a.StopDone = "stopped", !*keep, false
+	})
+	// A pane that's running rox up isn't closed yet: it finishes the launch, records
+	// the guest, sees the stop and exits. Closing it sooner could lose the guest's name.
+	// (Everything else, including rox add in a shared guest, ends with the pane.)
+	launching := a.Pane > 0 && !a.Shared
+	if a.Block != "" && !launching {
 		rexOut("block", "close", "-s", a.Session, a.Block)
 	}
-	a.update(func(a *subAgent) { a.Phase = "stopped" })
+	if a.Pane > 0 {
+		if launching {
+			fmt.Printf("%s is still starting its guest; waiting for rox to finish so the guest can be removed\n", a.ID)
+		}
+		deadline := time.Now().Add(30 * time.Second)
+		if launching {
+			deadline = time.Now().Add(launchWait)
+		}
+		for paneAlive(a.Pane) && time.Now().Before(deadline) {
+			time.Sleep(200 * time.Millisecond)
+		}
+		if paneAlive(a.Pane) && launching {
+			// The pane started this guest and knows its name: it removes the guest itself
+			// when rox up returns, so a slow launch needs no second stop.
+			fmt.Printf("stopped %s; rox is still starting its guest, and the pane removes it when rox finishes\n", a.ID)
+			return
+		}
+		if paneAlive(a.Pane) {
+			fail("rux agent stop: it is still setting up the guest; run rux agent stop %s again later", a.ID)
+		}
+		if launching && a.Block != "" {
+			rexOut("block", "close", "-s", a.Session, a.Block)
+		}
+	}
+	if cur, err := loadAgent(a.path); err == nil {
+		*a = *cur
+	}
 	if *keep || a.Guest == "" || a.Shared {
+		a.update(func(a *subAgent) { a.StopDone = true })
 		if a.Shared {
 			fmt.Printf("stopped %s; %s keeps running, since it was there before the agent\n", a.ID, a.Guest)
+		} else if a.Guest != "" {
+			fmt.Printf("stopped %s; guest %s keeps running\n", a.ID, a.Guest)
 		} else {
 			fmt.Printf("stopped %s\n", a.ID)
 		}
 		return
 	}
-	down := []string{"down"}
-	if a.Host != "" {
-		down = append(down, "-S", a.Host)
+	guest := a.Guest
+	if err := removeGuest(a); err != nil {
+		fail("rux agent stop: closed the pane, but %v\nrun rux agent stop %s again to retry", err, a.ID)
 	}
-	out, err := exec.Command("rox", append(down, a.Guest)...).CombinedOutput()
-	if err != nil {
-		fail("rux agent stop: closed the pane, but rox down %s failed: %v\n%s", a.Guest, err, strings.TrimSpace(string(out)))
-	}
-	fmt.Printf("stopped %s and removed guest %s\n", a.ID, a.Guest)
+	a.update(func(a *subAgent) { a.StopDone = true })
+	fmt.Printf("stopped %s and removed guest %s\n", a.ID, guest)
 }
+
+// launchWait is how long stop waits for a pane's rox up before leaving the cleanup to the pane.
+var launchWait = 10 * time.Minute
+
+func paneAlive(pid int) bool { return pid > 0 && syscall.Kill(pid, 0) == nil }
 
 // ---- wait ----
 
@@ -996,11 +1082,12 @@ func tailLines(s string, n int) string {
 	return strings.Join(lines, "\n")
 }
 
-// runShown runs a rox command with its output in this pane, and returns the first guest
-// name the output mentions.
-func runShown(rox string, args []string) (string, error) {
+// runShown runs a rox command with its output in this pane, and returns the guest
+// rox up or rox add said it started, if it did. onGuest is called when it first does.
+func runShown(ctx context.Context, rox string, args []string, onGuest func(string)) (string, error) {
 	fmt.Printf("\x1b[2m$ rox %s\x1b[0m\n", strings.Join(args, " "))
-	cmd := exec.Command(rox, args...)
+	cmd := exec.CommandContext(ctx, rox, args...)
+	cmd.WaitDelay = 5 * time.Second
 	pr, pw := io.Pipe()
 	cmd.Stdout, cmd.Stderr, cmd.Stdin = pw, pw, os.Stdin
 	guest := ""
@@ -1013,8 +1100,11 @@ func runShown(rox string, args []string) (string, error) {
 		for sc.Scan() {
 			line := sc.Text()
 			fmt.Println(line)
-			if guest == "" {
-				guest = guestNameRe.FindString(line)
+			if name := launchedGuest(line); guest == "" && name != "" {
+				guest = name
+				if onGuest != nil {
+					onGuest(name)
+				}
 			}
 		}
 	}()
@@ -1022,6 +1112,43 @@ func runShown(rox string, args []string) (string, error) {
 	pw.Close()
 	<-done
 	return guest, err
+}
+
+// launchedLineRe matches the lines rox up prints about the guest it is starting: its
+// "Starting NAME" and "Started NAME" steps, the "Workspace NAME" card and its
+// "Workspace NAME was kept" warning, and a remote launch's "Registered Rex host NAME".
+// Other lines can mention other guests (a reused one, a listing), so they don't count.
+var launchedLineRe = regexp.MustCompile(`^\W*(?:Starting|Started|Workspace|Registered Rex host)\s+(rv-[a-z0-9][a-z0-9-]*[0-9a-f]{8,})(?:\s|$)`)
+
+// launchedGuest is the guest a line of rox up output says it is starting, or "".
+func launchedGuest(line string) string {
+	m := launchedLineRe.FindStringSubmatch(strings.TrimSpace(ansiRe.ReplaceAllString(line, "")))
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
+// removeGuest runs rox down for the agent's own guest and, once it's gone, forgets it.
+// On failure the guest stays recorded so a stop can be retried.
+func removeGuest(a *subAgent) error {
+	cur, err := loadAgent(a.path)
+	if err != nil {
+		return err
+	}
+	if cur.Guest == "" || cur.Shared {
+		return nil
+	}
+	down := []string{"down"}
+	if cur.Host != "" {
+		down = append(down, "-S", cur.Host)
+	}
+	out, err := exec.Command("rox", append(down, cur.Guest)...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("rox down %s failed: %v\n%s", cur.Guest, err, strings.TrimSpace(string(out)))
+	}
+	a.update(func(a *subAgent) { a.Guest = "" })
+	return nil
 }
 
 // sshRepo turns a GitHub HTTPS URL into its SSH form. Git in a guest signs in with the
