@@ -97,16 +97,18 @@ func AuthGitHub(useGh, off bool) error {
 			settings["token_file"] = file
 		}
 	}
-	err := Update(path, func(data map[string]any) error {
-		if settings["token_file"] == nil {
-			os.Remove(filepath.Join(filepath.Dir(path), githubTokenFile))
-		}
+	err := UpdateThen(path, func(data map[string]any) error {
 		if len(settings) == 0 {
 			delete(data, "github")
 		} else {
 			data["github"] = settings
 		}
 		return nil
+	}, func() {
+		// The old token goes only after the config stopped naming it, still under its lock.
+		if settings["token_file"] == nil {
+			os.Remove(filepath.Join(filepath.Dir(path), githubTokenFile))
+		}
 	})
 	if err != nil {
 		return err

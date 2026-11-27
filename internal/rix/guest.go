@@ -100,12 +100,53 @@ func firstLine(s string) string {
 // Git agents. One ssh-agent per guest holds only its selected keys, and rox forwards it into
 // the guest. Keys never leave the launcher.
 
-func agentAlive(pid int) bool {
+// processIdentity reads when a process started and its command line, with ps, which
+// Linux and macOS launchers both have. A PID that ps can't describe has no identity.
+func processIdentity(pid int) (start, command string, ok bool) {
 	if pid <= 0 {
+		return "", "", false
+	}
+	env := map[string]string{"LC_ALL": "C"}
+	p := fmt.Sprint(pid)
+	started, err := sys.Try(sys.Cmd{Argv: []string{"ps", "-o", "lstart=", "-p", p}, Env: env})
+	if err != nil || started.Code != 0 || strings.TrimSpace(started.Stdout) == "" {
+		return "", "", false
+	}
+	cmd, err := sys.Try(sys.Cmd{Argv: []string{"ps", "-ww", "-o", "command=", "-p", p}, Env: env})
+	if err != nil || cmd.Code != 0 || strings.TrimSpace(cmd.Stdout) == "" {
+		return "", "", false
+	}
+	return strings.Join(strings.Fields(started.Stdout), " "), strings.TrimSpace(cmd.Stdout), true
+}
+
+// signalProcess is syscall.Kill, replaceable in tests.
+var signalProcess = syscall.Kill
+
+// isOurAgent reports whether pid is the ssh-agent rix started on sock. A record with a start
+// time must match it, so a PID the system reused is never taken for the agent. An older
+// record holds only the PID, and the process must then be an ssh-agent on sock.
+func isOurAgent(pid int, start, sock string) bool {
+	now, command, ok := processIdentity(pid)
+	if !ok {
 		return false
 	}
-	err := syscall.Kill(pid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
+	if start != "" && now != start {
+		return false
+	}
+	// The command must be exactly what rix runs: ssh-agent, then -D -a and this socket.
+	exe, rest, _ := strings.Cut(strings.TrimSpace(command), " ")
+	return filepath.Base(exe) == "ssh-agent" && strings.TrimSpace(rest) == "-D -a "+sock
+}
+
+// recordAgent notes the agent rix started, with the identity stopAgent checks later.
+func recordAgent(state *GuestState, pid int) {
+	if pid <= 0 {
+		return
+	}
+	state.AgentPid, state.AgentStart = pid, ""
+	if start, _, ok := processIdentity(pid); ok {
+		state.AgentStart = start
+	}
 }
 
 // agentStatus is ssh-add -l's status: 0 with keys, 1 empty, 2 no agent.
@@ -118,24 +159,32 @@ func agentStatus(sock string) int {
 }
 
 // startAgent makes sure the agent at sock runs and holds keys. Without a terminal, encrypted
-// keys can't be unlocked, and the error says to run rix git-agent start in one.
-func startAgent(name, sock string, keys []string, interactive bool) (int, error) {
+// keys can't be unlocked, and the error says to run rix git-agent start in one. It returns the
+// PID of an agent it started. When it fails, an agent this call started is stopped again, so
+// no detached ssh-agent is left behind without a record.
+func startAgent(name, sock string, keys []string, interactive bool) (pid int, err error) {
 	if _, err := sys.PrivateDir(filepath.Dir(filepath.Dir(sock))); err != nil {
 		return 0, err
 	}
 	if _, err := sys.PrivateDir(filepath.Dir(sock)); err != nil {
 		return 0, err
 	}
-	pid := 0
 	status := agentStatus(sock)
 	if status == 2 {
 		os.Remove(sock)
-		process, err := sys.R.Detach(sys.Cmd{Argv: []string{"ssh-agent", "-D", "-a", sock}}, "")
-		if err != nil {
-			return 0, err
+		process, detachErr := sys.R.Detach(sys.Cmd{Argv: []string{"ssh-agent", "-D", "-a", sock}}, "")
+		if detachErr != nil {
+			return 0, detachErr
 		}
 		pid = process.Pid()
-		if _, err := sys.WaitFor(5*time.Second, "the Git SSH agent", func() (bool, bool, error) {
+		defer func() {
+			if err != nil {
+				process.Kill()
+				os.Remove(sock)
+				pid = 0
+			}
+		}()
+		if _, err = sys.WaitFor(5*time.Second, "the Git SSH agent", func() (bool, bool, error) {
 			if exited, _ := process.Exited(); exited {
 				return false, false, &sys.Fatal{Err: errors.New("Could not start the Git SSH agent")}
 			}
@@ -153,24 +202,33 @@ func startAgent(name, sock string, keys []string, interactive bool) (int, error)
 			c.Env["SSH_ASKPASS_REQUIRE"] = "never"
 			c.Unset = []string{"DISPLAY"}
 		}
-		result, err := sys.Try(c)
-		if err == nil && result.Code != 0 {
-			err = fmt.Errorf("Could not load the Git keys for %s: %s. Encrypted keys need their passphrase, so run rix git-agent start %s in a terminal",
+		result, runErr := sys.Try(c)
+		if runErr == nil && result.Code != 0 {
+			runErr = fmt.Errorf("Could not load the Git keys for %s: %s. Encrypted keys need their passphrase, so run rix git-agent start %s in a terminal",
 				name, firstNonEmpty(firstLine(result.Stderr), "ssh-add failed"), name)
 		}
-		if err != nil {
-			return pid, err
+		if runErr != nil {
+			return pid, runErr
 		}
 	}
 	return pid, nil
 }
 
+// stopAgent stops the guest's agent, but only a process that is still the one rix started.
 func stopAgent(name string, state *GuestState) {
-	if state.AgentPid > 0 {
-		_ = syscall.Kill(state.AgentPid, syscall.SIGTERM)
+	sock := agentSocket(name)
+	if state.AgentPid > 0 && isOurAgent(state.AgentPid, state.AgentStart, sock) {
+		_ = signalProcess(state.AgentPid, syscall.SIGTERM)
 	}
-	state.AgentPid = 0
-	os.Remove(agentSocket(name))
+	state.AgentPid, state.AgentStart = 0, ""
+	os.Remove(sock)
+}
+
+// discardAgent stops an agent this call started when its record couldn't be saved.
+func discardAgent(name string, pid int) {
+	if pid > 0 {
+		stopAgent(name, &GuestState{AgentPid: pid})
+	}
 }
 
 func firstNonEmpty(values ...string) string {

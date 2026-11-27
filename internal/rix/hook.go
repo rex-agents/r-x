@@ -89,10 +89,11 @@ func Hook(event, name string, stdin io.Reader, stdout io.Writer) error {
 			return err
 		}
 		if pid > 0 {
-			state.AgentPid = pid
+			recordAgent(state, pid)
 		}
 		state.GitKeys, state.Forward = keys, forward
 		if err := saveState(g.Name, state); err != nil {
+			discardAgent(g.Name, pid)
 			return err
 		}
 		reply.AgentSocket, reply.Forward = sock, forward
@@ -137,8 +138,11 @@ func Hook(event, name string, stdin io.Reader, stdout io.Writer) error {
 			return err
 		}
 		if pid > 0 {
-			state.AgentPid = pid
-			_ = saveState(g.Name, state)
+			recordAgent(state, pid)
+			if err := saveState(g.Name, state); err != nil {
+				discardAgent(g.Name, pid)
+				return err
+			}
 		}
 		reply.AgentSocket, reply.Forward = sock, true
 		if restarted {

@@ -102,6 +102,21 @@ func PushCredentials(c *Config, g *contract.Guest, out *Outcome) error {
 			}
 		}
 	}
+	// Codex that rix signed in earlier, and the vault no longer has a credential for, is signed
+	// out again. A login the guest made itself carries no rix marker and stays.
+	state, stateErr := loadState(g.Name)
+	if !containsString(signed, "codex") {
+		owned := stateErr == nil && containsString(state.Credentials, "codex")
+		if _, installed := g.Agents["codex"]; installed || owned {
+			args := []string{}
+			if owned {
+				args = append(args, "owned")
+			}
+			if _, err := guestScript(g.Name, "", "codex-forget", args...); err != nil {
+				return err
+			}
+		}
+	}
 	var unsigned []string
 	for _, name := range AgentOrder {
 		if _, ok := g.Agents[name]; ok && !containsString(signed, name) {
@@ -118,8 +133,7 @@ func PushCredentials(c *Config, g *contract.Guest, out *Outcome) error {
 	for _, n := range unsigned {
 		out.warn("%s has no credential in rix, so it starts signed out. Add one with rix auth %s", AgentNames[n], n)
 	}
-	state, err := loadState(g.Name)
-	if err == nil {
+	if stateErr == nil {
 		state.Credentials = signed
 		_ = saveState(g.Name, state)
 	}
@@ -447,10 +461,10 @@ func SyncSetup(c *Config, g *contract.Guest, out *Outcome) error {
 	}
 	record := map[string]any{}
 	_ = json.Unmarshal(existing[syncRecord], &record)
-	var stale []string
+	var recorded []string
 	for _, p := range listOf(record["paths"]) {
 		if safeSyncedPath(p) {
-			stale = append(stale, p)
+			recorded = append(recorded, p)
 		}
 	}
 	owned := map[string][]byte{}
@@ -564,22 +578,35 @@ func SyncSetup(c *Config, g *contract.Guest, out *Outcome) error {
 			return err
 		}
 	}
+	// The last entry tells the guest the whole archive arrived.
+	if err := addBytes(".rix-complete", nil, 0o600); err != nil {
+		return err
+	}
 	if err := tw.Close(); err != nil {
 		return err
 	}
-	remove := map[string]bool{}
-	for _, p := range stale {
-		remove[p] = true
+	// The guest swaps in install, then removes stale: what the last sync left that this one doesn't.
+	install := map[string]bool{}
+	for p := range owned {
+		install[p] = true
 	}
 	for p := range plan.Dirs {
-		remove[p] = true
+		install[p] = true
 	}
-	var removeList []string
-	for p := range remove {
-		removeList = append(removeList, p)
+	for p := range private {
+		install[p] = true
 	}
-	sort.Strings(removeList)
-	if err := guestScriptBytes(g.Name, archive.Bytes(), "sync", removeList...); err != nil {
+	var args []string
+	for _, p := range sortedSet(install) {
+		args = append(args, p)
+	}
+	args = append(args, "--")
+	for _, p := range recorded {
+		if !install[p] {
+			args = append(args, p)
+		}
+	}
+	if err := guestScriptBytes(g.Name, archive.Bytes(), "sync", args...); err != nil {
 		return err
 	}
 	what := plan.Describe()
@@ -591,6 +618,15 @@ func SyncSetup(c *Config, g *contract.Guest, out *Outcome) error {
 		_ = saveState(g.Name, state)
 	}
 	return nil
+}
+
+func sortedSet(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func sortedStrings(m map[string]string) []string {

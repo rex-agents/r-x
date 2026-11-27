@@ -87,6 +87,13 @@ func LoadConfig(value string) (*Config, error) {
 
 // Update locks the config, rereads it, lets fn change it and writes it back.
 func Update(path string, fn func(data map[string]any) error) error {
+	return UpdateThen(path, fn, nil)
+}
+
+// UpdateThen is Update, and after the change is committed, still holding the lock, runs after.
+// A command that retires files the config named does it there, so no other command can
+// reselect and rewrite one of those names before it is gone.
+func UpdateThen(path string, fn func(data map[string]any) error, after func()) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -107,7 +114,13 @@ func Update(path string, fn func(data map[string]any) error) error {
 			return err
 		}
 	}
-	return sys.WriteJSON(path, data)
+	if err := sys.WriteJSON(path, data); err != nil {
+		return err
+	}
+	if after != nil {
+		after()
+	}
+	return nil
 }
 
 // GitKeys are the configured key paths, or nil when none are configured, which means ssh's defaults.
@@ -359,6 +372,8 @@ type GuestState struct {
 	Forward bool `json:"forward"`
 	// AgentPid is the guest's ssh-agent.
 	AgentPid int `json:"agent_pid,omitempty"`
+	// AgentStart is when that process started. A record without it predates it.
+	AgentStart string `json:"agent_start,omitempty"`
 	// Credentials are the agents whose credentials rix pushed.
 	Credentials []string `json:"credentials,omitempty"`
 	// Synced is when rix last synced agent setup, as RFC 3339.
