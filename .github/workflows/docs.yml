@@ -1,0 +1,54 @@
+# Builds README.md and docs/*.md into a site with Jekyll (config in _config.yml). Pull requests
+# that touch the docs only build it; a push to main also deploys it to GitHub Pages.
+# One-time setup: Settings -> Pages -> Source: GitHub Actions.
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths: [README.md, docs/**, _config.yml, .github/workflows/docs.yml]
+  pull_request:
+    paths: [README.md, docs/**, _config.yml, .github/workflows/docs.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v6
+        id: pages
+      - uses: actions/jekyll-build-pages@v1
+        with:
+          source: ./
+          destination: ./_site
+      # jekyll-relative-links rewrites docs/x.md to /docs/x.html without the project-site base
+      # path (/r-x), so prefix it here.
+      - name: Prefix converted doc links with the base path
+        if: steps.pages.outputs.base_path != ''
+        run: |
+          sudo chown -R "$USER" _site
+          find _site -name '*.html' -exec sed -i -E \
+            's#href="/(docs/|README\.html)#href="${{ steps.pages.outputs.base_path }}/\1#g' {} +
+      - uses: actions/upload-pages-artifact@v5
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
