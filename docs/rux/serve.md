@@ -141,6 +141,31 @@ own token.
 `rux serve --backend local` clones the repo on the host and runs the runner there. It is
 **unsandboxed** and only for exercising the app.
 
+## In a pack
+
+The authority always runs a quorum node (`internal/rux/quorum`; see [quorum](quorum.md)) and listens for
+other authorities on `--quorum-listen` (default `0.0.0.0:7710`, advertised as `--quorum-url`, default
+the tailnet address). Without `~/.rux/quorum.json` it's a pack of one. `rux quorum create` and
+`rux quorum join` bring it into a pack through the admin socket without a restart. In a pack:
+
+- `/api/pack` and `/api/pack/stream` are the quorum's view: the leader's, or a member's copy of it, or,
+  when there's no leader, this authority alone with `degraded: true`. Each authority pushes its host and
+  thread summaries to the leader every 2s. The stream carries this authority's own `thread.event` and
+  `thread.status` events too; open another authority's thread through its events endpoint instead.
+- `POST /api/threads` without `placement.local` asks the leader where to run (pinned by
+  `placement.authority`, else the authority with the most free guest slots). If another authority is
+  chosen, the create is forwarded to it with the leader's term, which it checks (fencing), and its
+  thread is returned.
+- Every `/api/threads/{id}/...` request for a thread on another authority (events, events/page,
+  messages, interrupt, sub-agent paths, archive, destroy, ...) is proxied over the quorum link
+  (`/quorum/proxy/`, member credentials) to the owning authority, so any authority's API serves the whole pack.
+- Model keys come from the `leader` vault source (the vault host, over the quorum link, with the policy
+  and audit of `rux quorum policy`) unless the thread, `--vault` or `authority.json` says `local`. The
+  audit names the thread that first made the authority fetch a key.
+
+Sub-agents a thread starts through `/mcp` always run on the thread's own authority, so their wake-ups
+and scope stay local.
+
 ## Threads are project agents
 
 Every thread can start sub-agents, whatever its engine. The authority's guest `/mcp` endpoint accepts
