@@ -1,16 +1,14 @@
-package rox
+package roxrex
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/rex-agents/r-x/internal/rexbridge"
 	"github.com/rex-agents/r-x/internal/rix"
+	"github.com/rex-agents/r-x/internal/rox"
 	"github.com/rex-agents/r-x/internal/selfupdate"
 	"github.com/rex-agents/r-x/internal/sys"
 	"github.com/rex-agents/r-x/internal/ui"
@@ -19,7 +17,7 @@ import (
 const rexModule = "rox"
 
 // requireLine is what init.lua needs to load the bridge.
-const requireLine = `require("rox") -- rox and rix as Rex actions; managed by rox rex install`
+const requireLine = `require("rox") -- rox and rix as Rex actions; managed by rox-rex install`
 
 func rexConfigDir() string {
 	if p := os.Getenv("REX_CONFIG"); p != "" {
@@ -35,24 +33,31 @@ func rexInit() string {
 	return filepath.Join(rexConfigDir(), "init.lua")
 }
 
+// binaryFor finds a program on PATH, or beside this one, with symlinks resolved.
+func binaryFor(name string) string {
+	if p, err := sys.R.LookPath(name); err == nil {
+		return sys.Resolve(p)
+	}
+	if self, err := os.Executable(); err == nil {
+		if sibling := filepath.Join(filepath.Dir(sys.Resolve(self)), name); sys.IsFile(sibling) {
+			return sibling
+		}
+	}
+	return ""
+}
+
 // bridgePrograms are rox and rix with the paths the Rex server should run, since its PATH may lack them.
 func bridgePrograms(version string) []rexbridge.Program {
-	roxRoot := rootCommand(version, &selfupdate.Updater{Program: "rox", Version: version})
+	roxRoot := rox.RootCommand(version, &selfupdate.Updater{Program: "rox", Version: version})
 	rexbridge.AnnotateTree(roxRoot, rexbridge.RoxSpecs)
 	rixRoot := rix.RootCommand(version, &selfupdate.Updater{Program: "rix", Version: version})
 	rexbridge.AnnotateTree(rixRoot, rexbridge.RixSpecs)
 	if p, err := sys.R.LookPath("rex"); err == nil {
 		rexbridge.RexBin = sys.Resolve(p)
 	}
-	rixBin := ""
-	if p, err := sys.R.LookPath("rix"); err == nil {
-		rixBin = sys.Resolve(p)
-	} else if sibling := filepath.Join(filepath.Dir(sys.Resolve(selfPath())), "rix"); sys.IsFile(sibling) {
-		rixBin = sibling
-	}
 	return []rexbridge.Program{
-		{Name: "rox", Bin: sys.Resolve(selfPath()), Category: "Rox", Root: roxRoot},
-		{Name: "rix", Bin: rixBin, Category: "Rix", Root: rixRoot},
+		{Name: "rox", Bin: binaryFor("rox"), Category: "Rox", Root: roxRoot},
+		{Name: "rix", Bin: binaryFor("rix"), Category: "Rix", Root: rixRoot},
 	}
 }
 
@@ -62,45 +67,9 @@ func BridgeLua(version string) string {
 	return rexbridge.Lua(programs, rexbridge.Actions(programs))
 }
 
-func rexCommand(version string) *cobra.Command {
-	c := &cobra.Command{Use: "rex", Short: "make every rox and rix command a Rex action"}
-	c.AddCommand(&cobra.Command{
-		Use:   "lua",
-		Short: "print the Lua module that defines the actions",
-		Args:  cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
-			fmt.Fprint(ui.Stdout(), BridgeLua(version))
-			return nil
-		},
-	})
-	var noReload, refresh bool
-	install := &cobra.Command{
-		Use:   "install",
-		Short: "write the actions beside Rex's init.lua, load them from it, and reload Rex",
-		Args:  cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
-			if refresh {
-				RefreshBridge(version)
-				return nil
-			}
-			return InstallBridge(version, !noReload)
-		},
-	}
-	install.Flags().BoolVar(&noReload, "no-reload", false, "don't run rex config reload")
-	install.Flags().BoolVar(&refresh, "refresh", false, "only rewrite the actions if they're installed, as updates do")
-	_ = install.Flags().MarkHidden("refresh")
-	c.AddCommand(install, &cobra.Command{
-		Use:   "uninstall",
-		Short: "remove the actions and their line in init.lua",
-		Args:  cobra.NoArgs,
-		RunE:  func(*cobra.Command, []string) error { return UninstallBridge() },
-	})
-	return c
-}
-
 // InstallBridge writes rox.lua beside init.lua, requires it there, and reloads Rex.
 func InstallBridge(version string, reload bool) error {
-	ui.Header("rex install", "")
+	ui.Header("install", "")
 	programs := bridgePrograms(version)
 	actions := rexbridge.Actions(programs)
 	module := filepath.Join(rexConfigDir(), rexModule+".lua")
@@ -112,8 +81,11 @@ func InstallBridge(version string, reload bool) error {
 		counts[a.Program]++
 	}
 	ui.Done("Wrote %d rox and %d rix actions to %s", counts["rox"], counts["rix"], ui.Code(module))
+	if programs[0].Bin == "" {
+		ui.Warn("rox isn't on PATH, so its actions fail until it is. Rerun rox-rex install after installing it")
+	}
 	if programs[1].Bin == "" {
-		ui.Warn("rix isn't on PATH, so its actions fail until it is. Rerun rox rex install after installing it")
+		ui.Warn("rix isn't on PATH, so its actions fail until it is. Rerun rox-rex install after installing it")
 	}
 	init := rexInit()
 	data, err := os.ReadFile(init)
@@ -170,7 +142,7 @@ func UninstallBridge() error {
 	return nil
 }
 
-// BridgeInstalled reports whether rox rex install put the actions in place.
+// BridgeInstalled reports whether rox-rex install put the actions in place.
 func BridgeInstalled() bool { return sys.IsFile(filepath.Join(rexConfigDir(), rexModule+".lua")) }
 
 // RefreshBridge rewrites installed actions after an update, so they match the new commands

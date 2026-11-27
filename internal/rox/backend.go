@@ -901,10 +901,6 @@ func railwayTemplateSteps() []string {
 		root + "$S apt-get update && $S env DEBIAN_FRONTEND=noninteractive apt-get install -y " +
 			"--no-install-recommends bash ca-certificates curl git libpam0g openssh-client openssh-server sudo " +
 			"xz-utils && $S rm -rf /var/lib/apt/lists/*",
-		root + "curl -fsSL https://pkgs.superlogical.com/rex/install.sh -o /tmp/rex-install.sh && " +
-			"$S sh /tmp/rex-install.sh --tarball --channel " + rexChannel() + " && rm /tmp/rex-install.sh && " +
-			"if [ ! -x /usr/local/bin/rex ]; then $S install -m 0755 \"$($S sh -lc 'command -v rex')\" " +
-			"/usr/local/bin/rex; fi && /usr/local/bin/rex version",
 		root + "id workspace >/dev/null 2>&1 || $S useradd --create-home --shell /bin/bash workspace; $S passwd -d workspace",
 		root + "printf %s " + entrypoint + " | base64 -d | $S tee /usr/local/bin/rox-container >/dev/null && " +
 			"$S chmod 0755 /usr/local/bin/rox-container",
@@ -1042,19 +1038,3 @@ func (b railwayBackend) Destroy(g *Guest) error {
 }
 
 func (railwayBackend) Prebuild(*PrebuildRequest) (string, error) { return "", nil }
-
-// rexChannel is the Rex release channel this machine runs, so guests match it.
-func rexChannel() string {
-	out, err := sys.OutputWith(sys.Cmd{Argv: []string{"rex", "version"}, Timeout: 10 * time.Second})
-	if err != nil {
-		return "preview"
-	}
-	version := strings.Split(out, "\n")[0]
-	switch {
-	case regexp.MustCompile(`alpha|snapshot`).MatchString(version):
-		return "snapshot"
-	case strings.Contains(version, "preview") || !regexp.MustCompile(`\d+\.\d+\.\d+\s*$`).MatchString(version):
-		return "preview"
-	}
-	return "stable"
-}

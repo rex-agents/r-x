@@ -30,7 +30,6 @@ installed_version() {
 }
 case "$stage" in
     prepare)
-        command -v rex >/dev/null || { echo 'Install Rex in the guest and put it on PATH.' >&2; exit 1; }
         command -v git >/dev/null || { echo 'Install Git in the guest.' >&2; exit 1; }
         base="$HOME/.rox/$1"
         mkdir -p -m 700 "$base"
@@ -124,7 +123,8 @@ case "$stage" in
     setup)
         cd "$1"
         export ROX_PROJECT_DIR="$PWD" ROX_NAME="$2" ROX_BACKEND="$3" ROX_PHASE=boot
-        export REX_SERVER="unix://$4"
+        # Only a guest a Rex provider set up has a server at $4.
+        if [[ -S $4 ]]; then export REX_SERVER="unix://$4"; else unset REX_SERVER; fi
         unset SSH_AUTH_SOCK
         if [[ $5 == prebuilt ]]; then
             printf 'Skipping .rox.sh in %s: it ran when the image was built\n' "$ROX_NAME" >&2
@@ -139,45 +139,6 @@ case "$stage" in
         unset REX_SERVER SSH_AUTH_SOCK
         printf 'Running .rox.sh for %s\n' "$ROX_NAME" >&2
         bash .rox.sh </dev/null
-        ;;
-    server)
-        base="${1%/*}"
-        # Rox forwards the launcher's Git keys to this path, when the guest has them.
-        export SSH_AUTH_SOCK="$base/git-agent.sock"
-        endpoint="unix://$1"
-        # Rex doesn't tell the guest's terminals which server they're in, so rex there would look
-        # for a server at the default socket. The server and every shell get this one.
-        mkdir -p "$HOME/.rox"
-        printf '[ -n "${REX_SERVER:-}" ] || export REX_SERVER=%q\n' "$endpoint" >"$HOME/.rox/rex.env"
-        hook_env rex
-        rex_ready() {
-            [[ -S $1 ]] && rex --autostart=false --timeout 1s -S "$endpoint" ls >/dev/null 2>&1
-        }
-        if rex_ready "$1"; then
-            exit 0
-        fi
-        log="$base/rex.log"
-        # The server, and every terminal it opens, gets the agents' credentials.
-        if [[ -f $HOME/.rox/agents.env ]]; then
-            . "$HOME/.rox/agents.env"
-        fi
-        export REX_SERVER="$endpoint"
-        nohup rex server run --listen "$endpoint" --state-dir "$base/rex-state" >"$log" 2>&1 </dev/null &
-        server_pid=$!
-        deadline=$((SECONDS + 10))
-        while ((SECONDS < deadline)); do
-            if rex_ready "$1"; then
-                exit 0
-            fi
-            kill -0 "$server_pid" 2>/dev/null || break
-            sleep 0.2
-        done
-        echo "Rex did not answer inside the guest at $1." >&2
-        cat "$log" >&2
-        exit 1
-        ;;
-    session)
-        exec "$@" </dev/null
         ;;
     agents)
         # Each argument is AGENT=VERSION, where VERSION may be latest.

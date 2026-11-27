@@ -10,7 +10,7 @@ import (
 	"regexp"
 )
 
-//go:embed Containerfile guest/bootstrap.sh guest/container-entrypoint.sh guest/rix-guest.sh
+//go:embed Containerfile guest/bootstrap.sh guest/container-entrypoint.sh guest/rix-guest.sh guest/rex-guest.sh
 var files embed.FS
 
 //go:embed all:skills
@@ -30,6 +30,9 @@ func Bootstrap() string { return string(Read("guest/bootstrap.sh")) }
 
 // RixGuest is the guest-side script rix sends through rox exec.
 func RixGuest() string { return string(Read("guest/rix-guest.sh")) }
+
+// RexGuest is the guest-side script rox-rex sends through rox exec.
+func RexGuest() string { return string(Read("guest/rex-guest.sh")) }
 
 // Toolkit is the io.rox.toolkit label of the rox:linux Containerfile.
 func Toolkit() string {

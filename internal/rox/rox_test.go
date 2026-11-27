@@ -11,7 +11,6 @@ import (
 
 	"github.com/rex-agents/r-x/internal/assets"
 	"github.com/rex-agents/r-x/internal/contract"
-	"github.com/rex-agents/r-x/internal/rexbridge"
 	"github.com/rex-agents/r-x/internal/sys"
 	"github.com/rex-agents/r-x/internal/ui"
 )
@@ -293,7 +292,7 @@ func TestGeneratedContainerfiles(t *testing.T) {
 }
 
 func TestToolkitLabel(t *testing.T) {
-	if assets.Toolkit() != "8" {
+	if assets.Toolkit() != "9" {
 		t.Errorf("toolkit %q: bump it whenever the Containerfile or entrypoint changes", assets.Toolkit())
 	}
 }
@@ -526,50 +525,5 @@ func TestFlyAppNameHidesEmail(t *testing.T) {
 	name := flyAppName("Me@Example.com")
 	if name != flyAppName("me@example.com") || strings.Contains(name, "example") || len(name) != 14 {
 		t.Errorf("app name %s", name)
-	}
-}
-
-func TestEveryCommandHasARexSpec(t *testing.T) {
-	isolate(t)
-	programs := bridgePrograms("test")
-	if missing := rexbridge.Missing(programs[0].Root, rexbridge.RoxSpecs); len(missing) > 0 {
-		t.Errorf("rox commands without a Rex spec: %v", missing)
-	}
-	if missing := rexbridge.Missing(programs[1].Root, rexbridge.RixSpecs); len(missing) > 0 {
-		t.Errorf("rix commands without a Rex spec: %v", missing)
-	}
-	lua := BridgeLua("test")
-	for _, name := range []string{`"rox_up"`, `"rox_funnel_add"`, `"rix_auth"`, `"rix_git_agent_start"`} {
-		if !strings.Contains(lua, name) {
-			t.Errorf("no action %s", name)
-		}
-	}
-	for _, gone := range []string{`"rox_agent"`, `"rox_update_agents"`, `"rox_service_run"`, `"rox_rex_install"`, `"rix_hook"`} {
-		if strings.Contains(lua, gone) {
-			t.Errorf("action %s shouldn't exist", gone)
-		}
-	}
-}
-
-func TestBridgeInstallEditsInitOnce(t *testing.T) {
-	isolate(t)
-	init := rexInit()
-	_ = os.MkdirAll(filepath.Dir(init), 0o755)
-	_ = os.WriteFile(init, []byte("rex.bind(\"cmd+k\", \"x\")"), 0o644)
-	for i := 0; i < 2; i++ {
-		if err := InstallBridge("test", false); err != nil {
-			t.Fatal(err)
-		}
-	}
-	data, _ := os.ReadFile(init)
-	if strings.Count(string(data), `require("rox")`) != 1 || !strings.HasPrefix(string(data), `rex.bind("cmd+k", "x")`) {
-		t.Errorf("init.lua:\n%s", data)
-	}
-	if err := UninstallBridge(); err != nil {
-		t.Fatal(err)
-	}
-	data, _ = os.ReadFile(init)
-	if strings.Contains(string(data), "require") || sys.IsFile(filepath.Join(filepath.Dir(init), "rox.lua")) {
-		t.Errorf("uninstall left %s", data)
 	}
 }

@@ -94,11 +94,13 @@ grep -qxF "$line" "$HOME/.zshenv" || printf '%s\n' "$line" >> "$HOME/.zshenv"
 `
 
 const templateCheckScript = `set -eu
-if ! command -v rex >/dev/null; then
-  echo "rex isn't on SSH's PATH in the template." >&2
-  exit 1
+if [ "${1:-}" = rex ]; then
+  if ! command -v rex >/dev/null; then
+    echo "rex isn't on SSH's PATH in the template." >&2
+    exit 1
+  fi
+  rex version | head -n 1
 fi
-rex version | head -n 1
 if ! git --version; then
   echo "Git doesn't run in the template. Install the Xcode Command Line Tools there." >&2
   exit 1
@@ -150,10 +152,12 @@ if sudo -n sshd -T 2>/dev/null | grep -qi '^kbdinteractiveauthentication '; then
   settings="${settings}KbdInteractiveAuthentication no\n"
 fi
 printf "$settings" | sudo -n tee /etc/ssh/sshd_config.d/05-rox.conf >/dev/null
-installer=$(mktemp)
-trap 'rm -f "$installer"' EXIT
-curl -fsSL "$2" -o "$installer"
-quiet sudo -n sh "$installer" --tarball --channel "$1"
+if [ -n "$2" ]; then
+  installer=$(mktemp)
+  trap 'rm -f "$installer"' EXIT
+  curl -fsSL "$2" -o "$installer"
+  quiet sudo -n sh "$installer" --tarball --channel "$1"
+fi
 `
 
 // Replace the ed25519 host key with the shared one from stdin, then restart sshd.
@@ -174,11 +178,13 @@ done
 `
 
 const linuxCheckScript = `set -eu
-if ! command -v rex >/dev/null; then
-  echo "rex isn't on SSH's PATH in the template." >&2
-  exit 1
+if [ "${1:-}" = rex ]; then
+  if ! command -v rex >/dev/null; then
+    echo "rex isn't on SSH's PATH in the template." >&2
+    exit 1
+  fi
+  rex version | head -n 1
 fi
-rex version | head -n 1
 git --version
 bash --version | head -n 1
 if command -v loginctl >/dev/null; then
@@ -189,8 +195,11 @@ fi
 // TemplateOptions are rox template's flags.
 type TemplateOptions struct {
 	Backend, Config, Name, Base, Distro, RexChannel, BasePassword string
-	Default                                                       bool
-	BootTimeout                                                   time.Duration
+	// WithRex puts Rex in the template, for guests that use the rox-rex hook. Without it rox-rex
+	// installs Rex in each Linux guest on first boot.
+	WithRex     bool
+	Default     bool
+	BootTimeout time.Duration
 }
 
 func templateGuest(name, backend, user, identity string) *Guest {
@@ -347,11 +356,13 @@ func authorizeTemplateKey(g *Guest, public, hostKey string, boot time.Duration) 
 }
 
 func prepareMacosTemplate(o *TemplateOptions, configPath string, settings map[string]any) error {
-	if err := sys.Require("ditto"); err != nil {
-		return err
-	}
-	if !sys.IsFile(filepath.Join(rexApp, rexAppCLI)) {
-		return fmt.Errorf("Install the Rex app at %s first. rox template copies it into the template", rexApp)
+	if o.WithRex {
+		if err := sys.Require("ditto"); err != nil {
+			return err
+		}
+		if !sys.IsFile(filepath.Join(rexApp, rexAppCLI)) {
+			return fmt.Errorf("Install the Rex app at %s first. rox template --with-rex copies it into the template", rexApp)
+		}
 	}
 	name := firstNonEmpty(o.Name, str(settings["image"]), DefaultTemplateName)
 	base := firstNonEmpty(o.Base, DefaultTemplateBase)
@@ -409,27 +420,29 @@ func prepareMacosTemplate(o *TemplateOptions, configPath string, settings map[st
 		}); err != nil {
 			return err
 		}
-		if err := ui.Run("Installing Rex from "+rexApp, "Installed Rex from "+rexApp, func(*ui.Step) error {
-			scratch, err := os.MkdirTemp("", "rox-rex-")
-			if err != nil {
+		if o.WithRex {
+			if err := ui.Run("Installing Rex from "+rexApp, "Installed Rex from "+rexApp, func(*ui.Step) error {
+				scratch, err := os.MkdirTemp("", "rox-rex-")
+				if err != nil {
+					return err
+				}
+				defer os.RemoveAll(scratch)
+				archive := filepath.Join(scratch, "Rex.zip")
+				if _, err := sys.Run(sys.Cmd{Argv: []string{"ditto", "-c", "-k", "--keepParent", rexApp, archive}}); err != nil {
+					return err
+				}
+				f, err := os.Open(archive)
+				if err != nil {
+					return err
+				}
+				defer f.Close()
+				_, err = sys.Run(sys.Cmd{Argv: remoteCommand(g, []string{"bash", "-c", templateRexScript, "rox", rexAppCLI}, "", false), Stdin: f})
+				return err
+			}); err != nil {
 				return err
 			}
-			defer os.RemoveAll(scratch)
-			archive := filepath.Join(scratch, "Rex.zip")
-			if _, err := sys.Run(sys.Cmd{Argv: []string{"ditto", "-c", "-k", "--keepParent", rexApp, archive}}); err != nil {
-				return err
-			}
-			f, err := os.Open(archive)
-			if err != nil {
-				return err
-			}
-			defer f.Close()
-			_, err = sys.Run(sys.Cmd{Argv: remoteCommand(g, []string{"bash", "-c", templateRexScript, "rox", rexAppCLI}, "", false), Stdin: f})
-			return err
-		}); err != nil {
-			return err
 		}
-		out, err := guestRun(g, []string{"bash", "-c", templateCheckScript}, "", 30*time.Second)
+		out, err := guestRun(g, []string{"bash", "-c", templateCheckScript, "rox", rexCheck(o.WithRex)}, "", 30*time.Second)
 		if err != nil {
 			return err
 		}
@@ -469,7 +482,9 @@ func prepareMacosTemplate(o *TemplateOptions, configPath string, settings map[st
 	os.RemoveAll(g.Directory())
 	ui.Card(name, "ready", []ui.Field{{Label: "Template", Value: name}, {Label: "Password", Value: passwordPath},
 		{Label: "Config", Value: configPath, Note: "(macos)"}, {Label: "Launch", Value: ui.Code("rox up macos")}})
-	ui.Hint("Run " + ui.Code("rox template macos") + " again after upgrading Rex")
+	if o.WithRex {
+		ui.Hint("Run " + ui.Code("rox template macos --with-rex") + " again after upgrading Rex")
+	}
 	return nil
 }
 
@@ -593,7 +608,7 @@ func checkTemplateClone(template, user, identity, hostKey string, boot time.Dura
 	if err != nil {
 		return err
 	}
-	if _, err := guestRun(clone, []string{"sh", "-c", "command -v rex >/dev/null && rex version >/dev/null"}, "", 30*time.Second); err != nil {
+	if _, err := guestRun(clone, []string{"true"}, "", 30*time.Second); err != nil {
 		return err
 	}
 	shutDownTemplate(clone, vm)
@@ -640,7 +655,12 @@ func prepareLinuxTemplate(o *TemplateOptions, configPath string, settings map[st
 	if err := cloneTemplate(name, base, "a few GB"); err != nil {
 		return err
 	}
-	channel := firstNonEmpty(o.RexChannel, rexChannel())
+	channel, installer := "", ""
+	installing := "Installing Git"
+	if o.WithRex || o.RexChannel != "" {
+		channel, installer = firstNonEmpty(o.RexChannel, "preview"), rexInstaller
+		installing = "Installing Git and Rex (" + channel + ")"
+	}
 	g := templateGuest(name, "linux", user, identity)
 	os.RemoveAll(g.Directory())
 	if err := os.MkdirAll(g.Directory(), 0o700); err != nil {
@@ -658,12 +678,12 @@ func prepareLinuxTemplate(o *TemplateOptions, configPath string, settings map[st
 		}); err != nil {
 			return err
 		}
-		if err := ui.Run("Installing Git and Rex ("+channel+")", "Installed Git and Rex ("+channel+"), replaced the password, turned on lingering", func(*ui.Step) error {
+		if err := ui.Run(installing, strings.Replace(installing, "Installing", "Installed", 1)+", replaced the password, turned on lingering", func(*ui.Step) error {
 			password, err := templatePassword(passwordPath)
 			if err != nil {
 				return err
 			}
-			_, err = guestRun(g, []string{"bash", "-c", linuxSetupScript, "rox", channel, rexInstaller}, password+"\n", 30*time.Minute)
+			_, err = guestRun(g, []string{"bash", "-c", linuxSetupScript, "rox", channel, installer}, password+"\n", 30*time.Minute)
 			return err
 		}); err != nil {
 			return err
@@ -676,7 +696,7 @@ func prepareLinuxTemplate(o *TemplateOptions, configPath string, settings map[st
 		}); err != nil {
 			return err
 		}
-		out, err := guestRun(g, []string{"bash", "-c", linuxCheckScript}, "", 30*time.Second)
+		out, err := guestRun(g, []string{"bash", "-c", linuxCheckScript, "rox", rexCheck(installer != "")}, "", 30*time.Second)
 		if err != nil {
 			return err
 		}
@@ -722,6 +742,24 @@ func prepareLinuxTemplate(o *TemplateOptions, configPath string, settings map[st
 	}
 	ui.Card(name, "ready", []ui.Field{{Label: "Template", Value: name, Note: "(" + base + ")"}, {Label: "Password", Value: passwordPath},
 		{Label: "Config", Value: configPath, Note: "(linux)"}, {Label: "Launch", Value: ui.Code(launch)}})
-	ui.Hint("Run " + ui.Code("rox template linux") + " again to update Rex")
+	if installer != "" {
+		ui.Hint("Run " + ui.Code("rox template linux --with-rex") + " again to update Rex")
+	}
 	return nil
 }
+
+// rexCheck is the argument that makes a template's check script look for Rex.
+func rexCheck(withRex bool) string {
+	if withRex {
+		return "rex"
+	}
+	return ""
+}
+
+// authorizeScript adds the public key in $1 to the login's authorized_keys.
+const authorizeScript = `set -eu
+umask 077
+mkdir -p "$HOME/.ssh"
+touch "$HOME/.ssh/authorized_keys"
+grep -qxF "$1" "$HOME/.ssh/authorized_keys" || printf '%s\n' "$1" >> "$HOME/.ssh/authorized_keys"
+`

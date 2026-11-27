@@ -18,27 +18,18 @@ import (
 	"github.com/rex-agents/r-x/internal/ui"
 )
 
-const hostHelp = "Rex host that runs the guest; found automatically when omitted"
+const hostHelp = "host that runs the guest; found automatically when omitted"
 
 // Main runs rox with the process's arguments and returns its exit status.
 func Main(version string, args []string) int {
 	ui.SetProgram("rox")
-	if len(args) > 0 && args[0] == "__relay" {
-		// rox __relay RUNTIME -- COMMAND...: the SSH relay that replaced guest/relay.py.
-		if len(args) < 4 || args[2] != "--" {
-			return 2
-		}
-		if err := Relay(args[1], args[3:]); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
-		return 0
-	}
 	updater := &selfupdate.Updater{Program: "rox", Version: version, StateDir: StateRoot(), Mode: updateMode,
 		After: func(tag string) {
 			RefreshSkills(tag)
-			// The new binary knows the new commands, so it writes the actions.
-			sys.Try(sys.Cmd{Argv: []string{selfPath(), "rex", "install", "--refresh"}, Env: map[string]string{"ROX_UPDATED": tag}, Passthrough: true})
+			// rox-rex writes the Rex actions, from the rox and rix it finds.
+			if p, err := sys.R.LookPath("rox-rex"); err == nil {
+				sys.Try(sys.Cmd{Argv: []string{p, "install", "--refresh"}, Env: map[string]string{"ROX_UPDATED": tag}, Passthrough: true})
+			}
 		}}
 	updater.Auto(args)
 	root := rootCommand(version, updater)
@@ -70,7 +61,7 @@ func rootCommand(version string, updater *selfupdate.Updater) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "rox",
 		Short:         "Launch Rex guests and the project workspaces inside them",
-		Long:          "rox launches Rex guests and the project workspaces inside them.\n\nGit keys, agent credentials and agent setup come from rix, when it's installed.",
+		Long:          "rox launches guests and the project workspaces inside them.\n\nGit keys, agent credentials and agent setup come from rix, when it's installed.",
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -94,7 +85,7 @@ func rootCommand(version string, updater *selfupdate.Updater) *cobra.Command {
 		lifecycleCommand("start", "start a stopped guest and restore access to it"), lifecycleCommand("stop", "stop a guest and keep it stopped until rox start"),
 		downCommand())
 	add("access", shellCommandCLI(), forwardCommand(), cpCommand(), funnelCommand(), openCommand(), addRemoteHostCommand())
-	add("setup", templateCommand(), configCommand(), serviceCommand(), skillCommand(version), selfUpdateCommand(updater), rexCommand(version), keyForwarder())
+	add("setup", templateCommand(), configCommand(), serviceCommand(), skillCommand(version), selfUpdateCommand(updater), rexForwarder(), keyForwarder())
 	add("machine", execCommand(), inspectCommand(), hooksCommand())
 	return root
 }
@@ -102,7 +93,7 @@ func rootCommand(version string, updater *selfupdate.Updater) *cobra.Command {
 func projectFlags(c *cobra.Command, o *UpOptions) {
 	cwd, _ := os.Getwd()
 	f := c.Flags()
-	f.StringVarP(&o.Host, "host", "S", "", "run on this Rex remote host")
+	f.StringVarP(&o.Host, "host", "S", "", "run on this remote host")
 	f.StringVar(&o.Config, "config", "", "config file on the machine that runs the guest")
 	f.StringVar(&o.Cwd, "cwd", cwd, "directory within the source project")
 	f.StringVar(&o.Project, "project", "", "project name for a launch from --repo and --branch without a checkout")
@@ -113,11 +104,11 @@ func projectFlags(c *cobra.Command, o *UpOptions) {
 	f.StringVar(&o.GitKnownHosts, "git-known-hosts", "", "known_hosts file for Git SSH servers")
 	f.BoolVar(&o.NoHook, "no-hook", false, "skip the project's .rox.sh")
 	f.BoolVar(&o.Local, "local", false, "copy this checkout's unpushed commits and uncommitted files into the guest")
-	f.BoolVar(&o.OpenShell, "open-shell", false, "open the guest's session in the Rex app here, or a Guest tab in this Rex session")
+	f.BoolVar(&o.OpenShell, "open-shell", false, "open a shell for the guest where a hook provider shows one (rox-rex: the Rex app or a Guest tab), or run rox shell here")
 	f.StringVar(&o.Agents, "agents", "", "agent CLIs to install for this launch, such as claude,codex or claude=1.2.3")
 	f.BoolVar(&o.NoAgents, "no-agents", false, "install no agent CLIs, whatever the project lists")
 	f.StringVar(&o.Vault, "vault", "host", "with --host: whose rix vault signs the guest in, host or here")
-	f.StringVar(&HookScope, "hooks", "all", "which rix hooks run: all or git")
+	f.StringVar(&HookScope, "hooks", "all", "which hooks run: all or git")
 	_ = f.MarkHidden("hooks")
 	c.MarkFlagsMutuallyExclusive("remote", "repo")
 }
@@ -221,8 +212,8 @@ func lsCommand() *cobra.Command {
 		},
 	}
 	f := c.Flags()
-	f.BoolVarP(&all, "all", "a", false, "also list workspaces on every Rex host this machine can reach")
-	f.StringVarP(&host, "host", "S", "", "list workspaces on this Rex remote host instead")
+	f.BoolVarP(&all, "all", "a", false, "also list workspaces on every known host (hosts in the config or ROX_HOSTS)")
+	f.StringVarP(&host, "host", "S", "", "list workspaces on this remote host instead")
 	f.BoolVar(&allProjects, "all-projects", false, "in a checkout, list every workspace, not only the ones with this project")
 	f.StringVar(&cwd, "cwd", cwd, "directory within the project to list")
 	f.BoolVar(&asJSON, "json", false, `print {"schema": 1, "guests": [...]} as JSON`)
@@ -266,7 +257,7 @@ func downCommand() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "down [NAME]",
 		Short: "delete a guest and its workspace",
-		Long:  "Delete a guest, its files and its Rex host entry. Without NAME, pick from the current project's workspaces.",
+		Long:  "Delete a guest and its files, and what hook providers set up for it. Without NAME, pick from the current project's workspaces.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			name := ""
@@ -293,7 +284,7 @@ func downCommand() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&cwd, "cwd", cwd, "directory within the project")
-	c.Flags().StringVarP(&host, "host", "S", "", "remove a guest that runs on this Rex remote host")
+	c.Flags().StringVarP(&host, "host", "S", "", "remove a guest that runs on this remote host")
 	return c
 }
 
@@ -462,7 +453,7 @@ func openCommand() *cobra.Command {
 	var host string
 	c := &cobra.Command{
 		Use:   "open NAME [PROJECT]",
-		Short: "show a guest's own Rex session in the Rex app, so splits run in the guest",
+		Short: "open a shell for a guest where a hook provider shows one, such as the Rex app (rox-rex)",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(_ *cobra.Command, args []string) error {
 			key := ""
@@ -477,15 +468,7 @@ func openCommand() *cobra.Command {
 }
 
 func addRemoteHostCommand() *cobra.Command {
-	var host string
-	c := &cobra.Command{
-		Use:   "add-remote-host NAME",
-		Short: "add a guest to the Rex app on this machine, which keeps its own host list",
-		Args:  cobra.ExactArgs(1),
-		RunE:  func(_ *cobra.Command, args []string) error { return AddRemoteHost(args[0], host) },
-	}
-	c.Flags().StringVarP(&host, "host", "S", "", hostHelp)
-	return c
+	return forwardTo("add-remote-host", "moved: rox-rex add-host adds a guest to the Rex app", "rox-rex", []string{"add-host"}, "Install rox-rex for Rex actions and hosts")
 }
 
 func templateCommand() *cobra.Command {
@@ -520,13 +503,14 @@ func templateCommand() *cobra.Command {
 		},
 	}
 	f := c.Flags()
-	f.StringVarP(&host, "host", "S", "", "prepare it on this Rex remote host")
+	f.StringVarP(&host, "host", "S", "", "prepare it on this remote host")
 	f.StringVar(&o.Config, "config", "", "config file on the machine that runs the guests")
 	f.StringVar(&o.Name, "name", "", "template name; defaults to macos.image or rox-macos, or rox-DISTRO")
 	f.StringVar(&o.Base, "base", "", "Tart image to clone the template from")
 	f.StringVar(&o.Distro, "distro", "", "Linux distribution: ubuntu (default), debian, fedora or arch")
 	f.BoolVar(&o.Default, "default", false, "make this the linux image even when another one is configured")
-	f.StringVar(&o.RexChannel, "rex-channel", "", "Rex channel for a Linux template: stable, preview or snapshot")
+	f.BoolVar(&o.WithRex, "with-rex", false, "also install Rex in the template, for guests that use the rox-rex hook")
+	f.StringVar(&o.RexChannel, "rex-channel", "", "Rex channel for a Linux template with --with-rex: stable, preview or snapshot")
 	f.StringVar(&o.BasePassword, "base-password", DefaultBasePassword, "the base image's login password, which rox replaces")
 	f.IntVar(&boot, "boot-timeout", 600, "seconds per readiness check")
 	return c
@@ -756,3 +740,8 @@ func hooksCommand() *cobra.Command {
 var _ = filepath.Join
 
 type pflagFlag = pflag.Flag
+
+// RootCommand is rox's command tree, which rox-rex reads to make Rex actions from it.
+func RootCommand(version string, updater *selfupdate.Updater) *cobra.Command {
+	return rootCommand(version, updater)
+}
