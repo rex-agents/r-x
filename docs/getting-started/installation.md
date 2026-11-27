@@ -23,11 +23,11 @@ Building from source needs Go: `make install` puts the three binaries in `~/.loc
 ## Optional steps
 
 ```sh
-rox rex install     # every rox and rix command as a Rex action
+rox-rex install     # optional, needs Rex: every rox and rix command as a Rex action
 rox skill install   # the rox skill for Claude Code and Codex
 ```
 
-`rox rex install` writes `~/.config/rex/rox.lua` and adds `require("rox")` to Rex's `init.lua`; `rox rex uninstall` removes it. `rox skill install` accepts `--agent claude|codex` (repeatable) to choose where the skill goes.
+`rox-rex install` writes `~/.config/rex/rox.lua` and adds `require("rox")` to Rex's `init.lua`; `rox-rex uninstall` removes it. `rox skill install` accepts `--agent claude|codex` (repeatable) to choose where the skill goes.
 
 ## Coming from Python rox
 
