@@ -329,7 +329,7 @@ func exportCheckout(mirror, url, branch, destination string) (string, error) {
 	steps := [][]string{
 		{"git", "init", "--quiet", destination},
 		append(append([]string{}, git...), "remote", "add", "origin", url),
-		append(append([]string{}, git...), "fetch", "--quiet", "--no-tags", mirror, "+refs/rox/"+branch+":refs/remotes/origin/"+branch),
+		append(append([]string{}, git...), "fetch", "--quiet", "--no-tags", mirror, "+"+branchCacheRef(branch)+":refs/remotes/origin/"+branch),
 		append(append([]string{}, git...), "checkout", "--quiet", "-B", branch, "refs/remotes/origin/"+branch),
 		append(append([]string{}, git...), "branch", "--quiet", "--set-upstream-to=origin/"+branch),
 	}

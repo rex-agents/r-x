@@ -227,7 +227,7 @@ type Branch struct {
 // gitEnv is how the launcher's git reaches a remote: through rix's agent and pins when rix
 // lends them, and otherwise through the user's own SSH setup, without prompting.
 func gitEnv(lease *Lease, scratch string) (map[string]string, []string, error) {
-	env := map[string]string{"GIT_TERMINAL_PROMPT": "0", "GIT_ALLOW_PROTOCOL": "ssh:https"}
+	env := map[string]string{"GIT_TERMINAL_PROMPT": "0", "GIT_ALLOW_PROTOCOL": gitProtocols}
 	if lease == nil {
 		env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
 		return env, nil, nil
@@ -281,12 +281,13 @@ func ReadBranch(src *Source, lease *Lease) (*Branch, error) {
 		if err != nil {
 			return err
 		}
+		ref := branchCacheRef(src.Branch)
 		if _, err := sys.Run(sys.Cmd{Env: env, Unset: unset, Timeout: 5 * time.Minute, Argv: []string{"git", "-C", mirror,
 			"-c", "credential.helper=", "fetch", "--quiet", "--no-tags", "--", src.URL,
-			"+refs/heads/" + src.Branch + ":refs/rox/" + src.Branch}}); err != nil {
+			"+refs/heads/" + src.Branch + ":" + ref}}); err != nil {
 			return err
 		}
-		commit, err := git(mirror, "rev-parse", "refs/rox/"+src.Branch+"^{commit}")
+		commit, err := git(mirror, "rev-parse", ref+"^{commit}")
 		if err != nil {
 			return err
 		}
@@ -331,6 +332,15 @@ func ReadBranch(src *Source, lease *Lease) (*Branch, error) {
 		s.Done("Read %s %s", src.Branch, ui.Muted("(found "+strings.Join(found, " and ")+" at "+short(branch.Commit)+")"))
 	}
 	return branch, nil
+}
+
+// branchCacheRef is the mirror's private ref for a branch. Git can't hold refs/rox/a and
+// refs/rox/a/b together, so the name is hashed: each branch gets its own flat ref, and
+// deleting a branch and re-creating it under a prefix (or the reverse) can't collide.
+// Refs from older versions under refs/rox/ are left alone.
+func branchCacheRef(branch string) string {
+	sum := sha256.Sum256([]byte(branch))
+	return "refs/rox-branches/" + hex.EncodeToString(sum[:])
 }
 
 func firstLine(s string) string {
@@ -685,3 +695,6 @@ func githubDefaultBranch(url string) (string, error) {
 	}
 	return repo.DefaultBranch, nil
 }
+
+// gitProtocols are the transports launcher-side Git may use. Tests widen it to read a local fixture.
+var gitProtocols = "ssh:https"
