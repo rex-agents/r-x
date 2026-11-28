@@ -22,7 +22,7 @@ type layout struct {
 // plan lays the columns out so the focused one sits in the horizontal middle of the graph area
 // and the rest follow it left and right, gutterW apart. Columns past the edges are clipped.
 func (m *Model) plan(bodyH int) layout {
-	l := layout{widths: map[int]int{}, xs: map[int]int{}}
+	l := layout{widths: map[int]int{}}
 	avail := m.w
 	if avail >= minPrevW {
 		l.preview = previewW
@@ -40,51 +40,30 @@ func (m *Model) plan(bodyH int) layout {
 			l.widths[c] = max(avail, 12)
 		}
 	}
-	f := min(max(m.focus, 0), nc-1)
-	l.xs[f] = (avail - l.widths[f]) / 2
-	for c := f - 1; c >= 0; c-- {
-		l.xs[c] = l.xs[c+1] - gutterW - l.widths[c]
-	}
-	for c := f + 1; c < nc; c++ {
-		l.xs[c] = l.xs[c-1] + l.widths[c-1] + gutterW
-	}
-	for c := 0; c < nc; c++ {
-		if l.xs[c]+l.widths[c] > 0 && l.xs[c] < avail {
-			l.cols = append(l.cols, c)
-		}
-	}
+	l.xs, l.cols = centreXs(l.widths, nc, m.focus, avail)
 	return l
 }
 
-// window picks the columns that fit in avail, scrolling so the focused one is visible.
-func window(widths map[int]int, nc, focus, avail int) []int {
-	used, n := 0, 0
+// centreXs puts column focus in the horizontal middle of avail and the rest left and right of it,
+// gutterW apart. It returns every column's left edge (may be negative) and the columns that are
+// at least partly visible.
+func centreXs(widths map[int]int, nc, focus, avail int) (map[int]int, []int) {
+	xs := map[int]int{}
+	f := min(max(focus, 0), nc-1)
+	xs[f] = (avail - widths[f]) / 2
+	for c := f - 1; c >= 0; c-- {
+		xs[c] = xs[c+1] - gutterW - widths[c]
+	}
+	for c := f + 1; c < nc; c++ {
+		xs[c] = xs[c-1] + widths[c-1] + gutterW
+	}
+	var vis []int
 	for c := 0; c < nc; c++ {
-		w := widths[c]
-		if n > 0 {
-			w += gutterW
+		if xs[c]+widths[c] > 0 && xs[c] < avail {
+			vis = append(vis, c)
 		}
-		if used+w > avail && n > 0 {
-			break
-		}
-		used += w
-		n++
 	}
-	start := max(0, focus-n+1)
-	var cols []int
-	for c := start; c < nc && c < start+n; c++ {
-		cols = append(cols, c)
-	}
-	// Columns after a collapsed start can use the width col 0 would have taken.
-	for c := start + n; start > 0 && c < nc; c++ {
-		w := widths[c] + gutterW
-		if used+w > avail {
-			break
-		}
-		used += w
-		cols = append(cols, c)
-	}
-	return cols
+	return xs, vis
 }
 
 type colRender struct {
@@ -92,73 +71,71 @@ type colRender struct {
 	mid   int // body row of the selected card's middle, -1 if none
 }
 
-// renderCol draws one column: its title, then its cards, with logo lines pinned to the bottom.
-func (m *Model) renderCol(title string, nodes []node, sel int, focused bool, w, h int, logoLines []string, empty string) colRender {
-	lines := make([]string, 0, h)
-	titleStyle := stFaint
-	if focused {
-		titleStyle = stAccent
-	}
-	lines = append(lines, fit(titleStyle.Render(title), w))
-	room := h - len(lines) - len(logoLines)
-	rows := max(room/cardH, 1)
-	sel = min(max(sel, 0), max(len(nodes)-1, 0))
-	off := 0
-	if len(nodes) > rows {
-		off = min(max(sel-rows/2, 0), len(nodes)-rows)
-	}
-	mid := -1
-	if len(nodes) == 0 {
-		lines = append(lines, fit(stDim.Render(empty), w))
-	}
-	for i := off; i < len(nodes) && i < off+rows; i++ {
-		isSel := i == sel
-		if isSel {
-			mid = len(lines) + cardH/2
-		}
-		lines = append(lines, m.card(nodes[i], w, isSel, focused)...)
-	}
-	lines = lines[:min(len(lines), h-len(logoLines))]
-	for len(lines) < h-len(logoLines) {
-		lines = append(lines, blank(w))
-	}
-	lines = append(lines, logoLines...)
-	return colRender{lines[:h], mid}
-}
-
-// renderColumn draws one PACK column h rows tall. The title is pinned to the top row; the
-// selected card's middle sits on row h/2 and the other cards stack outward from it, clipped
-// at the edges. An empty column puts its "no …" text on that middle row.
-func (m *Model) renderColumn(c, w, h int) colRender {
-	nodes := m.column(c)
+// renderCentred draws one column h rows tall. The title is pinned to the top row; the selected
+// card's middle sits on row h/2 and the other cards stack outward from it, clipped at the edges.
+// An empty column puts its "no …" text on that middle row.
+func (m *Model) renderCentred(title string, nodes []node, sel int, focused bool, w, h int, empty string) colRender {
 	lines := make([]string, h)
 	for i := range lines {
 		lines[i] = blank(w)
 	}
-	title := stFaint
-	if c == m.focus {
-		title = stAccent
+	ts := stFaint
+	if focused {
+		ts = stAccent
 	}
-	lines[0] = fit(title.Render(colTitles[c]), w)
+	lines[0] = fit(ts.Render(title), w)
 	mid := h / 2
 	if len(nodes) == 0 {
-		lines[mid] = fit(stDim.Render(emptyText(c)), w)
+		lines[mid] = fit(stDim.Render(empty), w)
 		return colRender{lines, -1}
 	}
-	sel := min(max(m.sel[c], 0), len(nodes)-1)
+	sel = min(max(sel, 0), len(nodes)-1)
 	top := mid - cardH/2 - sel*cardH // where card 0 starts
 	for i, n := range nodes {
 		y0 := top + i*cardH
 		if y0+cardH <= 1 || y0 >= h {
 			continue
 		}
-		for j, l := range m.card(n, w, i == sel, c == m.focus) {
+		for j, l := range m.card(n, w, i == sel, focused) {
 			if y := y0 + j; y >= 1 && y < h {
 				lines[y] = l
 			}
 		}
 	}
 	return colRender{lines, mid}
+}
+
+func (m *Model) renderColumn(c, w, h int) colRender {
+	return m.renderCentred(colTitles[c], m.column(c), m.sel[c], c == m.focus, w, h, emptyText(c))
+}
+
+// composeGraph lays the visible columns side by side at their x offsets, with connectors between
+// the selected cards, and cuts the result to avail cells.
+func composeGraph(vis []int, xs map[int]int, cols []colRender, linked []bool, avail, h int) []string {
+	rows := make([]string, h)
+	x0 := xs[vis[0]]
+	for y := range rows {
+		var b strings.Builder
+		if x0 > 0 {
+			b.WriteString(blank(x0))
+		}
+		for i := range vis {
+			if i > 0 {
+				yr := cols[i].mid
+				if !linked[i] {
+					yr = -1
+				}
+				b.WriteString(gutter(h, cols[i-1].mid, yr)[y])
+			}
+			b.WriteString(cols[i].lines[y])
+		}
+		line := b.String()
+		if x0 < 0 {
+			line = ansi.Cut(line, -x0, -x0+avail)
+		}
+		rows[y] = fit(line, avail)
+	}
+	return rows
 }
 
 // logoRows is the T-rex's lines, fitted to its width, or nil if it has none.
@@ -283,58 +260,18 @@ func gutter(h, yl, yr int) []string {
 	return g
 }
 
-// joinCols lays rendered columns side by side with connectors between them.
-func joinCols(cols []colRender, linked []bool, h int) []string {
-	rows := make([]string, h)
-	for y := range rows {
-		var b strings.Builder
-		for i := range cols {
-			if i > 0 {
-				yr := cols[i].mid
-				if !linked[i] {
-					yr = -1
-				}
-				b.WriteString(gutter(h, cols[i-1].mid, yr)[y])
-			}
-			b.WriteString(cols[i].lines[y])
-		}
-		rows[y] = b.String()
-	}
-	return rows
-}
-
 func (m *Model) packView(h int) []string {
 	if !m.havePack {
 		return center(stDim.Render("connecting to "+m.c.Base+"…"), m.w, h)
 	}
 	l := m.plan(h)
-	rows := make([]string, h)
 	cols := make([]colRender, len(l.cols))
+	linked := make([]bool, len(l.cols))
 	for i, c := range l.cols {
 		cols[i] = m.renderColumn(c, l.widths[c], h)
+		linked[i] = m.selected(c) != nil
 	}
-	x0 := l.xs[l.cols[0]]
-	for y := range rows {
-		var b strings.Builder
-		if x0 > 0 {
-			b.WriteString(blank(x0))
-		}
-		for i, c := range l.cols {
-			if i > 0 {
-				yr := cols[i].mid
-				if m.selected(c) == nil {
-					yr = -1
-				}
-				b.WriteString(gutter(h, cols[i-1].mid, yr)[y])
-			}
-			b.WriteString(cols[i].lines[y])
-		}
-		line := b.String()
-		if x0 < 0 {
-			line = ansi.Cut(line, -x0, -x0+l.avail)
-		}
-		rows[y] = fit(line, l.avail)
-	}
+	rows := composeGraph(l.cols, l.xs, cols, linked, l.avail, h)
 	// The T-rex sits at the bottom left of the graph area, if nothing is in its way.
 	if lr := m.logoRows(h); l.logo && len(lr) > 0 {
 		top := h - len(lr)
@@ -377,16 +314,16 @@ func (m *Model) monitorView(h int) []string {
 	for c := 0; c < numMCols; c++ {
 		widths[c] = cw
 	}
-	vis := window(widths, numMCols, m.mfocus, m.w)
+	xs, vis := centreXs(widths, numMCols, m.mfocus, m.w)
 	cols := make([]colRender, len(vis))
 	linked := make([]bool, len(vis))
 	empty := [numMCols]string{"no clients connected", "no authorities", "no guests"}
 	for i, c := range vis {
 		nodes := m.monitorColumn(c)
-		cols[i] = m.renderCol(monitorTitles[c], nodes, m.msel[c], c == m.mfocus, widths[c], h, nil, empty[c])
+		cols[i] = m.renderCentred(monitorTitles[c], nodes, m.msel[c], c == m.mfocus, widths[c], h, empty[c])
 		linked[i] = len(nodes) > 0
 	}
-	rows := joinCols(cols, linked, h)
+	rows := composeGraph(vis, xs, cols, linked, m.w, h)
 	for y := range rows {
 		rows[y] = fit(rows[y], m.w)
 	}

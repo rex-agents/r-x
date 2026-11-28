@@ -933,3 +933,60 @@ func TestPackRenderSizes(t *testing.T) {
 		fmt.Printf("=== %dx%d\n%s\n", sz[0], sz[1], plain(m.View()))
 	}
 }
+
+// On MONITOR too, the selected card is in the middle of the body, and the columns never run
+// wider than the screen.
+func TestMonitorCentersSelectedCard(t *testing.T) {
+	for _, w := range []int{160, 100, 60} {
+		m := boot(t, newFake(t), w, 50)
+		press(m, "3", "right", "down") // monitor, hosts column, second row if any
+		if m.tab != tabMonitor {
+			t.Fatalf("tab %v", m.tab)
+		}
+		lines := strings.Split(plain(m.View()), "\n")
+		if len(lines) > 50 {
+			t.Fatalf("%d lines overflow", len(lines))
+		}
+		for i, ln := range lines {
+			if n := len([]rune(ln)); n > w {
+				t.Errorf("w=%d row %d is %d wide", w, i, n)
+			}
+		}
+		bodyTop, bodyH := 2, 50-2-2
+		n := m.mselected(m.mfocus)
+		if n == nil {
+			t.Fatal("nothing selected")
+		}
+		// Find the selected card's name on a row near the middle: card rows are mid-2..mid+2.
+		found := -1
+		for y := bodyTop; y < bodyTop+bodyH; y++ {
+			if strings.Contains(lines[y], n.name) {
+				found = y - bodyTop
+				break
+			}
+		}
+		// The name row is the card's first body row, cardH/2-2 above the middle.
+		if found < 0 || abs(found+cardH/2-1-bodyH/2) > 1 {
+			t.Errorf("w=%d: %q on body row %d, middle is %d", w, n.name, found, bodyH/2)
+		}
+		// Horizontally the focused column is centred.
+		cw := min(max((w-2*gutterW)/numMCols, 24), 46)
+		if w < 2*gutterW+numMCols*24 {
+			cw = max(min(w, 46), 12)
+		}
+		widths := map[int]int{0: cw, 1: cw, 2: cw}
+		xs, _ := centreXs(widths, numMCols, m.mfocus, w)
+		if abs(xs[m.mfocus]+cw/2-w/2) > 2 {
+			t.Errorf("w=%d focused column centre %d", w, xs[m.mfocus]+cw/2)
+		}
+	}
+}
+
+func TestMonitorRenderDump(t *testing.T) {
+	if os.Getenv("DUMP") == "" {
+		t.Skip("set DUMP=1 to print a rendering")
+	}
+	m := boot(t, newFake(t), 160, 50)
+	press(m, "3", "right")
+	fmt.Printf("=== monitor 160x50\n%s\n", plain(m.View()))
+}
