@@ -557,3 +557,12 @@ func TestConfiguredAgentVersionPinsLatest(t *testing.T) {
 		t.Error("invalid version accepted")
 	}
 }
+
+func TestFunnelRemoveArgvForwardsAllAndPort(t *testing.T) {
+	if got := strings.Join(funnelRemoveArgv("g", 0, true), " "); got != "funnel remove g --all" {
+		t.Fatalf("--all form: %q", got)
+	}
+	if got := strings.Join(funnelRemoveArgv("g", 3000, false), " "); got != "funnel remove g 3000" {
+		t.Fatalf("port form: %q", got)
+	}
+}
