@@ -17,6 +17,7 @@ import (
 	zone "github.com/lrstanley/bubblezone"
 
 	"github.com/rex-agents/r-x/internal/harness"
+	"github.com/rex-agents/r-x/internal/rux/transcript"
 )
 
 // rux with no command opens rux's own multi-agent harness: you talk to a lead agent, it
@@ -80,17 +81,17 @@ func runHarness(args []string) {
 	saved := saveSession(r)
 	if fm.removeGuests {
 		for _, g := range r.ownGuests() {
-			fmt.Printf("%s Removing %s…\n", stAccent.Render("◆"), g)
+			fmt.Printf("%s Removing %s…\n", transcript.StAccent.Render("◆"), g)
 			if out, err := exec.Command("rox", "down", g).CombinedOutput(); err != nil {
-				fmt.Printf("  %s %s\n", lipgloss.NewStyle().Foreground(hRed).Render("✗"), lastLine(ansiRe.ReplaceAllString(string(out), "")))
+				fmt.Printf("  %s %s\n", lipgloss.NewStyle().Foreground(transcript.Red).Render("✗"), lastLine(ansiRe.ReplaceAllString(string(out), "")))
 			}
 		}
 	} else if gs := r.ownGuests(); len(gs) > 0 {
-		fmt.Printf("%s Kept %d guest%s: %s\n  Remove with %s\n", stAccent.Render("◆"), len(gs), plural(len(gs)),
-			strings.Join(gs, ", "), stBold.Render("rox down NAME"))
+		fmt.Printf("%s Kept %d guest%s: %s\n  Remove with %s\n", transcript.StAccent.Render("◆"), len(gs), plural(len(gs)),
+			strings.Join(gs, ", "), transcript.StBold.Render("rox down NAME"))
 	}
 	if saved != "" {
-		fmt.Printf("%s Transcripts saved in %s\n", stDim.Render("·"), saved)
+		fmt.Printf("%s Transcripts saved in %s\n", transcript.StDim.Render("·"), saved)
 	}
 }
 
@@ -99,9 +100,9 @@ func checkModelKey(cfg harnessConfig, spec string) error {
 	if cli, _, ok := agentCLI(spec); ok {
 		if _, err := exec.LookPath(cli); err != nil {
 			if cli == "codex" {
-				return fmt.Errorf("%s codex runs Codex, which isn't installed: npm install -g @openai/codex", stAccent.Render("◆"))
+				return fmt.Errorf("%s codex runs Codex, which isn't installed: npm install -g @openai/codex", transcript.StAccent.Render("◆"))
 			}
-			return fmt.Errorf("%s claude-code runs Claude Code, which isn't installed: https://code.claude.com/docs/en/setup", stAccent.Render("◆"))
+			return fmt.Errorf("%s claude-code runs Claude Code, which isn't installed: https://code.claude.com/docs/en/setup", transcript.StAccent.Render("◆"))
 		}
 		return nil
 	}
@@ -126,17 +127,17 @@ func checkModelKey(cfg harnessConfig, spec string) error {
 		}
 	}
 	b := &strings.Builder{}
-	fmt.Fprintf(b, "%s rux's agents need a model, and %s has no API key yet.\n\n", stAccent.Render("◆"), name)
+	fmt.Fprintf(b, "%s rux's agents need a model, and %s has no API key yet.\n\n", transcript.StAccent.Render("◆"), name)
 	if name == "anthropic" {
-		fmt.Fprintf(b, "  Create a key at %s, then store it with rix:\n\n", stBold.Render("https://platform.claude.com/settings/keys"))
+		fmt.Fprintf(b, "  Create a key at %s, then store it with rix:\n\n", transcript.StBold.Render("https://platform.claude.com/settings/keys"))
 	} else {
 		fmt.Fprintf(b, "  Store its key with rix:\n\n")
 	}
-	fmt.Fprintf(b, "    %s\n\n", stBold.Render("rix secret set "+pc.Key))
-	fmt.Fprintf(b, "  Or run the agents on Claude Code with your Claude subscription: %s\n", stBold.Render("rux --model claude-code"))
-	fmt.Fprintf(b, "  Or on Codex with your ChatGPT sign-in: %s\n", stBold.Render("rux --model codex"))
+	fmt.Fprintf(b, "    %s\n\n", transcript.StBold.Render("rix secret set "+pc.Key))
+	fmt.Fprintf(b, "  Or run the agents on Claude Code with your Claude subscription: %s\n", transcript.StBold.Render("rux --model claude-code"))
+	fmt.Fprintf(b, "  Or on Codex with your ChatGPT sign-in: %s\n", transcript.StBold.Render("rux --model codex"))
 	fmt.Fprintf(b, "  Or use another provider: %s, %s, or a local %s.\n",
-		stBold.Render("rux --model openai/gpt-5"), stBold.Render("openrouter/…"), stBold.Render("ollama/qwen3-coder"))
+		transcript.StBold.Render("rux --model openai/gpt-5"), transcript.StBold.Render("openrouter/…"), transcript.StBold.Render("ollama/qwen3-coder"))
 	return fmt.Errorf("%s", b.String())
 }
 
@@ -160,7 +161,7 @@ type harnessModel struct {
 	sel   int
 	vp    viewport.Model
 	input textarea.Model
-	tr    *transcriptRenderer
+	tr    *transcript.Renderer
 
 	expandAll bool
 	expanded  map[string]map[int]bool // by agent ID, the tool calls opened with a click
@@ -186,15 +187,15 @@ func newHarnessModel(r *hrun) *harnessModel {
 	ta.SetHeight(1)
 	ta.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+j")
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	ta.FocusedStyle.Placeholder = stFaint
+	ta.FocusedStyle.Placeholder = transcript.StFaint
 	ta.BlurredStyle = ta.FocusedStyle
 	ta.Focus()
-	return &harnessModel{r: r, input: ta, tr: newTranscriptRenderer(), follow: true, vp: viewport.New(80, 20),
+	return &harnessModel{r: r, input: ta, tr: transcript.New(), follow: true, vp: viewport.New(80, 20),
 		expanded: map[string]map[int]bool{}, zones: map[string]func() tea.Cmd{}}
 }
 
 func (m *harnessModel) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, m.tr.spin.Tick, tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return logoTick{} }))
+	return tea.Batch(textarea.Blink, m.tr.Spin.Tick, tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return logoTick{} }))
 }
 
 func (m *harnessModel) agents() []*harness.Agent {
@@ -249,7 +250,7 @@ func (m *harnessModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case spinner.TickMsg:
 		var c tea.Cmd
-		m.tr.spin, c = m.tr.spin.Update(msg)
+		m.tr.Spin, c = m.tr.Spin.Update(msg)
 		if m.anyBusy() {
 			m.refresh()
 		}
@@ -538,7 +539,7 @@ func (m *harnessModel) refresh() {
 	}
 	m.vp.Width = m.w - 4
 	ex := m.expanded[a.ID]
-	m.vp.SetContent(m.tr.render(a.Snapshot(), m.vp.Width, m.expandAll, ex, "tool:"+a.ID+":"))
+	m.vp.SetContent(m.tr.Render(a.Snapshot(), m.vp.Width, m.expandAll, ex, "tool:"+a.ID+":"))
 	if m.follow {
 		m.vp.GotoBottom()
 	}
@@ -582,7 +583,7 @@ func (m *harnessModel) View() string {
 		above = append(above, strip)
 	}
 	if m.flash != "" {
-		above = append(above, lipgloss.PlaceHorizontal(m.w, lipgloss.Right, stDim.Render(truncate(m.flash, m.w-4))+"  "))
+		above = append(above, lipgloss.PlaceHorizontal(m.w, lipgloss.Right, transcript.StDim.Render(transcript.Truncate(m.flash, m.w-4))+"  "))
 	}
 	bottom := lipgloss.JoinVertical(lipgloss.Left, append(above, prompt)...)
 	rest := max(m.h-lipgloss.Height(bottom), 3)
@@ -600,7 +601,7 @@ func (m *harnessModel) View() string {
 		// Each tool call in view opens with a click.
 		snap := a.Snapshot()
 		for i, e := range snap.Entries {
-			if e.Kind == "tool" || e.Kind == "thinking" || (e.Kind == "user" && e.From != "you" && e.From != "") {
+			if transcript.Opens(e) {
 				i := i
 				m.zones[fmt.Sprintf("tool:%s:%d", a.ID, i)] = func() tea.Cmd { return m.toggleEntry(a, i) }
 			}
@@ -613,9 +614,11 @@ func (m *harnessModel) View() string {
 
 func (m *harnessModel) welcome() string {
 	r := m.r
-	key := func(k string) string { return stBold.Render(k) }
-	bar := lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(hPink).PaddingLeft(1)
-	row := func(k, v string) string { return stDim.Render(fmt.Sprintf("%-11s", k)) + stText.Render(v) }
+	key := func(k string) string { return transcript.StBold.Render(k) }
+	bar := lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(transcript.Pink).PaddingLeft(1)
+	row := func(k, v string) string {
+		return transcript.StDim.Render(fmt.Sprintf("%-11s", k)) + transcript.StText.Render(v)
+	}
 	info := []string{
 		row("lead", prettyModel(r.lead.ModelName())+effortSuffix(r.effortOf(r.lead))),
 		row("sub-agents", prettyModel(r.agentModel())),
@@ -625,13 +628,13 @@ func (m *harnessModel) welcome() string {
 		info = append(info, row("repo", repoDisplayName(r.repo)))
 	}
 	text := lipgloss.JoinVertical(lipgloss.Left,
-		lipgloss.NewStyle().Foreground(hPink).Bold(true).Render("Welcome to rux"),
-		m.click("w:palette", key("ctrl+o"), func() tea.Cmd { m.openPalette(); return nil })+stDim.Render(" for commands · ")+
-			m.click("w:keys", key("?"), func() tea.Cmd { m.panel = panelShortcuts; return nil })+stDim.Render(" for shortcuts"),
+		lipgloss.NewStyle().Foreground(transcript.Pink).Bold(true).Render("Welcome to rux"),
+		m.click("w:palette", key("ctrl+o"), func() tea.Cmd { m.openPalette(); return nil })+transcript.StDim.Render(" for commands · ")+
+			m.click("w:keys", key("?"), func() tea.Cmd { m.panel = panelShortcuts; return nil })+transcript.StDim.Render(" for shortcuts"),
 		"",
 		bar.Render(lipgloss.JoinVertical(lipgloss.Left,
-			stDim.Render("Tell the lead what to do. It plans, then starts"),
-			stDim.Render("sub-agents in their own rox guests."),
+			transcript.StDim.Render("Tell the lead what to do. It plans, then starts"),
+			transcript.StDim.Render("sub-agents in their own rox guests."),
 			"",
 			strings.Join(info, "\n"),
 		)),
@@ -656,36 +659,22 @@ func tildePath(p string) string {
 // promptBox is the input, in a rounded box with the model on its top border and where the
 // agent works on its bottom border. A click on the model opens the picker.
 func (m *harnessModel) promptBox(a *harness.Agent) string {
-	w := m.w
-	border := stFaint
+	border := transcript.StFaint
 	if len(m.pending) > 0 {
-		border = lipgloss.NewStyle().Foreground(hYellow)
+		border = lipgloss.NewStyle().Foreground(transcript.Yellow)
 	}
 	model := strings.ToLower(prettyModel(a.ModelName()))
 	if e := m.r.effortOf(a); e != "" {
 		model += " · " + strings.ToLower(effortNames[e])
 	}
-	modelLabel := m.click("prompt:model", stAccent.Render(model), func() tea.Cmd { return m.openPicker(m.selected()) })
 	left := ""
 	if a.Role == "sub" {
-		left = stText.Render(a.Name)
+		left = transcript.StText.Render(a.Name)
 	}
-	where := m.whereLabel(a)
-
-	top := border.Render("╭─")
-	if left != "" {
-		top += " " + left + " "
+	mark := func(s string) string {
+		return m.click("prompt:model", s, func() tea.Cmd { return m.openPicker(m.selected()) })
 	}
-	fill := w - lipgloss.Width(top) - lipgloss.Width(model) - 4
-	top += border.Render(strings.Repeat("─", max(fill, 1))) + " " + modelLabel + " " + border.Render("─╮")
-	bfill := w - lipgloss.Width(where) - 5
-	bottom := border.Render("╰"+strings.Repeat("─", max(bfill, 1))) + " " + stDim.Render(where) + " " + border.Render("─╯")
-	var mid []string
-	for _, line := range strings.Split(m.input.View(), "\n") {
-		pad := w - 4 - lipgloss.Width(line)
-		mid = append(mid, border.Render("│")+" "+line+strings.Repeat(" ", max(pad, 0))+" "+border.Render("│"))
-	}
-	return strings.Join(append(append([]string{top}, mid...), bottom), "\n")
+	return transcript.PromptBox(m.w, border, left, model, mark, m.whereLabel(a), m.input.View())
 }
 
 func (m *harnessModel) whereLabel(a *harness.Agent) string {
@@ -694,7 +683,7 @@ func (m *harnessModel) whereLabel(a *harness.Agent) string {
 		if b := gitBranch(m.r.cwd); b != "" {
 			w += " (" + b + ")"
 		}
-		return truncate(w, m.w/2)
+		return transcript.Truncate(w, m.w/2)
 	}
 	m.r.mu.Lock()
 	s := m.r.subs[a.Name]
@@ -709,7 +698,7 @@ func (m *harnessModel) whereLabel(a *harness.Agent) string {
 	if s.Repo != "" {
 		w += " (rux/" + a.Name + ")"
 	}
-	return truncate(w, m.w/2)
+	return transcript.Truncate(w, m.w/2)
 }
 
 var branchCache = map[string]string{}
@@ -726,16 +715,16 @@ func gitBranch(dir string) string {
 func (m *harnessModel) glyph(st harness.Status, queued int) string {
 	switch st {
 	case harness.Working, harness.Starting:
-		return m.tr.spin.View()
+		return m.tr.Spin.View()
 	case harness.Waiting:
 		if queued > 0 {
-			return m.tr.spin.View()
+			return m.tr.Spin.View()
 		}
-		return lipgloss.NewStyle().Foreground(hGreen).Render("●")
+		return lipgloss.NewStyle().Foreground(transcript.Green).Render("●")
 	case harness.Failed:
-		return lipgloss.NewStyle().Foreground(hRed).Render("✗")
+		return lipgloss.NewStyle().Foreground(transcript.Red).Render("✗")
 	}
-	return stFaint.Render("○")
+	return transcript.StFaint.Render("○")
 }
 
 // agentStrip lists the agents above the prompt, once there are sub-agents. Click one to
@@ -748,13 +737,13 @@ func (m *harnessModel) agentStrip() string {
 	var parts []string
 	for i, a := range agents {
 		snap := a.Snapshot()
-		name := stDim.Render(a.Name)
+		name := transcript.StDim.Render(a.Name)
 		if i == m.sel {
-			name = lipgloss.NewStyle().Foreground(hText).Bold(true).Underline(true).Render(a.Name)
+			name = lipgloss.NewStyle().Foreground(transcript.Text).Bold(true).Underline(true).Render(a.Name)
 		}
 		item := m.glyph(snap.Status, snap.Queued) + " " + name
 		if snap.Status == harness.Working && i != m.sel {
-			item += stFaint.Render(" " + truncate(snap.Detail, 18))
+			item += transcript.StFaint.Render(" " + transcript.Truncate(snap.Detail, 18))
 		}
 		i := i
 		parts = append(parts, m.click(fmt.Sprintf("agent:%d", i), item, func() tea.Cmd {
@@ -768,23 +757,23 @@ func (m *harnessModel) agentStrip() string {
 	var btns []string
 	if a := m.selected(); a.Role == "sub" {
 		if os.Getenv("REX_SESSION") != "" {
-			btns = append(btns, m.click("btn:pane", stDim.Render("⧉ pane"), func() tea.Cmd { m.flash = m.openPane(a); return nil }))
-			btns = append(btns, m.click("btn:shell", stDim.Render("› shell"), func() tea.Cmd { m.flash = m.openShell(a); return nil }))
+			btns = append(btns, m.click("btn:pane", transcript.StDim.Render("⧉ pane"), func() tea.Cmd { m.flash = m.openPane(a); return nil }))
+			btns = append(btns, m.click("btn:shell", transcript.StDim.Render("› shell"), func() tea.Cmd { m.flash = m.openShell(a); return nil }))
 		}
-		btns = append(btns, m.click("btn:stop", stDim.Render("■ stop"), func() tea.Cmd { m.stopAgent(a); return nil }))
+		btns = append(btns, m.click("btn:stop", transcript.StDim.Render("■ stop"), func() tea.Cmd { m.stopAgent(a); return nil }))
 	}
 	right := strings.Join(btns, "  ") + "  "
 	gap := m.w - lipgloss.Width(strip) - lipgloss.Width(right)
 	if gap < 2 {
-		return truncate(strip, m.w)
+		return transcript.Truncate(strip, m.w)
 	}
 	return strip + strings.Repeat(" ", gap) + right
 }
 
 func button(label string, primary bool) string {
-	st := lipgloss.NewStyle().Padding(0, 1).Foreground(hText).Background(lipgloss.Color("237"))
+	st := lipgloss.NewStyle().Padding(0, 1).Foreground(transcript.Text).Background(lipgloss.Color("237"))
 	if primary {
-		st = st.Foreground(lipgloss.Color("#1a1a1a")).Background(hPink).Bold(true)
+		st = st.Foreground(lipgloss.Color("#1a1a1a")).Background(transcript.Pink).Bold(true)
 	}
 	return st.Render(label)
 }
@@ -796,11 +785,11 @@ func (m *harnessModel) panelBox(color lipgloss.Color, body string) string {
 
 func (m *harnessModel) approvalPanel() string {
 	req := m.pending[0]
-	head := lipgloss.NewStyle().Foreground(hYellow).Render(req.agent.Name + " wants to run " + req.tool + " on this machine")
+	head := lipgloss.NewStyle().Foreground(transcript.Yellow).Render(req.agent.Name + " wants to run " + req.tool + " on this machine")
 	btns := m.click("ap:yes", button("Allow  y", true), func() tea.Cmd { m.answer(allowOnce); return nil }) + " " +
 		m.click("ap:all", button("Allow all this session  a", false), func() tea.Cmd { m.answer(allowAlways); return nil }) + " " +
 		m.click("ap:no", button("Deny  n", false), func() tea.Cmd { m.answer(deny); return nil })
-	return m.panelBox(hYellow, head+"\n"+stBold.Render(wrapText(req.label, m.w-12))+"\n\n"+btns)
+	return m.panelBox(transcript.Yellow, head+"\n"+transcript.StBold.Render(transcript.WrapText(req.label, m.w-12))+"\n\n"+btns)
 }
 
 func (m *harnessModel) quitPanel() string {
@@ -809,7 +798,7 @@ func (m *harnessModel) quitPanel() string {
 	btns := m.click("q:yes", button("Remove and quit  y", true), func() tea.Cmd { m.removeGuests = true; return tea.Quit }) + " " +
 		m.click("q:no", button("Keep them and quit  n", false), func() tea.Cmd { return tea.Quit }) + " " +
 		m.click("q:esc", button("Cancel  esc", false), func() tea.Cmd { m.quitting = false; return nil })
-	return m.panelBox(hYellow, stText.Render(head)+"\n"+stFaint.Render(strings.Join(gs, ", "))+"\n\n"+btns)
+	return m.panelBox(transcript.Yellow, transcript.StText.Render(head)+"\n"+transcript.StFaint.Render(strings.Join(gs, ", "))+"\n\n"+btns)
 }
 
 func (m *harnessModel) shortcutsView() string {
@@ -825,9 +814,9 @@ func (m *harnessModel) shortcutsView() string {
 	}
 	var lines []string
 	for _, k := range keys {
-		lines = append(lines, stBold.Render(fmt.Sprintf("%-20s", k[0]))+stDim.Render(k[1]))
+		lines = append(lines, transcript.StBold.Render(fmt.Sprintf("%-20s", k[0]))+transcript.StDim.Render(k[1]))
 	}
-	return m.panelBox(hFaint, strings.Join(lines, "\n")+"\n"+stFaint.Render("any key closes"))
+	return m.panelBox(transcript.Faint, strings.Join(lines, "\n")+"\n"+transcript.StFaint.Render("any key closes"))
 }
 
 // saveSession writes every agent's transcript to ~/.rux/sessions/TIME/.

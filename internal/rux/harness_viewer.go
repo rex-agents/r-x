@@ -19,6 +19,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	zone "github.com/lrstanley/bubblezone"
+
+	"github.com/rex-agents/r-x/internal/rux/transcript"
 )
 
 // rux view NAME shows one agent of a running rux session, live, and talks to it: what you
@@ -94,9 +96,9 @@ func runView(args []string) {
 	ta.SetHeight(1)
 	ta.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+j")
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	ta.FocusedStyle.Placeholder = stFaint
+	ta.FocusedStyle.Placeholder = transcript.StFaint
 	ta.Focus()
-	m := &viewModel{c: c, name: name, info: info, input: ta, tr: newTranscriptRenderer(), vp: viewport.New(80, 20),
+	m := &viewModel{c: c, name: name, info: info, input: ta, tr: transcript.New(), vp: viewport.New(80, 20),
 		follow: true, expanded: map[int]bool{}}
 	var kk kittyKeys
 	_, run := kk.run(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
@@ -115,7 +117,7 @@ type viewModel struct {
 	w, h      int
 	vp        viewport.Model
 	input     textarea.Model
-	tr        *transcriptRenderer
+	tr        *transcript.Renderer
 	follow    bool
 	expandAll bool
 	expanded  map[int]bool
@@ -123,7 +125,7 @@ type viewModel struct {
 }
 
 func (m *viewModel) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, m.tr.spin.Tick, m.poll())
+	return tea.Batch(textarea.Blink, m.tr.Spin.Tick, m.poll())
 }
 
 func (m *viewModel) poll() tea.Cmd {
@@ -148,7 +150,7 @@ func (m *viewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.poll()
 	case spinner.TickMsg:
 		var c tea.Cmd
-		m.tr.spin, c = m.tr.spin.Update(msg)
+		m.tr.Spin, c = m.tr.Spin.Update(msg)
 		return m, c
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionRelease && msg.Button == tea.MouseButtonLeft && m.info.Snap != nil {
@@ -215,7 +217,7 @@ func (m *viewModel) refresh() {
 		return
 	}
 	m.vp.Width = m.w - 4
-	m.vp.SetContent(m.tr.render(*m.info.Snap, m.vp.Width, m.expandAll, m.expanded, "v:"))
+	m.vp.SetContent(m.tr.Render(*m.info.Snap, m.vp.Width, m.expandAll, m.expanded, "v:"))
 	if m.follow {
 		m.vp.GotoBottom()
 	}
@@ -226,7 +228,7 @@ func (m *viewModel) View() string {
 		return ""
 	}
 	in := m.info
-	border := stFaint
+	border := transcript.StFaint
 	model := strings.ToLower(prettyModel(in.Model))
 	if in.Effort != "" {
 		model += " · " + strings.ToLower(effortNames[in.Effort])
@@ -235,21 +237,15 @@ func (m *viewModel) View() string {
 	if in.Dir != "" {
 		where += ":" + in.Dir
 	}
-	where = truncate(where, m.w/2)
+	where = transcript.Truncate(where, m.w/2)
 	status := string(in.Status)
 	if m.gone {
 		status = "rux has ended"
 	}
-	top := border.Render("╭─") + " " + stText.Render(in.Name) + " " + stFaint.Render(status) + " "
-	top += border.Render(strings.Repeat("─", max(m.w-lipgloss.Width(top)-lipgloss.Width(model)-4, 1))) + " " + stAccent.Render(model) + " " + border.Render("─╮")
-	bottom := border.Render("╰"+strings.Repeat("─", max(m.w-lipgloss.Width(where)-5, 1))) + " " + stDim.Render(where) + " " + border.Render("─╯")
-	var mid []string
-	for _, line := range strings.Split(m.input.View(), "\n") {
-		mid = append(mid, border.Render("│")+" "+line+strings.Repeat(" ", max(m.w-4-lipgloss.Width(line), 0))+" "+border.Render("│"))
-	}
-	prompt := strings.Join(append(append([]string{top}, mid...), bottom), "\n")
+	left := transcript.StText.Render(in.Name) + " " + transcript.StFaint.Render(status)
+	prompt := transcript.PromptBox(m.w, border, left, model, func(s string) string { return s }, where, m.input.View())
 	if m.flash != "" {
-		prompt = lipgloss.PlaceHorizontal(m.w, lipgloss.Right, stDim.Render(m.flash)+"  ") + "\n" + prompt
+		prompt = lipgloss.PlaceHorizontal(m.w, lipgloss.Right, transcript.StDim.Render(m.flash)+"  ") + "\n" + prompt
 	}
 	rest := max(m.h-lipgloss.Height(prompt), 3)
 	m.vp.Height = rest - 1

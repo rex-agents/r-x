@@ -7,6 +7,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/rex-agents/r-x/internal/rux/transcript"
 )
 
 // The command menu (ctrl+o): everything rux can do, to pick with the keys, by typing, or
@@ -107,19 +109,19 @@ func (m *harnessModel) paletteView() string {
 	width := m.w - 12
 	for i := start; i < len(items) && i < start+rows; i++ {
 		it := items[i]
-		mark, st := "  ", stText
+		mark, st := "  ", transcript.StText
 		if i == p.cursor {
-			mark, st = stAccent.Render("▸ "), stBold
+			mark, st = transcript.StAccent.Render("▸ "), transcript.StBold
 		}
 		label := st.Render(it.label)
 		gap := width - lipgloss.Width(label) - lipgloss.Width(it.hint) - 2
 		i := i
-		lines = append(lines, m.click(fmt.Sprintf("pal:%d", i), mark+label+strings.Repeat(" ", max(gap, 1))+stFaint.Render(it.hint),
+		lines = append(lines, m.click(fmt.Sprintf("pal:%d", i), mark+label+strings.Repeat(" ", max(gap, 1))+transcript.StFaint.Render(it.hint),
 			func() tea.Cmd { return m.runPaletteItem(items[i]) }))
 	}
 	if len(items) == 0 {
-		lines = append(lines, stDim.Render("  nothing matches"))
+		lines = append(lines, transcript.StDim.Render("  nothing matches"))
 	}
-	foot := stFaint.Render("↑↓ choose · enter run · type to search") + "  " + p.filter + stAccent.Render("▏")
-	return m.panelBox(hFaint, strings.Join(lines, "\n")+"\n"+stFaint.Render(strings.Repeat("─", width))+"\n"+foot)
+	foot := transcript.StFaint.Render("↑↓ choose · enter run · type to search") + "  " + p.filter + transcript.StAccent.Render("▏")
+	return m.panelBox(transcript.Faint, strings.Join(lines, "\n")+"\n"+transcript.StFaint.Render(strings.Repeat("─", width))+"\n"+foot)
 }
