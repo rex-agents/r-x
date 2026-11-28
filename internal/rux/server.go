@@ -38,6 +38,7 @@ var webFS embed.FS
 type server struct {
 	dataDir    string
 	advertise  string // host:port guests use to reach the runner listener
+	agent      string // default agent CLI for threads with no model: claude or codex
 	runnerBin  string
 	roxBin     string
 	sleepAfter time.Duration // stop a thread's guest after this long idle; 0 never
@@ -154,6 +155,7 @@ func runServe(args []string) {
 	flags.DurationVar(&s.sleepAfter, "sleep-after", 15*time.Minute, "stop a thread's guest after it's been idle this long, and start it again on the next message (0 to keep guests running)")
 	flags.StringVar(&s.backend, "backend", "rox", `"rox", or "local" to run threads unsandboxed on this host (testing only)`)
 	flags.StringVar(&s.allowUser, "allow-user", "", "only allow this Tailscale login through `tailscale serve` (recommended)")
+	flags.StringVar(&s.agent, "agent", "claude", "agent CLI new threads run in their guests when no model is chosen: claude or codex (a thread's model 'codex[/MODEL]' or 'claude-code[/MODEL]' picks one)")
 	claudeBin := flags.String("claude", "claude", "claude binary on this host, used only to list the models Claude Code offers")
 	ghOn := flags.Bool("github", true, "give guests GitHub access and list repos with the token from rix credential github")
 	proxyOn := flags.Bool("model-proxy", true, "give guests the model proxy instead of model keys")
@@ -161,6 +163,9 @@ func runServe(args []string) {
 	quorumURLFlag := flags.String("quorum-url", "", "where other authorities reach the quorum listener (default: the tailnet address, port 7710)")
 	vaultDef := flags.String("vault", "", `default vault source for model keys: "local" (this host's rix) or "leader" (default: authority.json, else local)`)
 	flags.Parse(args)
+	if s.agent != "claude" && s.agent != "codex" {
+		log.Fatal("rux serve: --agent must be claude or codex")
+	}
 	s.started = time.Now()
 	cfg := loadAuthorityConfig(s.dataDir)
 	s.name = cfg.Name
@@ -650,6 +655,11 @@ func (s *server) createThread(req createReq) (*thread, error) {
 		}
 	} else if req.Model, req.Effort, err = validSettings(req.Model, req.Effort); err != nil {
 		return nil, &reqError{400, err.Error()}
+	}
+	if req.Kind == "manager" && s.agentOf(req.Model) == "codex" {
+		// A project's manager drives rux's MCP tools through Claude Code; Codex is for workers.
+		// A manager asked for Codex, or defaulted to it, runs on Claude Code's default.
+		req.Model = claudeCode
 	}
 	if req.Repo != "" {
 		if req.Repo, err = normalizeRepo(req.Repo); err != nil {
@@ -1260,10 +1270,10 @@ func (s *server) provisionRox(t *thread) {
 	}
 	// The runner clones the repo itself, with the GitHub token rix hands out, so rox
 	// starts an empty guest. --no-git-agent keeps rox from forwarding the host's SSH
-	// keys into it. --agents claude installs Claude Code, which rix signs in through
+	// keys into it. --agents installs the thread's agent (Claude Code or Codex), which rix signs in through
 	// rox's hooks before the runner starts.
 	runtime := cmpOr(m.Runtime, "container")
-	args := []string{"up", runtime, "--no-project", "--no-git-agent", "--agents", "claude"}
+	args := []string{"up", runtime, "--no-project", "--no-git-agent", "--agents", s.agentOf(m.Model)}
 	if s.proxy != nil {
 		// The guest's models go through the authority's proxy, so no real sign-in goes in.
 		args = append(args, "--credentials=false")

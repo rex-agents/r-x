@@ -18,6 +18,8 @@ phone (PWA) ──HTTPS (tailscale serve)──▶ rux serve        (Mac: web ap
 - The runner owns the `claude` process and keeps a numbered event log, so restarting `rux serve`
   doesn't kill a thread. On reconnect it replays whatever the server is missing.
 - If `claude` exits, the next message restarts it with `--resume` on the same session.
+- A Codex thread runs the same way: the runner owns a `rux codex-bridge` process in place of `claude`, which runs each
+  message as a `codex exec` turn and resumes the same Codex thread after a restart.
 - Messages to a thread (the first prompt, what you type, a manager's wake-ups) wait in
   `outbox.jsonl` until the runner acks them. The server sends every unacked message each time a
   runner connects, under a stable `id`; the runner stores a message in `~/.rux/THREAD/inbox/` before
@@ -108,6 +110,7 @@ Open the `https://<machine>.<tailnet>.ts.net` URL on your phone, then Share → 
 | `--advertise HOST:PORT` | Apple container's gateway, runner port | how guests reach the runner listener |
 | `--guest-cidrs` | the container network's subnet | networks allowed to reach the runner listener (loopback always allowed) |
 | `--data DIR` | `~/.rux` | data directory |
+| `--agent claude\|codex` | `claude` | agent CLI for threads with no model; see [Codex threads](#codex-threads) |
 | `--backend rox\|local` | `rox` | see [testing without Rox](#testing-without-rox) |
 | `--rox BIN` | `rox` | the rox binary |
 | `--claude BIN` | `claude` | only to list the models Claude Code offers |
@@ -140,6 +143,21 @@ own token.
 
 `rux serve --backend local` clones the repo on the host and runs the runner there. It is
 **unsandboxed** and only for exercising the app.
+
+## Codex threads
+
+A thread runs on Claude Code unless you pick Codex. The names are the ones the harness and `rux agent` use:
+
+- **Per thread or project**: choose the model `codex` or `codex/MODEL` (such as `codex/gpt-5`) in the app's model
+  picker, in the project's model setting, or as `model` when creating a thread. `claude-code/MODEL` and the Claude
+  models (`opus`, `sonnet`) pick Claude Code. Effort is passed on as Codex's reasoning effort.
+- **For every new thread**: `rux serve --agent codex` makes Codex the default for threads and projects with no model.
+- rox installs the chosen CLI in the thread's guest (`--agents codex`) and rix signs it in with `rix auth codex`.
+  A thread's existing guest (`guest` when creating) needs `codex` installed.
+
+Codex runs in its guest without Codex's sandbox, since the guest is the sandbox. A thread keeps its agent: changing a
+thread from Claude to Codex (or back) is refused, so start a new thread. A project's manager always runs on Claude
+Code, because it drives rux's tools through Claude Code; its workers can be Codex.
 
 ## In a pack
 

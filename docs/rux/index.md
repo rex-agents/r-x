@@ -7,7 +7,7 @@ rux runs agents in disposable [rox](../rox/index.md) guests. It has four modes, 
 | **`rux`** | The authority TUI: the pack's hosts, projects, threads and sub-agents as a node graph, and the same view in the web app. | [authority TUI](authority-tui.md), [authorities and the pack](authority.md) |
 | **`rux agent [PROMPT]`** | A multi-agent harness in one terminal window: a lead agent, sub-agents in guests, every conversation live. Runs in the current context, on the host or inside a VM. | [lead and sub-agents](lead-and-sub-agents.md), [models](models.md), [remote hosts](remote-hosts.md) |
 | **`rux claude`** and **`rux agent spawn`** | Claude Code (or Codex) as the lead in a Rex pane, with sub-agents in Rex panes. | [rux claude](rux-claude.md), [rux agent](rux-agent.md) |
-| **`rux serve`** | Claude Code threads in guests, driven from a phone over Tailscale. | [serve and threads](serve.md), [projects and managers](projects-and-managers.md), [actions](actions.md) |
+| **`rux serve`** | Claude Code (or [Codex](serve.md#codex-threads)) threads in guests, driven from a phone over Tailscale. | [serve and threads](serve.md), [projects and managers](projects-and-managers.md), [actions](actions.md) |
 
 ## How the pieces fit
 

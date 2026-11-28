@@ -35,6 +35,9 @@ var fallbackModels = []claudeModel{
 	{Value: "haiku", Name: "Haiku"},
 }
 
+// codexModel is how the picker offers Codex: a thread started on it runs the Codex CLI.
+var codexModel = claudeModel{Value: codexEngine, Name: "Codex", Description: "OpenAI Codex CLI in the guest", Efforts: allEfforts}
+
 type modelCache struct {
 	claudeBin, dir string
 
@@ -149,11 +152,16 @@ func (s *server) defaultModel() string {
 }
 
 // effectiveModel is the model to run a thread with.
-func (s *server) effectiveModel(model string) string { return cmpOr(model, s.defaultModel()) }
+func (s *server) effectiveModel(model string) string {
+	if model == "" && s.agent == "codex" {
+		return codexEngine
+	}
+	return cmpOr(model, s.defaultModel())
+}
 
 func (s *server) handleModels(w http.ResponseWriter, r *http.Request) {
 	models, err := s.models.list()
-	resp := map[string]any{"models": models}
+	resp := map[string]any{"models": append(models[:len(models):len(models)], codexModel)}
 	if err != nil {
 		resp["error"] = err.Error()
 	}
@@ -168,7 +176,12 @@ func validSettings(model, effort string) (string, string, error) {
 	if model == "default" {
 		model = ""
 	}
-	if model != "" && !modelRe.MatchString(model) {
+	// codex/MODEL and claude-code/MODEL are the harness's names for the agent CLIs.
+	bare := model
+	if _, m, ok := agentCLI(model); ok {
+		bare = cmpOr(m, "x")
+	}
+	if model != "" && (!modelRe.MatchString(bare) || strings.HasSuffix(model, "/")) {
 		return "", "", errors.New("invalid model")
 	}
 	if effort != "" {
@@ -203,6 +216,10 @@ func (s *server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if was, now := s.agentOf(t.meta.Model), s.agentOf(model); was != now {
+		httpErr(w, 400, "a thread keeps its agent ("+was+"); start a new thread to use "+now)
+		return
+	}
 	if model == t.meta.Model && effort == t.meta.Effort {
 		writeJSONResp(w, 200, map[string]bool{"ok": true})
 		return
@@ -230,4 +247,13 @@ func cmpOr(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// agentOf is the agent CLI, claude or codex, a model setting runs on in this server.
+func (s *server) agentOf(model string) string {
+	if model == "" {
+		return cmpOr(s.agent, "claude")
+	}
+	cli, _ := agentFor(model)
+	return cli
 }

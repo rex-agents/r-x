@@ -60,6 +60,8 @@ func Main(version string, args []string) int {
 		runServe(os.Args[2:])
 	case "runner":
 		runRunner(os.Args[2:])
+	case "codex-bridge":
+		runCodexBridge(os.Args[2:])
 	case "git-credential":
 		runGitCredential(os.Args[2:])
 	case "share":
