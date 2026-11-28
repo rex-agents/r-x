@@ -40,6 +40,7 @@ type tnode struct {
 	dir      string
 	vault    *fakeVault
 	executed chan Placement
+	mu       sync.Mutex // guards slots and load, which the test changes while reports read them
 	slots    int
 	load     float64
 }
@@ -54,7 +55,7 @@ func newTNode(t *testing.T, name string) *tnode {
 		Dir: tn.dir, Name: name, AdvertiseURL: url, ReportInterval: 100 * time.Millisecond,
 		PlaceTimeout: 10 * time.Second, Vault: tn.vault,
 		LocalReport: func(ctx context.Context) Report {
-			return Report{Host: HostInfo{OS: "linux", CPUs: 4, GuestsMax: tn.slots, Load: tn.load}}
+			return Report{Host: HostInfo{OS: "linux", CPUs: 4, GuestsMax: tn.getSlots(), Load: tn.getLoad()}}
 		},
 		Execute: func(ctx context.Context, p Placement) (json.RawMessage, error) {
 			tn.executed <- p
@@ -352,7 +353,8 @@ func TestScheduler(t *testing.T) {
 func TestPlacementUsesReports(t *testing.T) {
 	nodes := createPack(t, "a", "b")
 	a, b := nodes[0], nodes[1]
-	a.slots, b.slots = 2, 6
+	a.setSlots(2)
+	b.setSlots(6)
 	waitFor(t, "b has more room", 10*time.Second, func() bool {
 		p, err := a.n.Place(context.Background(), PlaceRequest{Requester: "a"})
 		return err == nil && p.Authority == "b"
@@ -619,7 +621,7 @@ func TestPackAdapter(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ev, _ := ad.Subscribe(ctx)
-	nodes[1].load = 3
+	nodes[1].setLoad(3)
 	nodes[1].n.NotifyChange()
 	waitFor(t, "b up", 10*time.Second, func() bool {
 		p, _ := ad.Pack(ctx)
@@ -642,7 +644,7 @@ func TestPackAdapter(t *testing.T) {
 func restart(t *testing.T, old *tnode) *tnode {
 	t.Helper()
 	addr := old.srv.Listener.Addr().String()
-	tn := &tnode{name: old.name, dir: old.dir, slots: old.slots, executed: make(chan Placement, 16), vault: old.vault}
+	tn := &tnode{name: old.name, dir: old.dir, slots: old.getSlots(), executed: make(chan Placement, 16), vault: old.vault}
 	tn.srv = httptest.NewUnstartedServer(nil)
 	tn.srv.Listener.Close()
 	var l net.Listener
@@ -653,7 +655,7 @@ func restart(t *testing.T, old *tnode) *tnode {
 		Dir: tn.dir, Name: tn.name, AdvertiseURL: "http://" + addr, ReportInterval: 100 * time.Millisecond,
 		PlaceTimeout: 10 * time.Second, Vault: tn.vault,
 		LocalReport: func(ctx context.Context) Report {
-			return Report{Host: HostInfo{OS: "linux", CPUs: 4, GuestsMax: tn.slots}}
+			return Report{Host: HostInfo{OS: "linux", CPUs: 4, GuestsMax: tn.getSlots()}}
 		},
 		Execute: func(ctx context.Context, p Placement) (json.RawMessage, error) {
 			return json.RawMessage(`"started"`), nil
@@ -775,3 +777,8 @@ func TestVaultHostEscape(t *testing.T) {
 		t.Fatalf("the new vault host serves the key: %+v %v", s, err)
 	}
 }
+
+func (tn *tnode) getSlots() int     { tn.mu.Lock(); defer tn.mu.Unlock(); return tn.slots }
+func (tn *tnode) getLoad() float64  { tn.mu.Lock(); defer tn.mu.Unlock(); return tn.load }
+func (tn *tnode) setSlots(n int)    { tn.mu.Lock(); tn.slots = n; tn.mu.Unlock() }
+func (tn *tnode) setLoad(l float64) { tn.mu.Lock(); tn.load = l; tn.mu.Unlock() }
