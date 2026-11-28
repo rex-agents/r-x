@@ -277,32 +277,31 @@ footer { flex: none; padding: 10px 0 calc(env(safe-area-inset-bottom) + 12px); b
 .seg a:hover { color: var(--text); }
 .seg a.on { background: var(--green-bg); color: var(--green); }
 
-/* pack: hosts → projects → threads → sub-agents, from /api/pack and /api/pack/stream */
+/* pack: leader, project agents, threads; from /api/pack and /api/pack/stream */
 .pack-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 10px 16px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
-.pack-bar b { color: var(--text); font-weight: 600; }
 .pack-bar .dot { display: inline-block; margin-right: 6px; }
 .pack-bar label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
 .pack-bar input[type=checkbox] { width: auto; margin: 0; }
 .pack-banner { padding: 8px 16px; font-size: 12px; border-bottom: 1px solid var(--line); }
 .pack-banner.warn { color: var(--warn); } .pack-banner.err { color: var(--err); }
-.pack-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 18px; padding: 14px 16px 24px; align-items: start; }
+.pack-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 18px; padding: 14px 16px 24px; align-items: start; }
+.pack-col { min-width: 0; }
 .pack-col h3 { margin: 0 0 8px; font-size: 11px; font-weight: 500; letter-spacing: .08em; color: var(--faint); }
-.pack-col.focus h3 { color: var(--green); }
 .pack-card { display: block; width: 100%; text-align: left; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; background: var(--panel); cursor: pointer; }
 .pack-card:hover { border-color: var(--green-dim); }
 .pack-card.sel { border-color: var(--green); background: var(--green-bg); box-shadow: var(--glow); }
 .pack-card .l1 { display: flex; align-items: center; gap: 8px; color: var(--text); }
 .pack-card .l1 span:not(.dot) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pack-card .l2, .pack-card .l3 { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pack-card .l3 { display: flex; justify-content: space-between; gap: 8px; }
-.pack-card .spark { color: var(--green-dim); letter-spacing: -1px; }
-.pack-detail { margin: 0 16px 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
-.pack-detail h3 { margin: 0 0 6px; font-size: 13px; color: var(--text); letter-spacing: 0; font-weight: 600; }
-.pack-detail .kv { display: flex; gap: 12px; padding: 1px 0; color: var(--muted); } .pack-detail .kv span { width: 80px; flex: none; } .pack-detail .kv b { color: var(--text); font-weight: 400; overflow-wrap: anywhere; }
+.pack-card .l2.warn { color: var(--warn); }
+.pack-card .l3 { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 2px; }
 .pack-empty { color: var(--faint); font-size: 12px; padding: 4px 2px; }
-.pack-actions { padding: 0 16px 16px; display: flex; gap: 10px; }
-@media (max-width: 899px) { .pack-grid { grid-template-columns: minmax(0, 1fr); } .pack-col:not(.show) { display: none; } .pack-col h3 { display: none; } }
-@media (min-width: 900px) and (max-width: 1199px) { .pack-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.pack-subs { margin: -4px 0 8px 14px; border-left: 1px solid var(--line); padding-left: 8px; }
+.pack-sub { display: flex; align-items: center; gap: 8px; padding: 4px 6px; font-size: 12px; color: var(--text); border-radius: 4px; }
+.pack-sub:hover { background: var(--green-bg); }
+.pack-sub-s { margin-left: auto; color: var(--muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pack-new { display: inline-block; text-decoration: none; }
+@media (max-width: 899px) { .pack-grid { grid-template-columns: minmax(0, 1fr); } .pack-col { margin-bottom: 14px; } }
 
 /* monitor */
 body[data-mode="monitor"] #app { display: none; }
@@ -315,41 +314,23 @@ body:not([data-mode="monitor"]) #monitor { display: none; }
 .panel-h { font-size: 12px; color: var(--muted); padding: 8px 14px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; }
 .panel-h b { font-weight: 400; flex: 1; }
 .panel-h b::before { content: "# "; color: var(--faint); }
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
-.stat { padding: 12px 14px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); margin: 0 -1px -1px 0; min-width: 0; }
-.stat .k { font-size: 11.5px; color: var(--muted); }
-.stat .v { font-size: 20px; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.stat .v.g { color: var(--green); text-shadow: var(--glow); }
-.stat .sub { font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.meter { color: var(--green); letter-spacing: -.5px; font-size: 13px; }
-.meter i { color: var(--faint); font-style: normal; }
-.topo { position: relative; display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, .9fr) minmax(0, 1.5fr); gap: 72px; padding: 22px; align-items: center; }
-.topo svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
-.tcol { display: grid; gap: 10px; position: relative; z-index: 1; min-width: 0; }
-.tcol-h { font-size: 11px; color: var(--faint); }
-.node { display: block; border: 1px solid var(--line); background: var(--bg); border-radius: 5px; padding: 8px 10px; font-size: 12.5px; min-width: 0; }
-.node.on { border-color: var(--green-dim); }
-.node.off { opacity: .4; }
-.node.host { border-color: var(--green-dim); box-shadow: 0 0 14px rgba(62, 230, 122, .12); padding: 12px; }
-a.node:hover { border-color: var(--green); background: var(--green-bg); }
-.node .n { display: flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.node .n span:not(.dot) { overflow: hidden; text-overflow: ellipsis; }
-.node .s { color: var(--muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.node .tag { color: var(--green); font-size: 11px; margin-left: auto; flex: none; text-shadow: var(--glow); }
-.mbar { height: 3px; background: var(--line); margin-top: 7px; border-radius: 2px; overflow: hidden; }
+.mbar { height: 3px; background: var(--line); margin-top: 4px; border-radius: 2px; overflow: hidden; }
 .mbar i { display: block; height: 100%; background: var(--green-dim); }
-.faint-note { font-size: 11.5px; color: var(--faint); padding-left: 2px; }
-.ln { stroke: var(--faint); stroke-width: 1; fill: none; }
-.ln.dash { stroke-dasharray: 2 4; }
-.ln.live { stroke: var(--green); stroke-width: 1.4; stroke-dasharray: 6 6; animation: flow .9s linear infinite; filter: drop-shadow(0 0 3px rgba(62, 230, 122, .7)); }
-@keyframes flow { to { stroke-dashoffset: -12; } }
-.hist { display: flex; align-items: flex-end; gap: 3px; height: 90px; padding: 16px 14px 6px; }
-.hist i { flex: 1; background: var(--green-dim); min-height: 1px; border-radius: 1px 1px 0 0; opacity: .85; }
-.hist i.now { background: var(--green); box-shadow: var(--glow); opacity: 1; }
-.hist-x { display: flex; justify-content: space-between; font-size: 11px; color: var(--faint); padding: 0 14px 10px; }
+.mtable { font-size: 12.5px; }
+.mrow { display: grid; gap: 10px; padding: 7px 14px; border-bottom: 1px solid var(--line); align-items: center; color: var(--text); }
+.mrow:last-child { border-bottom: 0; }
+.mrow > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mhead { color: var(--faint); font-size: 11px; }
+.c-clients .mrow { grid-template-columns: 70px 1.4fr 1fr 1fr; }
+.c-hosts .mrow { grid-template-columns: 1.6fr 1fr .8fr .8fr 1fr .8fr; }
+.c-guests .mrow { grid-template-columns: 1.6fr .9fr .9fr .7fr 1.1fr 1.6fr; }
+.mrow.sel { background: var(--green-bg); }
+div.mrow[role=button] { cursor: pointer; }
+a.mrow:hover, div.mrow[role=button]:hover { background: var(--green-bg); }
+.tag-kind { color: var(--green); font-size: 11px; margin-left: 8px; text-shadow: var(--glow); }
 @media (max-width: 899px) {
-  .topo { grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 14px; }
-  .topo svg { display: none; }
+  .mhead { display: none; }
+  .c-clients .mrow, .c-hosts .mrow, .c-guests .mrow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mon-in { padding: 14px 16px calc(env(safe-area-inset-bottom) + 24px); }
 }
 </style>
@@ -373,6 +354,7 @@ a.node:hover { border-color: var(--green); background: var(--green-bg); }
 <script src="ui.js"></script>
 <script>
 "use strict";
+const FIXTURE = new URLSearchParams(location.search).has("fixture"); // render fixture.json instead of a live authority
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
   const el = document.createElement(tag);
@@ -439,8 +421,7 @@ function renderList() {
 async function loadList() {
   try { [threads, projects] = await Promise.all([api("GET", "/api/threads"), api("GET", "/api/projects")]); renderList(); } catch {}
 }
-loadList();
-setInterval(loadList, 4000);
+if (!FIXTURE) { loadList(); setInterval(loadList, 4000); }
 
 // ---------- routing ----------
 let cleanup = () => {};
@@ -476,11 +457,17 @@ function route() {
 addEventListener("hashchange", route);
 
 // ---------- pack ----------
-// The pack view renders the same hierarchy as the authority TUI (hosts → projects → threads →
-// sub-agents) from GET /api/pack and the SSE feed GET /api/pack/stream. Wire types: authapi.
+// The pack view: LEADER, PROJECT AGENTS, THREADS. The monitor view: CLIENTS, HOSTS, GUESTS. Both
+// render packState from GET /api/pack and the SSE feed GET /api/pack/stream (`pack` snapshot,
+// `pack.delta` AuthorityInfo without threads, `thread.status` ThreadSummary, `pack.clients` the
+// full client list). Wire types: internal/rux/authapi. `kind`, `guests` and `clients` are optional:
+// an older authority doesn't send them. `?fixture` renders web/fixture.json with no authority.
 const packDot = (s) => ({ up: "idle", running: "running", working: "running", idle: "idle", down: "failed", failed: "failed", joining: "starting", starting: "starting", provisioning: "provisioning", blocked: "provisioning", archived: "asleep", asleep: "asleep", destroyed: "failed" }[s] || "");
-const packSpark = (n) => { const r = "▁▂▃▄▅▆▇█"; return [...Array(8)].map((_, i) => r[Math.min(7, Math.max(0, Math.round(((n.act?.[i] || 0) / Math.max(1, ...(n.act || [1]))) * 7)))]).join(""); };
-let packState = null, packSel = { host: null, project: null, thread: null }, packArchived = false, packAct = {};
+let packState = null, packSel = { project: null, host: null }, packArchived = false, packSubs = {};
+const isWorking = (t) => t.status === "running" || t.status === "working";
+const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
+const money = (n) => "$" + (n || 0).toFixed(2);
+const allThreads = (p) => (p?.authorities || []).flatMap(a => a.threads || []);
 function packApply(name, data) {
   if (name === "pack") packState = data;
   else if (!packState) return;
@@ -491,85 +478,115 @@ function packApply(name, data) {
     for (const a of packState.authorities) a.threads = (a.threads || []).filter(t => t.id !== data.id || a.name === data.authority);
     const a = packState.authorities.find(x => x.name === data.authority);
     if (a) { const i = (a.threads = a.threads || []).findIndex(t => t.id === data.id); if (i < 0) a.threads.push(data); else a.threads[i] = data; }
-    (packAct[data.id] = packAct[data.id] || Array(8).fill(0))[7]++;
-  } else if (name === "thread.event") (packAct[data.thread] = packAct[data.thread] || Array(8).fill(0))[7]++;
+  } else if (name === "pack.clients") packState.clients = data || [];
+}
+// Subscribe to the feed (or the fixture); onChange runs after every update. Returns a stop function.
+function packFeed(onChange, onLive) {
+  if (FIXTURE) {
+    fetch("fixture.json").then(r => r.json()).then(f => { projects = f.projects || []; packState = f.pack; onLive(true); onChange(); }).catch(() => {});
+    return () => {};
+  }
+  const es = new EventSource("/api/pack/stream");
+  for (const n of ["pack", "pack.delta", "thread.status", "pack.clients"]) es.addEventListener(n, (e) => { try { const ev = JSON.parse(e.data); packApply(ev.type, ev.data); onChange(); } catch {} });
+  es.onopen = () => { onLive(true); onChange(); };
+  es.onerror = () => { onLive(false); onChange(); };
+  api("GET", "/api/pack").then(p => { if (!packState) { packState = p; onChange(); } }).catch(() => {});
+  return () => es.close();
+}
+const projName = (id) => !id ? "scratch" : (projects.find(x => x.id === id) || {}).name || id;
+function uptime(started) {
+  const secs = started ? Math.max(0, Math.round((Date.now() - new Date(started)) / 1000)) : -1;
+  return secs < 0 ? "-" : secs < 60 ? secs + "s" : secs < 3600 ? Math.floor(secs / 60) + "m" : secs < 86400 ? Math.floor(secs / 3600) + "h" + String(Math.floor(secs / 60) % 60).padStart(2, "0") + "m" : Math.floor(secs / 86400) + "d" + (Math.floor(secs / 3600) % 24) + "h";
+}
+// Group the pack's threads by project: the manager, its workers (children of the manager plus threads
+// started by hand), newest first. Threads that are another thread's sub-agent stay under that thread.
+function packProjects(p) {
+  const ts = allThreads(p), byId = new Map(ts.map(t => [t.id, t]));
+  const groups = new Map();
+  for (const t of ts) { const k = t.project || ""; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(t); }
+  const out = [];
+  for (const [id, list] of groups) {
+    const manager = list.find(t => t.kind === "manager");
+    const rest = list.filter(t => t !== manager && !(t.parent && t.parent !== manager?.id && byId.has(t.parent)));
+    const workers = rest.sort((a, b) => String(b.updated || "").localeCompare(String(a.updated || "")));
+    out.push({ id, manager, workers, all: list });
+  }
+  return out.sort((a, b) => (a.id === "") - (b.id === "") || projName(a.id).localeCompare(projName(b.id)));
 }
 function showPack() {
   $("#hdr").replaceChildren(h("a", { class: "back", href: "#/", "aria-label": "Back" }, "‹"), h("span", { class: "title" }, "pack"));
   const root = h("div", { class: "pack" });
   $("#main").replaceChildren(root);
-  let live = false, since = Date.now(), focus = 0;
-  const shift = setInterval(() => { for (const k in packAct) { packAct[k].shift(); packAct[k].push(0); } draw(); }, 5000);
-  const es = new EventSource("/api/pack/stream");
-  for (const n of ["pack", "pack.delta", "thread.status", "thread.event"]) es.addEventListener(n, (e) => { try { const ev = JSON.parse(e.data); packApply(ev.type, ev.data); draw(); } catch {} });
-  es.onopen = () => { live = true; since = Date.now(); draw(); };
-  es.onerror = () => { live = false; draw(); };
-  api("GET", "/api/pack").then(p => { if (!packState) { packState = p; draw(); } }).catch(() => {});
-  cleanup = () => { es.close(); clearInterval(shift); };
+  let live = false;
+  const tick = setInterval(() => draw(), 5000);
+  const stop = packFeed(() => draw(), (v) => { live = v; });
+  cleanup = () => { stop(); clearInterval(tick); };
 
-  const threadsOf = (a) => (a.threads || []).filter(t => packArchived || t.status !== "archived" && !t.archived);
   function draw() {
     if (!root.isConnected) return;
     const p = packState;
     if (!p) { root.replaceChildren(h("div", { class: "empty" }, "connecting…")); return; }
-    const hosts = p.authorities || [];
-    const host = hosts.find(a => a.name === packSel.host) || hosts.find(a => a.local) || hosts[0];
-    packSel.host = host?.name || null;
-    const ts = host ? threadsOf(host) : [];
-    const projIds = [...new Set(ts.map(t => t.project || ""))].sort((a, b) => projName(a).localeCompare(projName(b)));
-    if (!projIds.includes(packSel.project)) packSel.project = projIds[0] ?? null;
-    const projThreads = ts.filter(t => (t.project || "") === packSel.project);
-    const thread = projThreads.find(t => t.id === packSel.thread) || projThreads[0];
-    packSel.thread = thread?.id || null;
+    const auths = p.authorities || [], all = allThreads(p);
+    const groups = packProjects(p);
+    if (!groups.some(g => g.id === packSel.project)) packSel.project = (groups.find(g => g.manager) || groups[0])?.id ?? null;
+    const sel = groups.find(g => g.id === packSel.project);
 
-    const loc = hosts.find(a => a.local), started = loc?.started ? new Date(loc.started) : (live ? new Date(since) : null);
-    const secs = started ? Math.max(0, Math.round((Date.now() - started) / 1000)) : -1;
-    const up = secs < 0 ? "" : secs < 60 ? secs + "s" : secs < 3600 ? Math.floor(secs / 60) + "m" : Math.floor(secs / 3600) + "h" + String(Math.floor(secs / 60) % 60).padStart(2, "0") + "m";
     const bar = h("div", { class: "pack-bar" },
       h("span", {}, h("span", { class: "dot " + (!live ? "failed" : p.degraded ? "provisioning" : "running") }), !live ? "offline" : p.degraded ? "degraded" : "live"),
-      p.leader ? h("span", {}, "leader ", h("b", {}, p.leader)) : null, h("span", {}, "term " + (p.term || 0)),
-      h("span", {}, h("span", { class: "dot " + (p.vault_ok ? "idle" : "failed") }), p.vault_ok ? "vault ok" : "vault unreachable"),
-      up ? h("span", {}, "up " + up) : null, h("span", { class: "spacer" }), h("span", {}, location.host),
+      h("span", { class: "spacer" }), h("span", {}, location.host),
       h("label", {}, h("input", { type: "checkbox", checked: packArchived, onchange: (e) => { packArchived = e.target.checked; draw(); } }), " archived"));
     const banners = [
       p.degraded ? h("div", { class: "pack-banner warn" }, "degraded: no pack leader is reachable, showing this authority only") : null,
       !p.vault_ok ? h("div", { class: "pack-banner err" }, "vault unreachable: cached keys work until their TTL, new credentialed work will fail") : null,
       !live ? h("div", { class: "pack-banner warn" }, "live feed disconnected, reconnecting…") : null];
 
-    const card = (sel, onclick, dot, name, sum, left, act) => h("button", { class: "pack-card" + (sel ? " sel" : ""), onclick },
-      h("div", { class: "l1" }, h("span", { class: "dot " + packDot(dot) }), h("span", {}, name)), h("div", { class: "l2" }, sum),
-      left != null ? h("div", { class: "l3" }, h("span", {}, left), act ? h("span", { class: "spark" }, packSpark({ act })) : null) : null);
-    const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
-    const hostCards = hosts.map(a => card(a.name === packSel.host, () => { packSel.host = a.name; packSel.project = null; focus = 1; draw(); }, a.status, a.name,
-      (a.status !== "up" ? `${a.status} · unreachable` : `${a.host?.os || "?"} · ${a.host?.cpus || 0} cpu · load ${(a.host?.load || 0).toFixed(1)}`) + (a.name === p.leader ? " · leader" : ""),
-      plural(threadsOf(a).length, "thread") + (a.host?.guests_max ? ` · ${a.host.guests_used || 0}/${a.host.guests_max} vms` : ""),
-      threadsOf(a).reduce((s, t) => (packAct[t.id] || []).map((v, i) => v + (s[i] || 0)), [])));
-    const projCards = projIds.map(id => {
-      const pt = ts.filter(t => (t.project || "") === id), active = pt.filter(t => t.status === "running" || t.status === "working").length;
-      return card(id === packSel.project, () => { packSel.project = id; packSel.thread = null; focus = 2; draw(); }, active ? "running" : "idle", projName(id),
-        `${active} active · $${pt.reduce((s, t) => s + (t.cost || 0), 0).toFixed(2)}`, plural(pt.length, "thread"),
-        pt.reduce((s, t) => (packAct[t.id] || []).map((v, i) => v + (s[i] || 0)), []));
+    const card = (cls, onclick, dot, name, ...lines) => h("div", { class: "pack-card" + cls, role: "button", tabindex: 0, onclick, onkeydown: (e) => { if (e.key === "Enter" && e.target === e.currentTarget) onclick(e); } },
+      h("div", { class: "l1" }, h("span", { class: "dot " + packDot(dot) }), h("span", {}, name)), ...lines.filter(Boolean));
+    const line = (cls, ...kids) => h("div", { class: cls }, ...kids);
+    const col = (title, cards, empty, ...extra) => h("div", { class: "pack-col" }, h("h3", {}, title), ...(cards.length ? cards : [h("div", { class: "pack-empty" }, empty)]), ...extra);
+
+    // 1. LEADER
+    const leader = auths.find(a => a.name === p.leader);
+    const up = auths.filter(a => a.status === "up").length;
+    const leaderCard = card("", () => { location.hash = "#/monitor"; }, p.degraded ? "provisioning" : leader ? leader.status : "down", p.leader || "no leader",
+      line("l2", "term " + (p.term || 0) + " · ", h("span", { class: "dot " + (p.vault_ok ? "idle" : "failed") }), " " + (p.vault_ok ? "vault ok" : "vault unreachable") + (p.vault_host ? " (" + p.vault_host + ")" : "")),
+      line("l2", `${up}/${auths.length} authorities up`),
+      line("l3", h("span", {}, `${all.filter(isWorking).length}/${all.length} threads working`)));
+
+    const visible = (t) => packArchived || (t.status !== "archived" && !t.archived);
+    // 2. PROJECT AGENTS
+    const projCards = groups.map(g => {
+      const m = g.manager, ws = g.workers.filter(visible), working = ws.filter(isWorking).length, cost = g.all.reduce((s, t) => s + (t.cost || 0), 0);
+      const open = m ? () => { location.hash = "#/p/" + encodeURIComponent(g.id); } : () => { packSel.project = g.id; draw(); };
+      const showWorkers = (e) => { e.stopPropagation(); packSel.project = g.id; draw(); $("#threads-col")?.scrollIntoView({ block: "nearest" }); };
+      return card(g.id === packSel.project ? " sel" : "", open, m ? m.status : "idle", projName(g.id),
+        g.id === "" ? line("l2", "threads with no project") : m ? line("l2", `manager ${m.status} · ${m.authority}${m.guest ? " · " + m.guest : ""}`)
+          : line("l2 warn", "no manager yet" + (projects.some(x => x.id === g.id) ? " · tap to message one" : "")),
+        line("l3", h("span", {}, `${working}/${ws.length} workers working · ${money(cost)}`),
+          m ? h("button", { class: "ui-mini", onclick: showWorkers }, "threads ›") : null));
     });
-    const threadCards = projThreads.map(t => card(t.id === packSel.thread, () => { packSel.thread = t.id; focus = 3; draw(); }, t.status, t.title || t.id,
-      `${t.status} · ${t.placement?.local ? "local" : "vm"} · $${(t.cost || 0).toFixed(2)}`, plural((t.subagents || []).length, "sub-agent"), packAct[t.id]));
-    const subCards = (thread?.subagents || []).map(s => card(false, () => { location.hash = "#/t/" + encodeURIComponent(thread.id) + "/s/" + encodeURIComponent(s.id); }, s.status, s.name || s.id, "on " + (s.authority || thread.authority) + (s.guest ? " · " + s.guest : ""), s.status));
-    const col = (i, title, cards, empty) => h("div", { class: "pack-col" + (focus === i ? " focus" : "") + (focus === i ? " show" : ""), "data-col": i }, h("h3", {}, title), ...(cards.length ? cards : [h("div", { class: "pack-empty" }, empty)]));
-    const actions = h("div", { class: "pack-actions" },
-      focus > 0 ? h("button", { class: "start", onclick: () => { focus--; draw(); } }, "‹ up") : null,
-      h("a", { class: "start", href: "#/new/p/" + encodeURIComponent(packSel.project || "scratch"), style: "display:inline-block;text-decoration:none" }, "new thread"),
-      thread ? h("a", { class: "start", href: "#/t/" + encodeURIComponent(thread.id), style: "display:inline-block;text-decoration:none" }, "open thread") : null);
-    // The selected node, like the TUI's preview column.
-    const kv = (k, v) => h("div", { class: "kv" }, h("span", {}, k), h("b", {}, String(v)));
-    let detail = [];
-    if (thread) detail = [h("h3", {}, thread.title || thread.id), kv("status", thread.status), kv("on", thread.authority + " · " + (thread.placement?.local ? "local" : "vm")), kv("guest", thread.guest || "none"), kv("cost", "$" + (thread.cost || 0).toFixed(2)), kv("updated", thread.updated ? ago(thread.updated) + " ago" : "-"), kv("sub-agents", (thread.subagents || []).map(s => (s.name || s.id) + " on " + (s.authority || thread.authority)).join(", ") || "none")];
-    else if (host) detail = [h("h3", {}, host.name), kv("status", host.status), kv("os", host.host?.os || "?"), kv("cpus", host.host?.cpus || 0), kv("load", (host.host?.load || 0).toFixed(2)), kv("memory", ((host.host?.mem || 0) / 2 ** 30).toFixed(1) + " GiB"), kv("vms", (host.host?.guests_used || 0) + " / " + (host.host?.guests_max || 0)), kv("role", [host.name === p.leader ? "pack leader" : "", host.name === p.vault_host ? "vault host" : ""].filter(Boolean).join(", ") || "member")];
-    const panel = h("div", { class: "pack-detail" }, ...detail);
+    const startCard = null;
+
+    // 3. THREADS
+    const tcards = (sel?.workers || []).filter(visible).map(t => {
+      const subs = t.subagents || [], open = !!packSubs[t.id];
+      const el = card("", () => { location.hash = "#/t/" + encodeURIComponent(t.id); }, t.status, t.title || t.id,
+        line("l2", `${t.status} · ${t.authority}${t.guest ? " · " + t.guest : t.placement?.local ? " · local" : ""}`),
+        line("l3", h("span", {}, (t.parent ? "worker" : "by hand") + " · " + money(t.cost) + (t.updated ? " · " + ago(t.updated) : "")),
+          subs.length ? h("button", { class: "ui-mini", onclick: (e) => { e.stopPropagation(); packSubs[t.id] = !open; draw(); } }, plural(subs.length, "sub-agent") + (open ? " ▾" : " ▸")) : null));
+      if (!subs.length || !open) return el;
+      return h("div", {}, el, h("div", { class: "pack-subs" }, ...subs.map(s => h("a", { class: "pack-sub", href: "#/t/" + encodeURIComponent(t.id) + "/s/" + encodeURIComponent(s.id) },
+        h("span", { class: "dot " + packDot(s.status) }), h("span", {}, s.name || s.id), h("span", { class: "pack-sub-s" }, `${s.status} · ${s.authority || t.authority}${s.guest ? " · " + s.guest : ""}`)))));
+    });
+    const newHref = "#/new/p/" + encodeURIComponent(packSel.project || "scratch");
     root.replaceChildren(bar, ...banners.filter(Boolean),
-      h("div", { class: "pack-grid" }, col(0, "HOSTS", hostCards, "no authorities"), col(1, "PROJECTS", projCards, "no projects"), col(2, "THREADS", threadCards, "no threads"), col(3, "SUB-AGENTS", subCards, "no sub-agents")),
-      panel,
-      actions);
+      h("div", { class: "pack-grid" },
+        col("LEADER", [leaderCard], ""),
+        col("PROJECT AGENTS", projCards, "no projects"),
+        h("div", { id: "threads-col", class: "pack-col" }, h("h3", {}, "THREADS" + (sel ? " · " + projName(sel.id) : "")),
+          ...(tcards.length ? tcards : [h("div", { class: "pack-empty" }, sel ? "no threads" : "select a project")]),
+          h("a", { class: "start pack-new", href: newHref }, "new thread"))));
   }
-  function projName(id) { return !id ? "(no project)" : (projects.find(x => x.id === id) || {}).name || id; }
   draw();
 }
 
@@ -1381,116 +1398,50 @@ function showThread(id, proj = null, sub = null) {
 
 
 // ---------- monitor ----------
-const fmtGB = (b) => b >= 1 << 30 ? (b / (1 << 30)).toFixed(1) + "G" : Math.round(b / (1 << 20)) + "M";
-const winName = (n) => ({ five_hour: "5-hour window", seven_day: "7-day window", seven_day_opus: "7-day opus", seven_day_sonnet: "7-day sonnet" }[n] || n.replace(/_/g, " "));
-const until = (sec) => { const s = sec - Date.now() / 1000; if (s <= 0) return "now";
-  const d = Math.floor(s / 86400), hr = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
-  return d ? `${d}d ${hr}h` : hr ? `${hr}h ${m}m` : `${m}m`; };
-function meter(frac, cells = 20) {
-  const n = Math.round(Math.min(Math.max(frac, 0), 1) * cells);
-  return h("span", { class: "meter" }, "█".repeat(n), h("i", {}, "░".repeat(cells - n)));
-}
-let monEdges = [];
+// CLIENTS (pack.clients), HOSTS (pack.authorities) and GUESTS (authority.guests), from the pack feed.
+const fmtGB = (b) => b >= 1 << 30 ? (b / (1 << 30)).toFixed(1) + "G" : Math.round((b || 0) / (1 << 20)) + "M";
 function showMonitor() {
   const mon = $("#mon");
   mon.replaceChildren(h("div", { class: "mon-in" }, h("div", { class: "empty" }, "connecting…")));
-  $("#live").replaceChildren();
-  const es = new EventSource("/api/overview/stream");
-  es.onmessage = (e) => renderMonitor(JSON.parse(e.data));
-  es.onerror = () => $("#live").replaceChildren(h("span", { class: "dot failed" }), "reconnecting");
-  const onResize = () => drawEdges();
-  addEventListener("resize", onResize);
-  cleanup = () => { es.close(); removeEventListener("resize", onResize); };
-}
-function renderMonitor(ov) {
-  $("#live").replaceChildren(h("span", { class: "dot running" }), "live · " + new Date(ov.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
-  const guests = ov.guests || [], devices = ov.devices || [], other = ov.other || [], u = ov.usage || {};
-  const st = ov.statuses || {};
+  let live = false;
+  const tick = setInterval(() => draw(), 5000);
+  const stop = packFeed(() => draw(), (v) => { live = v; });
+  cleanup = () => { stop(); clearInterval(tick); };
+  function draw() {
+    if (!mon.isConnected || document.body.dataset.mode !== "monitor") return;
+    $("#live").replaceChildren(h("span", { class: "dot " + (live ? "running" : "failed") }), live ? "live" : "reconnecting");
+    const p = packState;
+    if (!p) return;
+    const auths = p.authorities || [], clients = p.clients || [];
+    if (packSel.host && !auths.some(a => a.name === packSel.host)) packSel.host = null;
+    const titles = new Map(allThreads(p).map(t => [t.id, t.title || t.id]));
+    const panel = (title, right, ...kids) => h("div", { class: "panel" }, h("div", { class: "panel-h" }, h("b", {}, title), right ? h("span", {}, right) : null), ...kids);
+    const row = (cls, ...cells) => h(cls.href ? "a" : "div", { class: "mrow" + (cls.cls || ""), href: cls.href, onclick: cls.onclick, role: cls.onclick ? "button" : null }, ...cells.map(c => h("span", {}, c)));
+    const head = (...cells) => h("div", { class: "mrow mhead" }, ...cells.map(c => h("span", {}, c)));
+    const none = (t) => h("div", { class: "pnote" }, t);
 
-  // usage strip
-  const tiles = [];
-  for (const w of u.windows || []) tiles.push(h("div", { class: "stat" },
-    h("div", { class: "k" }, winName(w.name)),
-    h("div", { class: "v g" }, Math.round(w.utilization * 100) + "%"),
-    meter(w.utilization), h("div", { class: "sub" }, "resets in " + until(w.resets_at))));
-  if (!(u.windows || []).length) tiles.push(h("div", { class: "stat" }, h("div", { class: "k" }, "subscription"), h("div", { class: "v" }, "—"), h("div", { class: "sub" }, "shows after the next turn")));
-  tiles.push(h("div", { class: "stat" }, h("div", { class: "k" }, "today"),
-    h("div", { class: "v" }, `${u.today_turns || 0} turns`),
-    h("div", { class: "sub" }, `${u.today_tools || 0} tool calls · ${u.today_threads || 0} new threads · ~$${(u.today_cost || 0).toFixed(2)}`)));
-  tiles.push(h("div", { class: "stat" }, h("div", { class: "k" }, "threads"),
-    h("div", { class: "v" + (st.running ? " g" : "") }, `${st.running || 0} working`),
-    h("div", { class: "sub" }, `${st.idle || 0} ready · ${(st.provisioning || 0) + (st.starting || 0)} starting · ${st.failed || 0} failed`)));
-  const gMem = guests.reduce((a, g) => a + (g.mem_bytes || 0), 0) + other.reduce((a, g) => a + (g.mem_bytes || 0), 0);
-  tiles.push(h("div", { class: "stat" }, h("div", { class: "k" }, "host · " + (ov.host?.name || "")),
-    h("div", { class: "v" }, `load ${(ov.host?.load?.[0] ?? 0).toFixed(1)}`),
-    h("div", { class: "sub" }, `${guests.length} guests · ${fmtGB(gMem)} / ${fmtGB(ov.host?.mem_bytes || 0)} in containers`)));
-
-  // topology
-  const online = devices.filter(d => d.online), offline = devices.filter(d => !d.online);
-  const devNodes = online.map(d => h("div", { class: "node" + (d.viewing ? " on" : ""), "data-k": "d:" + d.name },
-    h("div", { class: "n" }, h("span", { class: "dot " + (d.viewing ? "running" : "idle") }), h("span", {}, d.name), d.self ? h("span", { class: "tag" }, "host") : d.viewing ? h("span", { class: "tag" }, "viewing") : null),
-    h("div", { class: "s" }, d.os.toLowerCase())));
-  const hostNode = h("div", { class: "node host", "data-k": "host" },
-    h("div", { class: "n" }, h("span", { class: "dot idle" }), h("span", {}, ov.host?.name || "host")),
-    h("div", { class: "s" }, `${ov.host?.cpus || "?"} cpu · ${fmtGB(ov.host?.mem_bytes || 0)} · load ${(ov.host?.load || []).map(x => x.toFixed(1)).join(" ")}`),
-    h("div", { class: "s" }, `rux serve · ${guests.length} guest${guests.length === 1 ? "" : "s"}`));
-  const guestNodes = guests.map(g => {
-    const state = g.streaming ? "running" : g.managed ? (g.connected ? g.status : "") : "";
-    const memFrac = g.mem_limit ? g.mem_bytes / g.mem_limit : 0;
-    return h(g.thread_id ? "a" : "div", { class: "node" + (g.streaming ? " on" : ""), href: g.thread_id ? "#/t/" + encodeURIComponent(g.thread_id) : null, "data-k": "g:" + g.name },
-      h("div", { class: "n" }, h("span", { class: "dot " + state }), h("span", {}, g.thread_title || g.name), g.streaming ? h("span", { class: "tag" }, "streaming") : null),
-      h("div", { class: "s" }, `${g.name.replace(/^rv-/, "")} · ${g.managed ? statusText({ status: g.status, connected: g.connected }) + (g.model ? " · " + g.model : "") : "not a rux thread"}`),
-      h("div", { class: "s" }, `cpu ${g.cpu.toFixed(1)}% · mem ${fmtGB(g.mem_bytes)}/${fmtGB(g.mem_limit)} · ${g.procs} procs`),
-      h("div", { class: "mbar" }, h("i", { style: `width:${(memFrac * 100).toFixed(1)}%` })));
-  });
-  const topo = h("div", { class: "topo" },
-    h("div", { class: "tcol" }, h("div", { class: "tcol-h" }, "devices · tailnet"), ...devNodes,
-      offline.length ? h("div", { class: "faint-note" }, `+${offline.length} offline: ${offline.map(d => d.name).join(", ")}`) : null),
-    h("div", { class: "tcol" }, h("div", { class: "tcol-h" }, "hosts"), hostNode,
-      other.length ? h("div", { class: "faint-note" }, "other containers: " + other.map(o => `${o.name} ${fmtGB(o.mem_bytes)}`).join(", ")) : null),
-    h("div", { class: "tcol" }, h("div", { class: "tcol-h" }, "guests · threads"),
-      ...(guestNodes.length ? guestNodes : [h("div", { class: "node off" }, h("div", { class: "s" }, "no guests running"))])));
-  monEdges = [
-    ...online.filter(d => !d.self).map(d => ({ a: "d:" + d.name, b: "host", cls: "ln dash" + (d.viewing ? " live" : "") })),
-    ...guests.map(g => ({ a: "host", b: "g:" + g.name, cls: "ln" + (g.streaming ? " live" : "") + (g.managed && !g.connected ? " dash" : "") })),
-  ];
-
-  // activity
-  const hourly = u.hourly || [];
-  const max = Math.max(1, ...hourly), total = hourly.reduce((a, b) => a + b, 0);
-  const hist = h("div", { class: "hist" }, ...hourly.map((n, i) =>
-    h("i", { class: i === hourly.length - 1 ? "now" : "", style: `height:${Math.max(n ? 6 : 1, n / max * 100)}%`, title: `${n} tool call${n === 1 ? "" : "s"}` })));
-
-  const panel = (title, right, ...kids) => h("div", { class: "panel" }, h("div", { class: "panel-h" }, h("b", {}, title), right ? h("span", {}, right) : null), ...kids);
-  const mon = $("#mon"), scroll = mon.scrollTop;
-  mon.replaceChildren(h("div", { class: "mon-in" },
-    panel("usage", null, h("div", { class: "stats" }, ...tiles)),
-    panel("topology", "click a guest to open its thread", topo),
-    panel("activity · last 24h", `${total} tool calls`, hist, h("div", { class: "hist-x" }, h("span", {}, "-24h"), h("span", {}, "-12h"), h("span", {}, "now")))));
-  mon.scrollTop = scroll;
-  drawEdges();
-}
-function drawEdges() {
-  const topo = $("#mon .topo");
-  if (!topo) return;
-  topo.querySelector("svg")?.remove();
-  const box = topo.getBoundingClientRect();
-  const NS = "http://www.w3.org/2000/svg";
-  const svgEl = document.createElementNS(NS, "svg");
-  const pos = (k) => { const el = topo.querySelector(`[data-k="${CSS.escape(k)}"]`); return el && el.getBoundingClientRect(); };
-  const phase = `-${(Date.now() % 900) / 1000}s`; // keep the flow animation continuous across re-renders
-  for (const e of monEdges) {
-    const a = pos(e.a), b = pos(e.b);
-    if (!a || !b) continue;
-    const x1 = a.right - box.left, y1 = a.top + a.height / 2 - box.top, x2 = b.left - box.left, y2 = b.top + b.height / 2 - box.top;
-    const mx = (x1 + x2) / 2;
-    const p = document.createElementNS(NS, "path");
-    p.setAttribute("d", `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`);
-    p.setAttribute("class", e.cls);
-    p.style.animationDelay = phase;
-    svgEl.append(p);
+    const clientRows = clients.map(c => row({}, h("span", { class: "tag-kind" }, c.kind === "tui" ? "TUI" : c.kind === "web" ? "web" : c.kind || "?"), c.device || "?", c.authority || "-", c.last_seen ? ago(c.last_seen) + " ago" : "-"));
+    const hostRows = auths.map(a => row({ cls: a.name === packSel.host ? " sel" : "", onclick: () => { packSel.host = packSel.host === a.name ? null : a.name; draw(); } },
+      h("span", {}, h("span", { class: "dot " + packDot(a.status) }), " " + a.name, a.name === p.leader ? h("span", { class: "tag-kind" }, "★ leader") : null),
+      a.status !== "up" ? a.status : a.host?.os || "?", a.status === "up" ? plural(a.host?.cpus || 0, "cpu") : "-", a.status === "up" ? "load " + (a.host?.load || 0).toFixed(1) : "-",
+      a.host?.guests_max ? `${a.host.guests_used || 0}/${a.host.guests_max} slots` : "-", uptime(a.started)));
+    const shown = auths.filter(a => !packSel.host || a.name === packSel.host);
+    const guestRows = shown.flatMap(a => (a.guests || []).map(g => {
+      const frac = g.mem_limit ? Math.min(1, g.mem_bytes / g.mem_limit) : 0;
+      return row(g.thread ? { href: "#/t/" + encodeURIComponent(g.thread) } : {},
+        h("span", {}, g.name, auths.length > 1 && !packSel.host ? h("span", { class: "tag-kind" }, a.name) : null),
+        g.phase || "-", g.backend || "-", (g.cpu || 0).toFixed(1) + "%",
+        h("span", {}, `${fmtGB(g.mem_bytes)}/${fmtGB(g.mem_limit)}`, h("div", { class: "mbar" }, h("i", { style: `width:${(frac * 100).toFixed(1)}%` }))),
+        g.thread ? titles.get(g.thread) || g.thread : "-");
+    }));
+    const scroll = mon.scrollTop;
+    mon.replaceChildren(h("div", { class: "mon-in" },
+      panel("clients", plural(clients.length, "client"), clients.length ? h("div", { class: "mtable c-clients" }, head("kind", "device", "authority", "last seen"), ...clientRows) : none("no clients reported")),
+      panel("hosts", plural(auths.length, "host") + (packSel.host ? " · tap again to show all guests" : " · tap one to filter guests"), auths.length ? h("div", { class: "mtable c-hosts" }, head("host", "os", "cpus", "load", "guests", "uptime"), ...hostRows) : none("no authorities")),
+      panel("guests", packSel.host ? "on " + packSel.host : "all hosts", guestRows.length ? h("div", { class: "mtable c-guests" }, head("guest", "phase", "backend", "cpu", "memory", "thread"), ...guestRows) : none("no guests running"))));
+    mon.scrollTop = scroll;
   }
-  topo.prepend(svgEl);
+  draw();
 }
 
 // Minimal markdown -> DOM (never innerHTML): code fences, inline code, bold, headings, paragraphs.
