@@ -21,6 +21,8 @@
   --accent: #e378b3; --accent-dim: #b65f90; --accent-bg: rgba(227, 120, 179, .07);
   --ok: #77db89; --err: #e77975; --warn: #ea8d79; --warm: #ea8d79; --ink: #1f2124;
   --green: var(--ok); --green-dim: #5fae6e; --green-bg: rgba(119, 219, 137, .1); --glow: none; /* semantic "ok" colors, used by ui.js */
+  --accent2: #a78bfa; --ok-bg: rgba(119, 219, 137, .12); --warn-bg: rgba(234, 141, 121, .14); --scrim: rgba(20, 22, 24, .95); --select: #c0c5ca;
+  /* a theme (GET /api/theme) overrides all of these on <html>: applyTheme */
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 }
 * { box-sizing: border-box; margin: 0; }
@@ -162,6 +164,35 @@ main { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; min-height:
 .ui-mini { color: var(--muted); font-size: 12px; }
 .ui-mini:hover { color: var(--accent); }
 
+/* authority settings: name, mascot, theme */
+.topset { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; flex: none; border-radius: 8px; color: var(--muted); }
+.topset:hover, .topset.sel { color: var(--accent); background: var(--raise); }
+.sb-set { display: block; margin-top: 8px; padding: 6px 12px; border-radius: 8px; color: var(--muted); font-size: 13px; }
+.sb-set:hover, .sb-set.sel { color: var(--accent); background: var(--raise); }
+.tgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: 4px; }
+.tcard { text-align: left; border: 1px solid var(--line3); border-radius: 10px; padding: 10px; display: grid; gap: 6px; background: var(--panel); color: var(--text); }
+.tcard:hover { border-color: var(--accent); }
+.tcard[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.tcard .sw { display: flex; height: 22px; border-radius: 5px; overflow: hidden; border: 1px solid var(--line); }
+.tcard .sw span { flex: 1; }
+.tcard b { font-weight: 600; font-size: 13px; color: var(--bright); }
+.tcard small { color: var(--muted); font-size: 11.5px; line-height: 1.35; }
+.tok { display: grid; grid-template-columns: 34px 82px 1fr auto; gap: 10px; align-items: center; padding: 5px 2px; border-bottom: 1px solid var(--line2); }
+.tok input[type=color] { width: 34px; height: 26px; padding: 0; border: 1px solid var(--line3); border-radius: 6px; background: none; cursor: pointer; }
+.tok code { font-size: 12px; color: var(--bright); }
+.tok span { color: var(--muted); font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tok span i { font-style: normal; color: var(--faint); }
+.tok button { font-size: 12px; color: var(--muted); padding: 2px 6px; }
+.tok button:hover { color: var(--accent); }
+.tok.over code::after { content: " *"; color: var(--accent); }
+.mbox { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; margin-top: 6px; }
+.mbox .logo { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--panel); max-width: 260px; }
+.mbox .logo canvas { max-width: 100%; height: auto !important; }
+.mbox .mside { flex: 1; min-width: 220px; display: grid; gap: 8px; }
+.err { color: var(--err); font-size: 13px; }
+.agent-tip { margin-top: 18px; font-size: 12px; color: var(--muted); line-height: 1.7; }
+.agent-tip code { color: var(--bright); }
+
 /* forms (project settings, new project) */
 .new { padding: 28px 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; }
 .new h2 { margin-bottom: 14px; }
@@ -202,7 +233,7 @@ select.sel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px
 .composer-card:focus-within { border-color: var(--accent-dim); }
 .prompt { min-height: 96px; font-size: 15px; line-height: 1.6; padding: 4px 6px; color: var(--bright); }
 .crow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.chip { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line3); background: transparent; color: #c0c5ca; font-size: 12.5px; font-weight: 500; max-width: 280px; position: relative; }
+.chip { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line3); background: transparent; color: var(--select); font-size: 12.5px; font-weight: 500; max-width: 280px; position: relative; }
 .chip.repo { background: var(--raise); color: var(--bright); }
 .chip:hover { color: var(--bright); border-color: var(--muted); }
 .chip svg { flex: none; }
@@ -239,7 +270,7 @@ select.sel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px
 .rrow .rn { white-space: nowrap; }
 .rrow .pd { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
 .rrow .pt { color: var(--muted); font-size: 12px; flex: none; }
-.badge { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: rgba(234, 141, 121, .14); color: var(--warm); flex: none; }
+.badge { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--warn-bg); color: var(--warm); flex: none; }
 .rnote { font-size: 12px; color: var(--muted); padding: 12px 16px; }
 @media (max-width: 699px) { .chip { max-width: 100%; } .crow .spacer { display: none; } .run { width: 100%; justify-content: center; } }
 
@@ -298,11 +329,11 @@ pre { font: 12.5px/1.55 var(--mono); background: var(--panel); border: 1px solid
 .asset .file { color: var(--accent); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 13px; }
 .asset .file:hover { border-color: var(--accent-dim); background: var(--accent-bg); }
 .step .detail img { max-width: 100%; max-height: 50vh; border: 1px solid var(--line); border-radius: 6px; cursor: zoom-in; }
-.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(20, 22, 24, .95); overflow: auto; display: grid; place-items: center; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+.lightbox { position: fixed; inset: 0; z-index: 50; background: var(--scrim); overflow: auto; display: grid; place-items: center; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
 .lightbox img { max-width: 100vw; max-height: 100dvh; cursor: zoom-in; }
 .lightbox.full img { max-width: none; max-height: none; cursor: zoom-out; }
 .lightbox .lb-bar { position: fixed; top: calc(env(safe-area-inset-top) + 10px); right: 12px; display: flex; gap: 8px; z-index: 1; }
-.lightbox .lb-bar a, .lightbox .lb-bar button { background: rgba(43, 46, 50, .9); border: 1px solid var(--line3); color: var(--accent); border-radius: 8px; padding: 4px 10px; font-size: 13px; }
+.lightbox .lb-bar a, .lightbox .lb-bar button { background: var(--panel); border: 1px solid var(--line3); color: var(--accent); border-radius: 8px; padding: 4px 10px; font-size: 13px; }
 
 /* reply composer (thread and project pages) */
 #ftr { position: relative; flex: none; padding: 10px 0 12px; border-top: 1px solid var(--line); background: var(--bg); }
@@ -362,7 +393,7 @@ pre { font: 12.5px/1.55 var(--mono); background: var(--panel); border: 1px solid
 @media (max-width: 899px) { .conn { display: none; } .pcol { max-width: none; flex-basis: 100%; margin-bottom: 18px; } .pack-cols { padding: 20px 16px; } }
 .pcard { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border-radius: 10px; border: 1px solid var(--line3); background: var(--panel); color: var(--muted); text-align: left; font-size: 12.5px; line-height: 1.5; width: 100%; }
 .pcard:hover { border-color: var(--muted); }
-.pcard[aria-pressed="true"] { border-color: var(--accent); background: rgba(227, 120, 179, .06); }
+.pcard[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-bg); }
 .pcard .l1 { display: flex; align-items: center; gap: 8px; color: var(--bright); font-weight: 700; font-size: 13px; min-width: 0; }
 .pcard .l1 span:not(.dot) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pcard .l2, .pcard .l3 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -398,13 +429,13 @@ pre { font: 12.5px/1.55 var(--mono); background: var(--panel); border: 1px solid
 table.mt { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 560px; }
 .mt th { font-weight: 400; padding: 10px 16px; color: var(--muted); text-align: left; }
 .mt td { padding: 12px 16px; border-top: 1px solid var(--line2); }
-.kind { font-size: 11.5px; padding: 2px 7px; border-radius: 4px; background: rgba(119, 219, 137, .12); color: var(--ok); }
+.kind { font-size: 11.5px; padding: 2px 7px; border-radius: 4px; background: var(--ok-bg); color: var(--ok); }
 .mgrid { min-width: 760px; }
 .mgrid .mg { display: grid; grid-template-columns: 2.2fr 1fr .8fr 1.6fr 1.6fr 1fr; gap: 16px; align-items: center; padding: 10px 16px; }
 .mgrid .mg.head { color: var(--muted); font-size: 12.5px; }
 .mgrid button.mg { width: 100%; min-height: 50px; padding: 14px 16px; border-top: 1px solid var(--line2); text-align: left; font-size: 12.5px; color: var(--text); }
 .mgrid button.mg:hover { background: var(--bg); }
-.mgrid button.mg[aria-pressed="true"] { box-shadow: inset 2px 0 0 var(--accent); background: rgba(227, 120, 179, .06); }
+.mgrid button.mg[aria-pressed="true"] { box-shadow: inset 2px 0 0 var(--accent); background: var(--accent-bg); }
 .mgrid .hn { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .mgrid .hn b { color: var(--bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mgrid .star { font-size: 11px; color: var(--accent); flex: none; }
@@ -455,6 +486,7 @@ table.mt { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width:
   <nav aria-label="Views" data-seg></nav>
   <span class="spacer"></span>
   <div class="strip" id="strip"></div>
+  <a class="topset" id="topset" href="#/settings" aria-label="Settings" title="settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></a>
 </header>
 <div id="app">
   <section class="pane">
@@ -468,6 +500,7 @@ table.mt { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width:
     <a class="sb-new" id="sb-new" href="#/new">+ new thread <kbd>n</kbd></a>
     <div class="grow"></div>
     <div class="mascot mascot-box" id="sb-mascot"><img src="mascot.png" alt="rux mascot" width="527" height="400" style="width:100%;height:auto;display:block"></div>
+    <a class="sb-set" id="sb-set" href="#/settings">⚙ settings</a>
     <div class="leader-card" id="leadcard"></div>
   </aside>
 </div>
@@ -534,6 +567,7 @@ function drawStrip() {
 }
 // Slow poll of /api/pack for the header while no view holds the SSE feed.
 async function pollPack() {
+  if (!FIXTURE) loadTheme();
   if (packFeedOn) return;
   try { packState = await api("GET", "/api/pack"); packLive = true; } catch { packLive = false; }
   drawStrip();
@@ -602,6 +636,7 @@ async function loadPersona() {
   try { persona = await api("GET", "/api/persona"); } catch { return; } // an older authority has no persona
   applyPersona();
   if (!persona.setup) showSetup();
+  else if (location.hash === "#/settings") showSettings(true);
 }
 function mascotCanvas(m, cw = 9) {
   const mask = m.mask || [], ch = cw * 2, W = Math.max(1, ...mask.map(r => r.length)), H = mask.length;
@@ -692,6 +727,135 @@ function showSetup() {
   }
   render();
 }
+// ---------- theme ----------
+// GET /api/theme (wire types: internal/rux/authapi/theme.go): a preset plus per-token overrides,
+// resolved by the authority. applyTheme sets the stylesheet's variables on <html>; the default
+// theme removes them so the stylesheet's own values apply. A change made anywhere (this page,
+// the TUI, `rux theme`, an agent) arrives as a "theme" event on the pack feed, or on the next poll.
+let theme = null, themeKey = "";
+const THEME_VARS = ["--bg", "--panel", "--raise", "--line", "--line2", "--line3", "--text", "--bright", "--muted", "--faint", "--accent", "--accent-dim",
+  "--accent-bg", "--accent2", "--ok", "--err", "--warn", "--warm", "--ink", "--green-dim", "--green-bg", "--ok-bg", "--warn-bg", "--scrim", "--select"];
+const rgbOf = (c) => [1, 3, 5].map(i => parseInt(String(c).slice(i, i + 2), 16) || 0);
+const hexOf = (v) => "#" + v.map(x => Math.round(x).toString(16).padStart(2, "0")).join("");
+const mixHex = (a, b, t) => { const x = rgbOf(a), y = rgbOf(b); return hexOf(x.map((v, i) => v + (y[i] - v) * t)); };
+const alpha = (c, a) => { const [r, g, b] = rgbOf(c); return `rgba(${r}, ${g}, ${b}, ${a})`; };
+function themeVars(c) {
+  return { "--bg": c.bg, "--panel": c.panel, "--raise": c.raise, "--line": c.line, "--line2": mixHex(c.line, c.bg, .5), "--line3": mixHex(c.line, c.text, .12),
+    "--text": c.text, "--bright": c.bright, "--muted": c.muted, "--faint": c.faint, "--accent": c.accent, "--accent-dim": mixHex(c.accent, c.bg, .25),
+    "--accent-bg": alpha(c.accent, .07), "--accent2": c.accent2, "--ok": c.ok, "--err": c.err, "--warn": c.warn, "--warm": c.warn, "--ink": c.ink,
+    "--green-dim": mixHex(c.ok, c.bg, .25), "--green-bg": alpha(c.ok, .1), "--ok-bg": alpha(c.ok, .12), "--warn-bg": alpha(c.warn, .14),
+    "--scrim": alpha(c.bg, .95), "--select": mixHex(c.text, c.muted, .4) };
+}
+function applyTheme(t, preview) {
+  if (!t) return;
+  if (!preview) { theme = t; themeKey = JSON.stringify([t.preset, t.colors || {}]); }
+  const st = document.documentElement.style;
+  const light = !!(t.presets || []).find(p => p.name === t.preset)?.light;
+  if (t.default && !preview) THEME_VARS.forEach(n => st.removeProperty(n));
+  else for (const [k, v] of Object.entries(themeVars(t.resolved))) st.setProperty(k, v);
+  st.colorScheme = light ? "light" : "dark";
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", t.default && !preview ? "#313438" : t.resolved.bg);
+}
+async function loadTheme() {
+  let t;
+  try { t = await api("GET", "/api/theme"); } catch { return; } // an older authority has no theme
+  if (JSON.stringify([t.preset, t.colors || {}]) !== themeKey) { applyTheme(t); if (location.hash === "#/settings") showSettings(true); }
+}
+
+// ---------- settings: the authority's name, mascot and theme ----------
+function showSettings(keep) {
+  setFoot(["settings"]);
+  $("#hdr").replaceChildren(h("span", { class: "title" }, "settings"));
+  const col = h("div", { class: "col" });
+  const prev = keep && $("#main .col") ? $("#main").scrollTop : 0;
+  $("#main").replaceChildren(col);
+  // Name
+  const name = h("input", { value: persona?.name || "", maxlength: 32, autocapitalize: "off", autocorrect: "off", spellcheck: "false", placeholder: "jarvis" });
+  const nameMsg = h("span", { class: "saved" });
+  const saveName = async () => {
+    const v = name.value.trim();
+    if (!/^[a-z0-9-]{1,32}$/.test(v)) { nameMsg.className = "err"; nameMsg.textContent = "1 to 32 lowercase letters, digits and hyphens"; return; }
+    try { persona = await api("PUT", "/api/persona/name", { name: v }); applyPersona(); nameMsg.className = "saved"; nameMsg.textContent = "saved"; }
+    catch (e) { nameMsg.className = "err"; nameMsg.textContent = e.message; }
+  };
+  name.addEventListener("keydown", (e) => { if (e.key === "Enter") saveName(); });
+  // Mascot
+  const logo = h("div", { class: "logo" });
+  const desc = h("input", { placeholder: "a friendly robot butler with a bow tie", maxlength: 300 });
+  const mMsg = h("div", { class: "hint" });
+  const mActs = h("div", { class: "actions", style: "margin-top:4px" });
+  let draft = null;
+  const drawLogo = () => { const m = draft || logoOf(); logo.replaceChildren(m?.mask ? mascotCanvas(m, 6) : h("span", { class: "hint" }, "no mascot")); };
+  const mascotButtons = () => {
+    const b = [];
+    if (draft) b.push(h("button", { class: "start", onclick: keep_ }, "keep it"), h("button", { class: "plain", onclick: drawIt }, "draw again"), h("button", { class: "plain", onclick: () => { draft = null; mMsg.textContent = ""; drawLogo(); mascotButtons(); } }, "discard"));
+    else {
+      b.push(h("button", { class: "start", onclick: drawIt }, "draw"));
+      if (persona?.mascot) b.push(h("button", { class: "plain", onclick: trex }, "back to the T-rex"));
+    }
+    mActs.replaceChildren(...b);
+  };
+  async function drawIt() {
+    const d = desc.value.trim();
+    if (!d) { mMsg.textContent = "describe what your agent should look like"; return; }
+    mActs.querySelectorAll("button").forEach(b => { b.disabled = true; });
+    mMsg.textContent = "◌ drawing your mascot… (this takes a little while)";
+    try { draft = await api("POST", "/api/persona/mascot", { prompt: d }); mMsg.textContent = `preview · ${draft.model || ""} · ${(draft.colors || []).join(" ")}`; }
+    catch (e) { mMsg.textContent = "▲ " + e.message; }
+    drawLogo(); mascotButtons();
+  }
+  async function keep_() {
+    try { await api("PUT", "/api/persona/mascot", draft); persona.mascot = draft; draft = null; applyPersona(); mMsg.textContent = "saved: every rux screen shows it now"; }
+    catch (e) { mMsg.textContent = "▲ " + e.message; }
+    drawLogo(); mascotButtons();
+  }
+  async function trex() {
+    try { persona = await api("DELETE", "/api/persona/mascot"); applyPersona(); mMsg.textContent = "back to the T-rex"; } catch (e) { mMsg.textContent = "▲ " + e.message; }
+    drawLogo(); mascotButtons();
+  }
+  desc.addEventListener("keydown", (e) => { if (e.key === "Enter") drawIt(); });
+  drawLogo(); mascotButtons();
+  // Theme
+  const tBox = h("div", {}), tMsg = h("span", { class: "saved" });
+  const put = async (body) => {
+    try { applyTheme(await api("PUT", "/api/theme", body)); tMsg.className = "saved"; tMsg.textContent = "saved"; drawTheme(); }
+    catch (e) { tMsg.className = "err"; tMsg.textContent = e.message; }
+  };
+  let pending = {}, timer = 0;
+  function drawTheme() {
+    const t = theme;
+    if (!t) { tBox.replaceChildren(h("div", { class: "pnote" }, "this authority doesn't support themes")); return; }
+    const sw = (c) => h("div", { class: "sw" }, ...["bg", "panel", "text", "accent", "accent2", "ok", "warn", "err"].map(k => h("span", { style: `background:${c[k]}` })));
+    const grid = h("div", { class: "tgrid" }, ...t.presets.map(p => h("button", { class: "tcard", "aria-pressed": p.name === t.preset ? "true" : "false",
+      onclick: () => put({ preset: p.name }), onmouseenter: () => applyTheme({ ...t, preset: p.name, resolved: p.colors, default: false }, true),
+      onmouseleave: () => applyTheme(theme, !theme.default) }, sw(p.colors), h("b", {}, p.name), h("small", {}, p.description))));
+    const toks = t.tokens.map(tk => {
+      const over = t.colors && tk.name in t.colors;
+      const inp = h("input", { type: "color", value: t.resolved[tk.name], "aria-label": tk.name });
+      inp.addEventListener("input", () => {
+        pending[tk.name] = inp.value;
+        applyTheme({ ...t, default: false, resolved: { ...t.resolved, ...pending } }, true);
+        clearTimeout(timer); timer = setTimeout(() => { const c = pending; pending = {}; put({ colors: c }); }, 400);
+      });
+      return h("div", { class: "tok" + (over ? " over" : "") }, inp, h("code", {}, tk.name), h("span", {}, t.resolved[tk.name], " ", h("i", {}, tk.description)),
+        over ? h("button", { onclick: () => put({ colors: { [tk.name]: "" } }) }, "reset") : h("span"));
+    });
+    tBox.replaceChildren(grid,
+      h("div", { class: "tpanel" }, h("div", { class: "tpanel-h" }, h("b", {}, "colors"), h("span", { class: "hint" }, "changes save as you pick; * differs from " + t.preset)), ...toks),
+      h("div", { class: "actions" }, h("button", { class: "plain", onclick: async () => { try { applyTheme(await api("DELETE", "/api/theme")); drawTheme(); tMsg.className = "saved"; tMsg.textContent = "back to the default"; } catch (e) { tMsg.className = "err"; tMsg.textContent = e.message; } } }, "reset to the default theme"), tMsg));
+  }
+  drawTheme();
+  col.append(
+    h("section", { class: "psec" }, h("h2", {}, "Authority"),
+      h("div", { class: "field" }, h("label", {}, "name"), name, h("button", { class: "plain", onclick: saveName }, "rename")), nameMsg,
+      h("div", { class: "hint", style: "margin-top:6px" }, "your agents call themselves this. An authority in a pack keeps its name.")),
+    h("section", { class: "psec" }, h("h2", {}, "Mascot"),
+      h("div", { class: "mbox" }, logo, h("div", { class: "mside" }, h("div", { class: "field" }, h("label", {}, "describe it"), desc), mActs, mMsg))),
+    h("section", { class: "psec" }, h("h2", {}, "Theme"), tBox,
+      h("div", { class: "agent-tip" }, "The theme colors this app and the terminal UI everywhere at once. Agents can change it too: ",
+        h("code", {}, "rux theme use matrix"), ", ", h("code", {}, "rux theme set accent=#ff8a3d"), ", ", h("code", {}, "rux theme reset"), ".")));
+  if (prev) $("#main").scrollTop = prev;
+}
 // ---------- routing ----------
 let cleanup = () => {};
 let lastWork = "#/";
@@ -713,6 +877,8 @@ function route() {
   currentId = m ? decodeURIComponent(m[1]) : null;
   currentProject = pm ? decodeURIComponent(pm[1]) : null;
   renderList();
+  $("#sb-set")?.classList.toggle("sel", location.hash === "#/settings");
+  $("#topset")?.classList.toggle("sel", location.hash === "#/settings");
   if (mode === "monitor") { document.body.dataset.view = "monitor"; showMonitor(); return; }
   if (mode === "pack") { document.body.dataset.view = "pack"; showPack(); return; }
   if (m) { document.body.dataset.view = "thread"; showThread(currentId, null, m[2] ? decodeURIComponent(m[2]) : null); }
@@ -720,6 +886,7 @@ function route() {
   else if (pm) { document.body.dataset.view = "project"; showProject(currentProject); }
   else if (nm) { document.body.dataset.view = "new"; showNew(decodeURIComponent(nm[1])); }
   else if (location.hash === "#/archive") { document.body.dataset.view = "project"; showArchive(); }
+  else if (location.hash === "#/settings") { document.body.dataset.view = "project"; showSettings(); }
   else if (location.hash === "#/new-project") { document.body.dataset.view = "new"; showNewProject(); }
   else if (location.hash === "#/new") { document.body.dataset.view = "new"; showNew(); }
   else { document.body.dataset.view = "home"; showNew(); } // wide screens show the new-thread form beside the list
@@ -776,6 +943,8 @@ function packFeed(onChange, onLive) {
   }
   packFeedOn = true;
   const es = new EventSource("/api/pack/stream");
+  es.addEventListener("theme", (e) => { try { applyTheme(JSON.parse(e.data).data); } catch {} });
+  es.addEventListener("persona", (e) => { try { const p = JSON.parse(e.data).data; if (p?.setup) { persona = p; applyPersona(); } } catch {} });
   for (const n of ["pack", "pack.delta", "thread.status", "pack.clients"]) es.addEventListener(n, (e) => { try { const ev = JSON.parse(e.data); packApply(ev.type, ev.data); ping(null); } catch {} });
   es.onopen = () => ping(true);
   es.onerror = () => ping(false);
@@ -1999,7 +2168,7 @@ function md(src) {
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 const lastMode = store.get("rux.mode");
 if (!location.hash && (lastMode === "monitor" || lastMode === "pack")) location.replace("#/" + lastMode);
-if (!FIXTURE) loadPersona();
+if (!FIXTURE) { loadTheme(); loadPersona(); }
 route();
 </script>
 </body>

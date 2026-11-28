@@ -28,6 +28,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setPack(msg.pack)
 		m.clamp()
 		return m, m.wantPreview()
+	case settingsDoneMsg:
+		m.settingsDone(msg)
+		return m, nil
+	case themeMsg:
+		if msg.err == nil {
+			m.applyTheme(msg.t)
+		}
+		return m, nil
 	case personaMsg:
 		if msg.err == nil {
 			m.persona = msg.p
@@ -165,6 +173,8 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.downKey(s)
 	case m.tab == tabThread:
 		return m.convKey(k)
+	case m.tab == tabSettings && m.settingsEditing():
+		return m.settingsKey(k)
 	}
 	switch s {
 	case "q":
@@ -173,15 +183,15 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "?":
 		m.help = true
 	case "tab":
-		if m.tab == tabPack {
-			m.tab = tabMonitor
-		} else {
-			m.tab = tabPack
-		}
+		m.tab = (m.tab + 1) % tabThread // PACK, MONITOR, SETTINGS
+		return m, nil
 	case "1":
 		m.tab = tabPack
 	case "2":
 		m.tab = tabMonitor
+	case "3":
+		m.tab = tabSettings
+		return m, nil
 	case "a":
 		m.archived = !m.archived
 		m.clamp()
@@ -198,6 +208,9 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.tab == tabMonitor {
 		cmd := m.monitorKey(s)
 		return m, cmd
+	}
+	if m.tab == tabSettings {
+		return m.settingsKey(k)
 	}
 	if m.tab != tabPack {
 		return m, nil

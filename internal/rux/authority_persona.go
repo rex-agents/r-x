@@ -88,6 +88,7 @@ func (s *server) handlePersonaName(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 500, err.Error())
 		return
 	}
+	s.personaChanged()
 	writeJSONResp(w, 200, s.persona())
 }
 
@@ -155,6 +156,7 @@ func (s *server) handleMascotGenerate(w http.ResponseWriter, r *http.Request) {
 			httpErr(w, 500, err.Error())
 			return
 		}
+		s.personaChanged()
 	}
 	writeJSONResp(w, 200, m)
 }
@@ -176,6 +178,7 @@ func (s *server) handleMascotSave(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 500, err.Error())
 		return
 	}
+	s.personaChanged()
 	writeJSONResp(w, 200, m)
 }
 
@@ -184,6 +187,7 @@ func (s *server) handleMascotReset(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 500, err.Error())
 		return
 	}
+	s.personaChanged()
 	writeJSONResp(w, 200, s.persona())
 }
 

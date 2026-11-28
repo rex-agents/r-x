@@ -109,6 +109,8 @@ type setup struct {
 	phase  float64
 	done   bool
 	result authapi.Persona
+	// fromSettings: opened from the SETTINGS tab to draw a new mascot, not the first run.
+	fromSettings bool
 }
 
 type (
@@ -334,8 +336,15 @@ func (m *Model) setupKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) finishSetup() {
 	if m.setup != nil && m.setup.done {
 		m.persona = m.setup.result
+		if m.setup.fromSettings {
+			m.flash = "mascot unchanged"
+			if m.persona.Mascot != nil && m.setup.mascot == m.persona.Mascot {
+				m.flash = "new mascot saved"
+			}
+		} else {
+			m.flash = "welcome, " + m.persona.Name
+		}
 		m.setup = nil
-		m.flash = "welcome, " + m.persona.Name
 	}
 }
 

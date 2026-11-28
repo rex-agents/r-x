@@ -1027,7 +1027,7 @@ func TestHeaderBreadcrumb(t *testing.T) {
 		t.Errorf("narrow header %q", h)
 	}
 	m.w = 160
-	// tab goes to MONITOR; 1 goes to PACK; 2 to MONITOR; 3 does nothing.
+	// tab goes to MONITOR; 1 goes to PACK; 2 to MONITOR; 3 to SETTINGS, where tab wraps to PACK.
 	press(m, "tab")
 	if m.tab != tabMonitor {
 		t.Fatalf("tab from thread: %v", m.tab)
@@ -1041,8 +1041,8 @@ func TestHeaderBreadcrumb(t *testing.T) {
 		t.Fatalf("2: %v", m.tab)
 	}
 	press(m, "3")
-	if m.tab != tabMonitor {
-		t.Fatalf("3 changed the tab: %v", m.tab)
+	if m.tab != tabSettings {
+		t.Fatalf("3: %v", m.tab)
 	}
 	press(m, "tab", "right", "down", "right", "right", "enter") // a sub-agent
 	if h := head(); !strings.Contains(h, "› sub-agent ") {

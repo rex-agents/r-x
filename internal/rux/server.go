@@ -53,6 +53,7 @@ type server struct {
 
 	name         string // this authority's name, from authority.json; "" before the first-run setup
 	nameMu       sync.RWMutex
+	themeMu      sync.Mutex                                                                      // serializes theme changes (theme.go)
 	askModel     func(ctx context.Context, system, user string) (reply, model string, err error) // tests: stands in for Claude
 	selfURL      string                                                                          // the authority's own HTTP URL, once listening
 	started      time.Time                                                                       // when this authority started
@@ -1514,6 +1515,9 @@ func (s *server) routes() (app, guest *http.ServeMux) {
 	app.HandleFunc("POST /api/persona/mascot", s.handleMascotGenerate)
 	app.HandleFunc("PUT /api/persona/mascot", s.handleMascotSave)
 	app.HandleFunc("DELETE /api/persona/mascot", s.handleMascotReset)
+	app.HandleFunc("GET /api/theme", s.handleTheme)
+	app.HandleFunc("PUT /api/theme", s.handleThemeUpdate)
+	app.HandleFunc("DELETE /api/theme", s.handleThemeReset)
 	app.HandleFunc("GET /api/pack", s.handlePack)
 	app.HandleFunc("GET /api/pack/stream", s.handlePackStream)
 
@@ -1523,6 +1527,7 @@ func (s *server) routes() (app, guest *http.ServeMux) {
 	guest.HandleFunc("POST /assets", s.handleAssetUpload)
 	guest.HandleFunc("/mcp", s.handleMCP)
 	guest.HandleFunc("POST /ui", s.handleUIPost)
+	guest.HandleFunc("/settings/{path...}", s.handleGuestSettings)
 	if s.proxy != nil {
 		guest.HandleFunc("/proxy/{provider}/{path...}", s.handleProxy)
 	}
