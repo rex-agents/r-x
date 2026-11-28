@@ -362,6 +362,15 @@ func cpCommand() *cobra.Command {
 	return c
 }
 
+// funnelRemoveArgv builds the argv that runs funnel remove on a remote host: NAME, then PORT or --all.
+func funnelRemoveArgv(name string, port int, all bool) []string {
+	argv := []string{"funnel", "remove", name}
+	if all {
+		return append(argv, "--all")
+	}
+	return append(argv, strconv.Itoa(port))
+}
+
 func funnelCommand() *cobra.Command {
 	c := &cobra.Command{Use: "funnel", Short: "expose ports in guests to the internet with Tailscale Funnel"}
 	var host string
@@ -403,7 +412,7 @@ func funnelCommand() *cobra.Command {
 				return errors.New("Name a port, or pass --all")
 			}
 			if handled, err := Route("funnel", args[0], host, func(h string, _ contract.Entry) error {
-				return RunOnHost(h, append([]string{"funnel", "remove"}, args...), 5*time.Minute)
+				return RunOnHost(h, funnelRemoveArgv(args[0], port, all), 5*time.Minute)
 			}); handled {
 				return err
 			}
