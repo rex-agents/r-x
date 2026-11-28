@@ -101,6 +101,8 @@ const (
 	EventThreadEvent  = "thread.event"
 	EventThreadStatus = "thread.status"
 	EventPackClients  = "pack.clients" // payload: []ClientInfo, sent when the set changes
+	EventTheme        = "theme"        // payload: ThemeInfo, sent when the theme changes
+	EventPersona      = "persona"      // payload: Persona, sent when the name or mascot changes
 )
 
 // PackEvent is the envelope of every SSE event on GET /api/pack/stream. There is one form:

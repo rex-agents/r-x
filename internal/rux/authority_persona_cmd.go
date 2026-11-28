@@ -18,19 +18,30 @@ import (
 
 // callAuthority sends one API request to the local authority and decodes the answer. A failure
 // comes back as the authority's own explanation.
+// Inside a thread's guest it goes through the runner listener's /settings (theme.go), which
+// allows only the settings agents may change.
 func callAuthority(method, path string, in, out any) error {
-	base, err := ensureAuthority()
-	if err != nil {
-		return err
+	target, bearer := "", ""
+	if base, q, tok, ok := guestSettingsBase(); ok && strings.HasPrefix(path, "/api/") {
+		target, bearer = base+strings.TrimPrefix(path, "/api")+q, tok
+	} else {
+		base, err := ensureAuthority()
+		if err != nil {
+			return err
+		}
+		target = strings.TrimRight(base, "/") + path
 	}
 	var body io.Reader
 	if in != nil {
 		b, _ := json.Marshal(in)
 		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, strings.TrimRight(base, "/")+path, body)
+	req, err := http.NewRequest(method, target, body)
 	if err != nil {
 		return err
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")

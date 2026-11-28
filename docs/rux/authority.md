@@ -131,6 +131,9 @@ The web app shows the same steps full-screen. `rux agent` runs the same screen b
 when the authority has no name and there is a terminal. The name shows in the TUI header and the web
 app's header, and is what the harness lead calls itself; see [serve](serve.md#your-authoritys-name-and-mascot-first-run).
 
+Settings change all of this later, along with the **theme** (`GET|PUT|DELETE /api/theme`, saved in
+`theme.json`, published as `theme` and `persona` events on the pack feed); see [settings and themes](theming.md).
+
 ## Rex is optional: the rex rox hook
 
 rox must not assume a Rex server on every host or guest. Everything Rex moves behind rox's hook

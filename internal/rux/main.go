@@ -76,6 +76,8 @@ func Main(version string, args []string) int {
 		runTool(os.Args[2:])
 	case "sandbox":
 		runSandbox(os.Args[2:])
+	case "theme":
+		runTheme(os.Args[2:])
 	case "agent":
 		if hasFlag(os.Args[2:], "--headless") {
 			runHeadless(without(os.Args[2:], "--headless")) // the harness without a UI, in stream-json
@@ -170,6 +172,7 @@ func help(w io.Writer) {
 			{"rux quorum create|invite|join HOST CODE|leave|status|promote HOST|policy", "join authorities into a pack (see docs/rux/quorum.md)"},
 			{"rux authority start|stop|status|logs", "the daemon: web app, threads in rox guests, model proxy (rux serve is a hidden alias of start --foreground)"},
 			{"rux authority rename|mascot", "name your authority; draw a custom mascot from a description (--reset: back to the T-rex)"},
+			{"rux theme [use PRESET|set TOKEN=#hex...|reset]", "show or change how every rux screen looks (web app and TUIs); works from a thread too"},
 		}},
 		{"Tools for agents", []cmd{
 			{"rux share FILE... [--caption TEXT]", "show files in the thread (images and videos inline)"},

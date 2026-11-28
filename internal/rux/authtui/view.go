@@ -63,6 +63,8 @@ func (m *Model) View() string {
 		body = m.threadView(bodyH)
 	case m.tab == tabMonitor:
 		body = m.monitorView(bodyH)
+	case m.tab == tabSettings:
+		body = m.settingsView(bodyH)
 	default:
 		body = m.packView(bodyH)
 	}
@@ -147,6 +149,9 @@ func (m *Model) banners() []string {
 }
 
 func (m *Model) breadcrumb() string {
+	if m.tab == tabSettings {
+		return stDim.Render("settings")
+	}
 	if m.tab == tabMonitor {
 		var parts []string
 		for c := 0; c <= m.mfocus; c++ {
@@ -169,7 +174,7 @@ func (m *Model) breadcrumb() string {
 }
 
 func chip(k, label string) string {
-	return lipgloss.NewStyle().Foreground(hText).Background(lipgloss.Color("237")).Padding(0, 1).Render(k) + " " + stDim.Render(label)
+	return lipgloss.NewStyle().Foreground(hText).Background(transcript.ChipBg).Padding(0, 1).Render(k) + " " + stDim.Render(label)
 }
 
 func (m *Model) footer() string {
@@ -198,6 +203,8 @@ func (m *Model) footer() string {
 		chips = []string{chip("enter", "send"), esc, chip("ctrl+e", "expand"), chip("↑↓", "scroll"), chip("tab", "monitor"), chip("ctrl+c", "quit")}
 	case m.tab == tabMonitor:
 		chips = m.monitorChips()
+	case m.tab == tabSettings:
+		chips = m.settingsChips()
 	default:
 		chips = []string{chip("←↑↓→", "move"), chip("enter", "open"), chip("n", "new thread"), chip("p", "new project"), chip("tab", "monitor"),
 			chip("a", map[bool]string{true: "hide archived", false: "archived"}[m.archived]), chip("?", "help"), chip("q", "quit")}
@@ -486,5 +493,5 @@ func (m *Model) monitorChips() []string {
 			chips = append(chips, chip("s", sl), chip("d", "down"))
 		}
 	}
-	return append(chips, chip("tab", "pack"), chip("?", "help"), chip("q", "quit"))
+	return append(chips, chip("tab", "settings"), chip("?", "help"), chip("q", "quit"))
 }

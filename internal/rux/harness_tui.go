@@ -772,7 +772,7 @@ func (m *harnessModel) agentStrip() string {
 }
 
 func button(label string, primary bool) string {
-	st := lipgloss.NewStyle().Padding(0, 1).Foreground(transcript.Text).Background(lipgloss.Color("237"))
+	st := lipgloss.NewStyle().Padding(0, 1).Foreground(transcript.Text).Background(transcript.ChipBg)
 	if primary {
 		st = st.Foreground(lipgloss.Color("#1a1a1a")).Background(transcript.Pink).Bold(true)
 	}

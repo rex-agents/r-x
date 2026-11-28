@@ -68,6 +68,7 @@ Threads are grouped in [projects with managers](projects-and-managers.md). In a 
 | `~/.rux/authority.sock` | the same HTTP API on a unix socket (mode 0600, trusted like loopback, so `--allow-user` doesn't apply) |
 | `~/.rux/authority.log` | output of a detached daemon |
 | `~/.rux/authority.json` | `{"name": "jarvis", "vault": "local"}`. The first-run setup sets `name` (see [below](#your-authoritys-name-and-mascot-first-run)); until then the pack uses the host name. `vault` is the default [vault source](credentials.md#the-model-proxy) |
+| `~/.rux/theme.json` | the theme: `{"preset": "matrix", "colors": {"accent": "#ff8a3d"}}`; no file is the default. See [settings and themes](theming.md) |
 | `~/.rux/mascot.json` | the custom mascot, if you made one |
 
 Go code (the TUI) calls `rux.EnsureAuthority()` to start the daemon if needed and get its base URL, or

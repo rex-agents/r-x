@@ -32,12 +32,13 @@ type tab int
 const (
 	tabPack tab = iota
 	tabMonitor
+	tabSettings
 	// tabThread is an open conversation (a thread, a project's manager or a sub-agent). It has no
 	// header tab: the header shows it as a crumb after PACK.
 	tabThread
 )
 
-var tabNames = []string{"PACK", "MONITOR"}
+var tabNames = []string{"PACK", "MONITOR", "SETTINGS"}
 
 // Messages.
 type (
@@ -112,8 +113,10 @@ type Model struct {
 	downAsk *guestAsk // the "down this guest? y/n" prompt on the MONITOR tab
 	home    string    // the authority's home directory, once the directory browser has said
 	help    bool
-	persona authapi.Persona // the authority's name and mascot, once fetched
-	setup   *setup          // the first-run screen, until the authority has a name
+	persona authapi.Persona   // the authority's name and mascot, once fetched
+	theme   authapi.ThemeInfo // the authority's theme, once fetched
+	set     *settings         // the SETTINGS tab
+	setup   *setup            // the first-run screen, until the authority has a name
 
 	feed   chan tea.Msg
 	cancel context.CancelFunc
@@ -155,7 +158,7 @@ func New(c *Client, o Options) *Model {
 		events:   map[string][]StoredEvent{},
 		input:    in, vp: viewport.New(80, 20), follow: true,
 		tr: transcript.New(), expanded: map[string]map[int]bool{}, zones: map[string]func(){},
-		feed: make(chan tea.Msg, 256),
+		feed: make(chan tea.Msg, 256), set: newSettings(),
 	}
 }
 
@@ -179,7 +182,7 @@ func (m *Model) Init() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	go m.follow_(ctx)
-	return tea.Batch(m.fetchPack(), m.fetchPersona(), m.fetchProjects(), m.waitFeed(), tick(), m.tr.Spin.Tick)
+	return tea.Batch(m.fetchPack(), m.fetchPersona(), m.fetchTheme(), m.fetchProjects(), m.waitFeed(), tick(), m.tr.Spin.Tick)
 }
 
 func tick() tea.Cmd {
@@ -296,6 +299,16 @@ func (m *Model) applyFeed(e SSE) tea.Cmd {
 			if !found {
 				m.pack.Authorities = append(m.pack.Authorities, a)
 			}
+		}
+	case authapi.EventTheme:
+		var t authapi.ThemeInfo
+		if json.Unmarshal(data, &t) == nil {
+			m.applyTheme(t)
+		}
+	case authapi.EventPersona:
+		var p authapi.Persona
+		if json.Unmarshal(data, &p) == nil && p.Setup {
+			m.persona = p
 		}
 	case authapi.EventPackClients:
 		var cs []authapi.ClientInfo

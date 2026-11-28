@@ -48,7 +48,7 @@ The columns:
 | `enter` | on a thread or a project's manager: open its conversation; on a project with no manager: open its empty conversation, where `enter` starts one; elsewhere: step into the next column |
 | `n` | new thread in the selected project |
 | `p` | new project, from GitHub or a local directory |
-| `tab` | PACK ↔ MONITOR (`1` `2` jump to PACK, MONITOR) |
+| `tab` | PACK → MONITOR → SETTINGS (`1` `2` `3` jump to each) |
 | `a` | show or hide archived threads |
 | `?` | help |
 | `esc` | leave the conversation or a dialog |
@@ -103,6 +103,11 @@ MONITOR has three columns in the same card style, from the same feed. `←` `→
 With a guest selected, `s` sleeps it and `d` downs it (after a `down NAME (thread ID)? y/n` prompt in the footer). *Sleep* stops the guest and keeps its disk, like `rox stop` and the server's idle sleep; on a stopped guest `s` wakes it (`rox start`). *Down* removes the guest, like `rox down`. A guest that a thread uses goes through the thread's own sleep, wake and destroy path, so the thread's status stays right; a spare guest with no thread goes straight to rox. Downing a guest whose thread is mid-turn says so in the prompt. The web app's monitor has the same buttons on each guest card.
 
 The TUI identifies itself to the authority with `X-Rux-Client: tui` and `X-Rux-Device: <host name>` on its pack stream, which is how it shows up as a client.
+
+### Settings
+
+The **SETTINGS** tab renames the authority, draws a new mascot (or goes back to the T-rex) and picks
+the theme: `↑` `↓` to move, `enter` to change. See [settings and themes](theming.md).
 
 ## One API, two clients
 

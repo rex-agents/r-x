@@ -6,7 +6,8 @@ import (
 	"github.com/rex-agents/r-x/internal/rux/transcript"
 )
 
-// rux's palette, shared with the agent harness through package transcript.
+// rux's palette, shared with the agent harness through package transcript. A theme change
+// (transcript.ApplyTheme) recolors it: syncPalette copies the new colors here.
 var (
 	hViolet  = transcript.Violet
 	hAccent  = transcript.Accent
@@ -22,6 +23,15 @@ var (
 	stBold   = transcript.StBold
 	stText   = transcript.StText
 )
+
+func init() { transcript.OnTheme(syncPalette) }
+
+func syncPalette() {
+	hViolet, hAccent, hGreen, hYellow, hRed = transcript.Violet, transcript.Accent, transcript.Green, transcript.Yellow, transcript.Red
+	hDim, hFaint, hText = transcript.Dim, transcript.Faint, transcript.Text
+	stDim, stFaint, stAccent, stBold, stText = transcript.StDim, transcript.StFaint, transcript.StAccent, transcript.StBold, transcript.StText
+	stGit = lipgloss.NewStyle().Foreground(hGreen)
+}
 
 func statusColor(s string) lipgloss.Color {
 	switch s {
