@@ -1460,7 +1460,8 @@ function showMonitor() {
         h("span", {}, g.name, auths.length > 1 && !packSel.host ? h("span", { class: "tag-kind" }, a.name) : null),
         g.phase || "-", g.backend || "-", (g.cpu || 0).toFixed(1) + "%",
         h("span", {}, `${fmtGB(g.mem_bytes)}/${fmtGB(g.mem_limit)}`, h("div", { class: "mbar" }, h("i", { style: `width:${(frac * 100).toFixed(1)}%` }))),
-        g.thread ? titles.get(g.thread) || g.thread : "-");
+        g.thread ? titles.get(g.thread) || g.thread : "-",
+        guestActions(g, a, threadStatus.get(g.thread)));
     }));
     const scroll = mon.scrollTop;
     mon.replaceChildren(h("div", { class: "mon-in" },
