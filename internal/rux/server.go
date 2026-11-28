@@ -398,6 +398,9 @@ func openThread(dir string, meta *threadMeta) (*thread, error) {
 		var se storedEvent
 		if json.Unmarshal(line, &se) == nil {
 			t.rseq = max(t.rseq, se.RSeq)
+			if se.Src == "rux" && bytes.Contains(se.Ev, []byte(`"rux_reprovision"`)) {
+				t.rseq = 0 // a new guest's runner counts from 1
+			}
 			if se.TS > 0 {
 				t.meta.Updated = time.UnixMilli(se.TS)
 			}
@@ -881,7 +884,7 @@ func (s *server) sendToRunner(w http.ResponseWriter, r *http.Request, m wireMsg)
 	}
 	waking, err := s.enqueueUser(t, m, false)
 	switch {
-	case errors.Is(err, errNoRunner):
+	case errors.Is(err, errNoRunner), errors.Is(err, errGuestGone):
 		httpErr(w, 409, err.Error())
 	case err != nil:
 		httpErr(w, 500, "saving the message: "+err.Error())

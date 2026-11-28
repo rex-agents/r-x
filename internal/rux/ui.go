@@ -212,7 +212,12 @@ func (s *server) handleUIAnswer(w http.ResponseWriter, r *http.Request) {
 		writeJSONResp(w, 202, map[string]bool{"ok": true})
 		return
 	}
-	if t.send == nil {
+	lost := t.meta.Status == "lost"
+	if lost && t.meta.SharedGuest {
+		httpErr(w, 409, errGuestGone.Error())
+		return
+	}
+	if t.send == nil && !lost {
 		httpErr(w, 409, "the thread's runner isn't connected")
 		return
 	}
@@ -233,5 +238,8 @@ func (s *server) handleUIAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t.appendLocked("rux", 0, ruxEv("rux_ui_answer", "ui", ui, "action", req.Action, "params", req.Params, "state", req.State))
+	if lost {
+		go s.reprovision(t) // waits for t.mu
+	}
 	writeJSONResp(w, 202, map[string]bool{"ok": true})
 }
