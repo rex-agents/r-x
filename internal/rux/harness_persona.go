@@ -58,3 +58,14 @@ func firstRunSetup() {
 	}
 	_, _, _ = authtui.RunSetup(url, authtui.Options{Logo: trexLogo, Mascot: mascotLogo})
 }
+
+// leadRef is the lead as a sentence refers to it: its name, else "the lead".
+func (r *hrun) leadRef() string { return cmpOr(r.name, "the lead") }
+
+// leadSubject is who a sub-agent's prompt says gave it its task.
+func (r *hrun) leadSubject() string {
+	if r.name == "" {
+		return "The lead agent"
+	}
+	return r.name + " (the lead agent)"
+}

@@ -181,7 +181,7 @@ type harnessModel struct {
 
 func newHarnessModel(r *hrun) *harnessModel {
 	ta := textarea.New()
-	ta.Placeholder = "Tell " + r.leadName() + " what to do"
+	ta.Placeholder = "Tell " + r.leadRef() + " what to do"
 	ta.ShowLineNumbers = false
 	ta.Prompt = ""
 	ta.CharLimit = 0
@@ -531,7 +531,7 @@ func (m *harnessModel) refresh() {
 	}
 	a := m.selected()
 	if a.Role == "lead" {
-		m.input.Placeholder = "Tell " + m.r.leadName() + " what to do"
+		m.input.Placeholder = "Tell " + m.r.leadRef() + " what to do"
 	} else {
 		m.input.Placeholder = "Message " + a.Display()
 	}
@@ -634,7 +634,7 @@ func (m *harnessModel) welcome() string {
 			m.click("w:keys", key("?"), func() tea.Cmd { m.panel = panelShortcuts; return nil })+transcript.StDim.Render(" for shortcuts"),
 		"",
 		bar.Render(lipgloss.JoinVertical(lipgloss.Left,
-			transcript.StDim.Render("Tell "+r.leadName()+" what to do. It plans, then starts"),
+			transcript.StDim.Render("Tell "+r.leadRef()+" what to do. It plans, then starts"),
 			transcript.StDim.Render("sub-agents in their own rox guests."),
 			"",
 			strings.Join(info, "\n"),

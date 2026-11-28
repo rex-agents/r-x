@@ -200,7 +200,7 @@ func (r *hrun) subSystem(name string, s *subInfo) string {
 	if s.Repo != "" {
 		repo = "It holds a clone of " + s.Repo + ", on a new branch rux/" + name + " made from " + cmpOr(s.Branch, "the default branch") + "."
 	}
-	return `You are ` + name + `, a sub-agent in rux. ` + r.leadName() + ` (the lead agent) gave you a task, and you work on it alone in a
+	return `You are ` + name + `, a sub-agent in rux. ` + r.leadSubject() + ` gave you a task, and you work on it alone in a
 sandboxed Linux guest (a rox guest) with a shell and file tools. ` + where + ` ` + repo + `
 
 - Work until the task is done: read the code, make the change, and check it (build, tests, run it).
