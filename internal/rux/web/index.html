@@ -1420,7 +1420,7 @@ function showMonitor() {
     const head = (...cells) => h("div", { class: "mrow mhead" }, ...cells.map(c => h("span", {}, c)));
     const none = (t) => h("div", { class: "pnote" }, t);
 
-    const clientRows = clients.map(c => row({}, h("span", { class: "tag-kind" }, c.kind === "tui" ? "TUI" : c.kind === "web" ? "web" : c.kind || "?"), c.device || "?", c.authority || "-", c.last_seen ? ago(c.last_seen) + " ago" : "-"));
+    const clientRows = clients.map(c => row({}, h("span", { class: "tag-kind" }, c.kind === "tui" ? "TUI" : c.kind === "web" ? "web" : c.kind || "?"), c.device || "?", c.authority || "-", c.last_seen ? (ago(c.last_seen) === "now" ? "just now" : ago(c.last_seen) + " ago") : "-"));
     const hostRows = auths.map(a => row({ cls: a.name === packSel.host ? " sel" : "", onclick: () => { packSel.host = packSel.host === a.name ? null : a.name; draw(); } },
       h("span", {}, h("span", { class: "dot " + packDot(a.status) }), " " + a.name, a.name === p.leader ? h("span", { class: "tag-kind" }, "★ leader") : null),
       a.status !== "up" ? a.status : a.host?.os || "?", a.status === "up" ? plural(a.host?.cpus || 0, "cpu") : "-", a.status === "up" ? "load " + (a.host?.load || 0).toFixed(1) : "-",
