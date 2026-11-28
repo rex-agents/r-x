@@ -29,6 +29,12 @@ func toAPIAuthority(a AuthorityInfo, withThreads bool) authapi.AuthorityInfo {
 	if withThreads {
 		out.Threads = decodeThreads(a)
 	}
+	for _, raw := range a.Guests {
+		var g authapi.GuestInfo
+		if json.Unmarshal(raw, &g) == nil {
+			out.Guests = append(out.Guests, g)
+		}
+	}
 	return out
 }
 
@@ -47,7 +53,13 @@ func decodeThreads(a AuthorityInfo) []authapi.ThreadSummary {
 }
 
 func toAPIPack(s PackSnapshot) authapi.Pack {
-	p := authapi.Pack{Leader: s.Leader, Term: s.Term, VaultHost: s.VaultHost, VaultOK: s.VaultOK, Degraded: s.Degraded, Authorities: []authapi.AuthorityInfo{}}
+	p := authapi.Pack{Leader: s.Leader, Term: s.Term, VaultHost: s.VaultHost, VaultOK: s.VaultOK, Degraded: s.Degraded, Authorities: []authapi.AuthorityInfo{}, Clients: []authapi.ClientInfo{}}
+	for _, raw := range s.Clients {
+		var c authapi.ClientInfo
+		if json.Unmarshal(raw, &c) == nil {
+			p.Clients = append(p.Clients, c)
+		}
+	}
 	for _, a := range s.Authorities {
 		p.Authorities = append(p.Authorities, toAPIAuthority(a, true))
 	}

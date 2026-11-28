@@ -74,6 +74,16 @@ func (s *server) quorumReport(ctx context.Context) quorum.Report {
 	h := s.localHost()
 	rep := quorum.Report{Host: quorum.HostInfo{OS: h.OS, CPUs: h.CPUs, Mem: h.Mem, Load: h.Load, GuestsMax: h.GuestsMax, GuestsUsed: h.GuestsUsed},
 		Threads: []json.RawMessage{}, Subagents: []json.RawMessage{}, Started: s.started.UTC().Format(time.RFC3339)}
+	for _, g := range s.localGuests() {
+		if b, err := json.Marshal(g); err == nil {
+			rep.Guests = append(rep.Guests, b)
+		}
+	}
+	for _, c := range s.clients.list() {
+		if b, err := json.Marshal(c); err == nil {
+			rep.Clients = append(rep.Clients, b)
+		}
+	}
 	for _, t := range s.threadSummaries() {
 		if b, err := json.Marshal(t); err == nil {
 			rep.Threads = append(rep.Threads, b)
@@ -250,8 +260,26 @@ type quorumPack struct {
 // Pack is the quorum's pack with sub-agents linked to their parents across authorities.
 func (p *quorumPack) Pack(ctx context.Context) (authapi.Pack, error) {
 	pk, err := p.PackAdapter.Pack(ctx)
+	p.mergeClients(&pk)
 	linkSubagents(&pk)
 	return pk, err
+}
+
+// mergeClients puts this authority's own live clients into the pack's, replacing what the
+// leader last heard of them, so a client shows up the moment it connects.
+func (p *quorumPack) mergeClients(pk *authapi.Pack) {
+	mine := p.s.clients.list()
+	have := map[string]bool{}
+	for _, c := range mine {
+		have[c.ID] = true
+	}
+	out := make([]authapi.ClientInfo, 0, len(pk.Clients)+len(mine))
+	for _, c := range pk.Clients {
+		if !have[c.ID] {
+			out = append(out, c)
+		}
+	}
+	pk.Clients = append(out, mine...)
 }
 
 func (p *quorumPack) Threads(ctx context.Context, authority string) ([]authapi.ThreadSummary, error) {
@@ -302,6 +330,22 @@ func (p *quorumPack) Subscribe(ctx context.Context) (<-chan authapi.PackEvent, e
 				}
 			}
 		}
+		lastClients := ""
+		clientsDiff := func() {
+			pk, err := p.Pack(ctx)
+			if err != nil {
+				return
+			}
+			if k := clientKey(pk.Clients); k != lastClients {
+				if lastClients != "" || len(pk.Clients) > 0 {
+					send(authapi.PackEvent{Type: authapi.EventPackClients, Data: pk.Clients})
+				}
+				lastClients = k
+			}
+		}
+		clientsDiff()
+		cw, stopCW := p.s.clients.watch()
+		defer stopCW()
 		diff()
 		tick := time.NewTicker(500 * time.Millisecond)
 		defer tick.Stop()
@@ -311,11 +355,15 @@ func (p *quorumPack) Subscribe(ctx context.Context) (<-chan authapi.PackEvent, e
 				return
 			case <-tick.C:
 				diff()
+				clientsDiff()
+			case <-cw:
+				clientsDiff()
 			case e, ok := <-qc:
 				if !ok {
 					return
 				}
 				if pk, isPack := e.Data.(authapi.Pack); isPack {
+					p.mergeClients(&pk)
 					linkSubagents(&pk)
 					e.Data = pk
 				}

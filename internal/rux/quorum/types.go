@@ -48,6 +48,8 @@ type Report struct {
 	Subagents []json.RawMessage `json:"subagents"`
 	Term      uint64            `json:"term"`
 	Started   string            `json:"started,omitempty"` // RFC 3339 time the authority started
+	Guests    []json.RawMessage `json:"guests,omitempty"`  // authapi.GuestInfo, opaque here
+	Clients   []json.RawMessage `json:"clients,omitempty"` // authapi.ClientInfo of the UIs connected to this authority
 }
 
 // AuthorityInfo is one authority in the pack view (GET /api/pack "authorities").
@@ -60,6 +62,7 @@ type AuthorityInfo struct {
 	Started   string            `json:"started,omitempty"`
 	Threads   []json.RawMessage `json:"threads,omitempty"`
 	Subagents []json.RawMessage `json:"subagents,omitempty"`
+	Guests    []json.RawMessage `json:"guests,omitempty"`
 }
 
 // PackSnapshot is the pack view (GET /api/pack).
@@ -71,6 +74,8 @@ type PackSnapshot struct {
 	VaultOK     bool            `json:"vault_ok"`
 	Degraded    bool            `json:"degraded,omitempty"`
 	Authorities []AuthorityInfo `json:"authorities"`
+	// Clients are the UIs connected to any online authority (authapi.ClientInfo, opaque here).
+	Clients []json.RawMessage `json:"clients,omitempty"`
 }
 
 // PackDelta is one change on the pack stream. Type is "pack" (Pack is a full snapshot, sent

@@ -58,6 +58,9 @@ type server struct {
 	pack         PackSource // see authority_pack.go
 	packAdapter  PackSource // the quorum's view, once this authority is in a pack
 	packLocal    PackSource
+	clients      clientRegistry
+	guestLister  func() []roxGuest      // tests: the host's rox guests
+	guestStats   func() []containerStat // tests: their CPU and memory
 	vaults       map[string]VaultSource // by name: "local", and "leader" once a quorum adds it
 	vaultDefault string                 // the vault source threads use unless they say otherwise
 	proxy        *modelProxy
