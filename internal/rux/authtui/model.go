@@ -46,6 +46,11 @@ type (
 		id  string
 		evs []StoredEvent
 	}
+	mgrStartedMsg struct {
+		mgr *mgrConv
+		id  string
+		err error
+	}
 	createdMsg struct {
 		id  string
 		err error
@@ -92,6 +97,7 @@ type Model struct {
 	expanded  map[string]map[int]bool
 	zones     map[string]func() // clickable entries of the frame
 
+	mgr   *mgrConv // a project's manager conversation that has no thread yet
 	form  *newForm
 	pform *projForm // the new-project modal
 	home  string    // the authority's home directory, once the directory browser has said
@@ -99,6 +105,15 @@ type Model struct {
 
 	feed   chan tea.Msg
 	cancel context.CancelFunc
+}
+
+// mgrConv is the conversation with a project's manager before the manager exists: empty
+// until the first message is sent, then starting until the API returns the thread.
+type mgrConv struct {
+	project, name string
+	text          string // the first message, once sent
+	starting      bool
+	err           string
 }
 
 type newForm struct {
@@ -109,7 +124,6 @@ type newForm struct {
 	choices   []string
 	project   string
 	projLabel string
-	manager   bool // starts the project's manager instead of a thread
 }
 
 // New returns the TUI model for the authority behind c.
