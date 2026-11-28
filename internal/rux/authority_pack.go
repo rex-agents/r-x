@@ -127,6 +127,9 @@ func (p *localPack) Subscribe(ctx context.Context) (<-chan authapi.PackEvent, er
 		tick := time.NewTicker(3 * time.Second)
 		defer tick.Stop()
 		var last []byte
+		cw, stopCW := p.s.clients.watch()
+		defer stopCW()
+		lastClients := clientKey(p.s.clients.list())
 		for {
 			select {
 			case <-ctx.Done():
@@ -138,6 +141,15 @@ func (p *localPack) Subscribe(ctx context.Context) (<-chan authapi.PackEvent, er
 				select {
 				case out <- ev:
 				default:
+				}
+			case <-cw:
+				cs := p.s.clients.list()
+				if k := clientKey(cs); k != lastClients {
+					lastClients = k
+					select {
+					case out <- authapi.PackEvent{Type: authapi.EventPackClients, Data: cs}:
+					default:
+					}
 				}
 			case <-tick.C:
 				info := p.s.localAuthority()
@@ -222,6 +234,7 @@ func (s *server) localAuthority() authapi.AuthorityInfo {
 	return authapi.AuthorityInfo{
 		Name: s.authName(), URL: s.selfURL, Status: "up", Host: s.localHost(), Local: true, Started: s.started.UTC().Format(time.RFC3339),
 		Threads: s.threadSummaries(),
+		Guests:  s.localGuests(),
 	}
 }
 
@@ -229,7 +242,7 @@ func (s *server) localPackView() authapi.Pack {
 	name := s.authName()
 	return authapi.Pack{
 		Leader: name, Term: 0, VaultHost: name, VaultOK: true,
-		Authorities: []authapi.AuthorityInfo{s.localAuthority()},
+		Authorities: []authapi.AuthorityInfo{s.localAuthority()}, Clients: s.clients.list(),
 	}
 }
 
@@ -282,7 +295,7 @@ func (s *server) summarize(m threadMeta, cost float64, subs []authapi.SubAgentSu
 		ID: m.ID, Project: m.Project, Title: m.Title, Status: status, Archived: m.Archived,
 		Authority: s.authName(), Guest: m.Guest, Placement: authapi.Placement{Local: m.Backend == "local", Authority: s.authName()},
 		SubAgents: subs, Cost: cost, Updated: m.Updated.UTC().Format(time.RFC3339),
-		Parent: m.Parent, ParentAuthority: parentAuth,
+		Parent: m.Parent, ParentAuthority: parentAuth, Kind: m.Kind,
 	}
 }
 
@@ -348,6 +361,12 @@ func (s *server) handlePackStream(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 500, "streaming unsupported")
 		return
 	}
+	id, gone := s.clients.add(s.clientOf(r))
+	defer gone()
+	monitorWatchers.Add(1) // the pack view shows guest CPU and memory
+	defer monitorWatchers.Add(-1)
+	s.clientsChanged()
+	defer s.clientsChanged()
 	src := s.packSource()
 	ch, err := src.Subscribe(r.Context())
 	if err != nil {
@@ -378,6 +397,7 @@ func (s *server) handlePackStream(w http.ResponseWriter, r *http.Request) {
 			}
 			send(ev)
 		case <-keep.C:
+			s.clients.touch(id)
 			fmt.Fprint(w, ": keepalive\n\n")
 			fl.Flush()
 		case <-r.Context().Done():
@@ -429,5 +449,12 @@ func (s *server) subAgent(h http.HandlerFunc) http.HandlerFunc {
 		}
 		r.SetPathValue("id", child.meta.ID)
 		h(w, r)
+	}
+}
+
+// clientsChanged makes a member tell the leader about its clients now.
+func (s *server) clientsChanged() {
+	if s.node != nil && s.node.InPack() {
+		s.node.NotifyChange()
 	}
 }

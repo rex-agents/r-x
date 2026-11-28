@@ -59,7 +59,7 @@ func (h *packHub) infoLocked(name string, url string) AuthorityInfo {
 	}
 	info := AuthorityInfo{Name: name, URL: url, Status: h.status(e), Local: self}
 	if e != nil {
-		info.Host, info.Threads, info.Subagents, info.Started = e.rep.Host, e.rep.Threads, e.rep.Subagents, e.rep.Started
+		info.Host, info.Threads, info.Subagents, info.Started, info.Guests = e.rep.Host, e.rep.Threads, e.rep.Subagents, e.rep.Started, e.rep.Guests
 	}
 	return info
 }
@@ -77,6 +77,7 @@ func (h *packHub) leaderSnapshotLocked() PackSnapshot {
 	for _, name := range names {
 		snap.Authorities = append(snap.Authorities, h.infoLocked(name, cfg.Members[name].URL))
 	}
+	snap.Clients = h.clientsLocked(snap.Authorities)
 	snap.VaultOK = cfg.VaultHost == n.Name()
 	for _, a := range snap.Authorities {
 		if a.Name == cfg.VaultHost {
@@ -90,6 +91,7 @@ func (h *packHub) localOnlyLocked(degraded bool) PackSnapshot {
 	n := h.n
 	name := n.Name()
 	snap := PackSnapshot{Seq: h.seq, Degraded: degraded, VaultOK: true, Authorities: []AuthorityInfo{h.infoLocked(name, n.cfg.AdvertiseURL)}}
+	snap.Clients = h.local.Clients
 	if st := n.getState(); st != nil {
 		snap.VaultHost = n.fsm.get().VaultHost
 		snap.VaultOK = snap.VaultHost == name
@@ -312,10 +314,31 @@ func (n *Node) pushReport(ctx context.Context) {
 // The raw JSON inside threads is never modified, so it stays shared.
 func cloneSnapshot(s PackSnapshot) PackSnapshot {
 	s.Authorities = append([]AuthorityInfo(nil), s.Authorities...)
+	s.Clients = append([]json.RawMessage(nil), s.Clients...)
 	for i := range s.Authorities {
 		a := &s.Authorities[i]
 		a.Threads = append([]json.RawMessage(nil), a.Threads...)
 		a.Subagents = append([]json.RawMessage(nil), a.Subagents...)
+		a.Guests = append([]json.RawMessage(nil), a.Guests...)
 	}
 	return s
+}
+
+// clientsLocked lists the UIs connected to every online authority, as each reported them.
+// A UI is connected to one authority, so none appears twice.
+func (h *packHub) clientsLocked(auths []AuthorityInfo) []json.RawMessage {
+	var out []json.RawMessage
+	for _, a := range auths {
+		if a.Status != "online" {
+			continue
+		}
+		var rep Report
+		if a.Name == h.n.Name() {
+			rep = h.local
+		} else if e := h.reports[a.Name]; e != nil {
+			rep = e.rep
+		}
+		out = append(out, rep.Clients...)
+	}
+	return out
 }
