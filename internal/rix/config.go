@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -56,7 +57,13 @@ type Agent struct {
 	// Credential maps a credential setting to its file, at most one.
 	Credential map[string]string
 	Sync       Sync
+	// Version pins the agent rox installs when a project asks for the latest release; "" means latest.
+	Version string
 }
+
+// VersionPattern matches agent versions such as 1.2.3 or 1.2.3-beta.1. Nothing else is
+// accepted, since a version reaches the guest installer.
+var VersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`)
 
 // Config is rix's config, ~/.config/rix/config.json, kept as JSON so unknown keys survive.
 type Config struct {
@@ -132,6 +139,10 @@ func (c *Config) GitKeys() ([]string, bool, error) {
 	list, ok := raw.([]any)
 	if !ok {
 		return nil, true, fmt.Errorf("Expected a list of Git key paths in %s", c.Path)
+	}
+	if len(list) == 0 {
+		// An empty list is how older versions left the config after removing the last key.
+		return nil, false, nil
 	}
 	var keys []string
 	for _, item := range list {
@@ -220,6 +231,13 @@ func (c *Config) Agents() (map[string]*Agent, error) {
 			return nil, err
 		} else {
 			agent.Sync = s
+		}
+		if v, present := settings["version"]; present && v != nil {
+			s, ok := v.(string)
+			if !ok || !VersionPattern.MatchString(s) {
+				return nil, fmt.Errorf("Expected a version such as 1.2.3 for agents.%s.version in %s", name, c.Path)
+			}
+			agent.Version = s
 		}
 		agents[name] = agent
 	}

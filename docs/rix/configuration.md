@@ -41,7 +41,7 @@ Unknown keys are preserved when rix rewrites the file.
 
 - `git_keys`, `git_known_hosts`: see [Git keys](git-keys.md). `git_agent`: see [the Git agent](git-agent.md).
 - `agents.claude` takes one of `token_file` or `api_key_file`; `agents.codex` one of `auth_file` or
-  `api_key_file`; both also `sync` and `version` (accepted, not used by rix). Anything else, or two credentials
+  `api_key_file`; both also `sync` and `version`. `version` (such as `1.2.3`) is the release rox installs when a project asks for the agent without pinning one; a version set in `.rox.json`, `.rox.local.json` or `--agents` wins, and unset means the latest release. Anything else, or two credentials
   for one agent, is an error. Credential files are read at push time, so rotating a token needs only `rix apply`.
 - `github` is `{"token_file": PATH}` or `{"off": true}`; absent means gh's login.
 - `updates`: `auto`, `notify` or `off`; the `RIX_UPDATES` environment variable overrides it

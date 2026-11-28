@@ -136,10 +136,12 @@ func keyCommand() *cobra.Command {
 					data["git_keys"] = append(kept, path)
 					changed = true
 				case !adding && present:
-					if kept == nil {
-						kept = []any{}
+					if len(kept) == 0 {
+						// No keys left is the same as never having set any: ssh's defaults.
+						delete(data, "git_keys")
+					} else {
+						data["git_keys"] = kept
 					}
-					data["git_keys"] = kept
 					changed = true
 				}
 				return nil

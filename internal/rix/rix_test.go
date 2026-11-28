@@ -226,3 +226,55 @@ func TestMigrate(t *testing.T) {
 		t.Errorf("snippet missing from %q", out.String())
 	}
 }
+
+func TestRemovingTheLastKeyRestoresDefaults(t *testing.T) {
+	dir := isolate(t)
+	key := secret(t, dir, "k", "key")
+	_ = os.MkdirAll(filepath.Join(dir, ".ssh"), 0o700)
+	secret(t, dir, ".ssh/id_ed25519", "default")
+	run := func(args ...string) {
+		t.Helper()
+		root := RootCommand("test", nil)
+		root.SetArgs(args)
+		if err := root.Execute(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run("key", "add", key)
+	c, _ := LoadConfig("")
+	if keys, configured, _ := c.GitKeys(); !configured || len(keys) != 1 {
+		t.Fatalf("after add: %v %v", keys, configured)
+	}
+	run("key", "remove", key)
+	c, _ = LoadConfig("")
+	if _, present := c.Data["git_keys"]; present {
+		t.Errorf("git_keys should be unset, got %v", c.Data["git_keys"])
+	}
+	keys, used, err := resolveKeys(c, nil)
+	if err != nil || !used || len(keys) != 1 || filepath.Base(keys[0]) != "id_ed25519" {
+		t.Errorf("resolved %v default=%v err=%v", keys, used, err)
+	}
+	// A config an older rix left with an empty list behaves the same.
+	writeConfig(t, map[string]any{"git_keys": []any{}})
+	c, _ = LoadConfig("")
+	if _, used, _ := resolveKeys(c, nil); !used {
+		t.Error("empty git_keys should mean ssh's defaults")
+	}
+}
+
+func TestAgentVersionConfig(t *testing.T) {
+	isolate(t)
+	writeConfig(t, map[string]any{"agents": map[string]any{"claude": map[string]any{"version": "1.2.3"}}})
+	c, _ := LoadConfig("")
+	agents, err := c.Agents()
+	if err != nil || agents["claude"].Version != "1.2.3" || agents["codex"].Version != "" {
+		t.Fatalf("agents %+v err=%v", agents, err)
+	}
+	for _, bad := range []any{"1.2.3; rm -rf /", "$(id)", "latest", "1.2", 5} {
+		writeConfig(t, map[string]any{"agents": map[string]any{"codex": map[string]any{"version": bad}}})
+		c, _ = LoadConfig("")
+		if _, err := c.Agents(); err == nil || !strings.Contains(err.Error(), "agents.codex.version") {
+			t.Errorf("version %v: %v", bad, err)
+		}
+	}
+}
