@@ -342,8 +342,13 @@ func (m *Model) previewLines(n *node, w int) []string {
 			lines = append(lines, kv(a.Name, a.Status))
 		}
 	case colProject:
-		if p, ok := m.projects[n.project]; ok && p.Repo != "" {
-			lines = append(lines, kv("repo", p.Repo))
+		if p, ok := m.projects[n.project]; ok {
+			if p.Dir != "" {
+				lines = append(lines, kv("dir", tildePath(p.Dir, m.home)))
+			}
+			if p.Repo != "" {
+				lines = append(lines, kv("repo", p.Repo))
+			}
 		}
 		lines = append(lines, kv("threads", fmt.Sprint(n.threads)), kv("cost", fmt.Sprintf("$%.2f", n.cost)))
 		if n.noMgr {

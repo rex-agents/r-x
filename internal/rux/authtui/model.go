@@ -92,8 +92,10 @@ type Model struct {
 	expanded  map[string]map[int]bool
 	zones     map[string]func() // clickable entries of the frame
 
-	form *newForm
-	help bool
+	form  *newForm
+	pform *projForm // the new-project modal
+	home  string    // the authority's home directory, once the directory browser has said
+	help  bool
 
 	feed   chan tea.Msg
 	cancel context.CancelFunc

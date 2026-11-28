@@ -50,6 +50,8 @@ func (m *Model) View() string {
 	bodyH := m.h - len(out) - 1
 	var body []string
 	switch {
+	case m.pform != nil:
+		body = center(m.projFormView(), m.w, bodyH)
 	case m.form != nil:
 		body = center(m.formView(), m.w, bodyH)
 	case m.help:
@@ -186,6 +188,10 @@ func (m *Model) footer() string {
 	}
 	var chips []string
 	switch {
+	case m.pform != nil && m.pform.tab == projLocal:
+		chips = []string{chip("enter", "open"), chip("ctrl+a", "add"), chip("←", "up"), chip("tab", "github"), chip("esc", "cancel")}
+	case m.pform != nil:
+		chips = []string{chip("enter", "add"), chip("↑↓", "pick"), chip("tab", "local directory"), chip("esc", "cancel")}
 	case m.form != nil:
 		chips = []string{chip("enter", "create"), chip("tab", "field"), chip("ctrl+l", "local"), chip("esc", "cancel")}
 	case m.tab == tabThread:
@@ -197,7 +203,7 @@ func (m *Model) footer() string {
 	case m.tab == tabMonitor:
 		chips = []string{chip("←↑↓→", "move"), chip("enter", "open"), chip("tab", "pack"), chip("?", "help"), chip("q", "quit")}
 	default:
-		chips = []string{chip("←↑↓→", "move"), chip("enter", "open"), chip("n", "new thread"), chip("tab", "monitor"),
+		chips = []string{chip("←↑↓→", "move"), chip("enter", "open"), chip("n", "new thread"), chip("p", "new project"), chip("tab", "monitor"),
 			chip("a", map[bool]string{true: "hide archived", false: "archived"}[m.archived]), chip("?", "help"), chip("q", "quit")}
 	}
 	left := m.breadcrumb()
@@ -332,6 +338,7 @@ func (m *Model) helpView() string {
 		{"enter", "open a thread or a project's manager; start a missing manager; step into the next column"},
 		{"→ on a thread", "its sub-agents, read-only; enter opens one"},
 		{"n", "new thread in the selected project (VM by default)"},
+		{"p", "new project: from one of your GitHub repos, or from a git checkout on this machine (ctrl+a adds the highlighted folder)"},
 		{"tab / 1 2 3", "PACK / THREAD / MONITOR (clients, hosts, guests; enter on a guest opens its thread)"},
 		{"a", "show or hide archived threads"},
 		{"esc", "back to the pack"},
