@@ -46,7 +46,9 @@ type message struct{ from, text string }
 // transcript. It runs a turn for each batch of messages it gets.
 type Agent struct {
 	ID    string
-	Name  string
+	Name  string // the key everything finds an agent by; "lead" for the lead
+	// Label is what the UI calls the agent, when that isn't Name (the lead goes by its authority's name).
+	Label string
 	Role  string // lead or sub
 	Model string
 	Where string
@@ -655,4 +657,12 @@ func (s *agentSink) Approve(tool, label string) bool {
 		return false
 	}
 	return s.a.Approve(s.a, &Tool{Spec: ToolSpec{Name: tool}, Approve: true}, label)
+}
+
+// Display is the name to show for the agent: its Label, else its Name.
+func (a *Agent) Display() string {
+	if a.Label != "" {
+		return a.Label
+	}
+	return a.Name
 }

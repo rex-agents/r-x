@@ -169,6 +169,7 @@ func help(w io.Writer) {
 		{"Threads from your phone", []cmd{
 			{"rux quorum create|invite|join HOST CODE|leave|status|promote HOST|policy", "join authorities into a pack (see docs/rux/quorum.md)"},
 			{"rux authority start|stop|status|logs", "the daemon: web app, threads in rox guests, model proxy (rux serve is a hidden alias of start --foreground)"},
+			{"rux authority rename|mascot", "name your authority; draw a custom mascot from a description (--reset: back to the T-rex)"},
 		}},
 		{"Tools for agents", []cmd{
 			{"rux share FILE... [--caption TEXT]", "show files in the thread (images and videos inline)"},

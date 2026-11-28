@@ -239,7 +239,7 @@ func (s *server) handleSettings(w http.ResponseWriter, r *http.Request) {
 // settingsMsg is what the runner needs to start claude the way the thread and
 // its project say. Safe to call with the thread's lock held.
 func (s *server) settingsMsg(m *threadMeta) wireMsg {
-	return wireMsg{T: "settings", Info: map[string]string{"model": s.threadModel(m), "effort": m.Effort, "notes": s.projectNotes(m.Project), "project": s.projectName(m.Project)}}
+	return wireMsg{T: "settings", Info: map[string]string{"model": s.threadModel(m), "effort": m.Effort, "notes": s.projectNotes(m.Project), "project": s.projectName(m.Project), "authority": s.personaName()}}
 }
 
 func cmpOr(a, b string) string {

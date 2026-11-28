@@ -35,6 +35,7 @@ type runner struct {
 	allowedTools, stateDir   string
 	repo, branch, effort     string
 	notes                    string // project notes, appended to claude's system prompt
+	authority                string // the name of the authority this thread belongs to, for its system prompt
 	project                  string // project name
 	role                     string // "" for a worker, "manager" for a project's manager
 	modelProxy               string // the authority's base URL for /proxy/...; when set, claude gets it and the thread token instead of model keys
@@ -307,6 +308,11 @@ func (r *runner) handle(m wireMsg, reply func(wireMsg)) {
 	case "upgrade":
 		go r.upgrade()
 	case "settings":
+		if a := m.Info["authority"]; a != "" {
+			r.procMu.Lock()
+			r.authority = a
+			r.procMu.Unlock()
+		}
 		r.applySettings(m.Info["model"], m.Info["effort"], m.Info["notes"], m.Info["project"])
 	case "interrupt":
 		r.procMu.Lock()
@@ -431,6 +437,9 @@ func (r *runner) startClaude() error {
 	prompt := shareSystemPrompt + "\n\n" + spawnSystemPrompt
 	if r.role == "manager" {
 		prompt = strings.ReplaceAll(managerSystemPrompt, "PROJECT", cmpOr(r.project, "this project")) + "\n\n" + shareSystemPrompt
+	}
+	if r.authority != "" {
+		prompt = authorityLine(r.authority) + "\n\n" + prompt
 	}
 	if strings.TrimSpace(r.notes) != "" {
 		prompt += "\n\nNotes from the user for every thread in this project:\n" + r.notes
