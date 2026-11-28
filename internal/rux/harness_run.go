@@ -198,6 +198,7 @@ sandboxed Linux guest (a rox guest) with a shell and file tools. ` + where + ` `
 
 - Work until the task is done: read the code, make the change, and check it (build, tests, run it).
   Install what you need. You have no access to the user's machine.
+- Your git identity is already set; don't change git user.name/user.email.
 - Commit as you go. When done, push your branch: git push -u origin rux/` + name + `. Git signs in with the
   user's key through rix; never ask for credentials.
 - Messages from the lead or the user may arrive while you work; take them into account.

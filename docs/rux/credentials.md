@@ -60,7 +60,7 @@ This is for [`rux serve`](serve.md) threads:
 - The runner clones the repo inside the guest. Git there, for the clone and for anything Claude runs,
   uses `rux git-credential`, which fetches the token from `rux serve` when git needs it. `rux serve`
   asks rix for it, at most every five minutes. The token isn't written to the guest's disk or git
-  config. Commits use your GitHub name and noreply address.
+  config. Commits use your host `git config --global` name and email when both are set, else your GitHub name and noreply address. Guests started by `rox up` get the same identity from rix as their global Git config.
 - That token can reach everything the account can, so treat a guest like your own shell, or give rix
   a fine-grained token limited to the repositories agents work on. `rux serve --github=false` turns
   GitHub access off.
