@@ -133,6 +133,8 @@ func (s *server) handleManagerMessage(w http.ResponseWriter, r *http.Request) {
 	if m := s.managerFor(pid); m != nil {
 		_, err := s.enqueueUser(m, wireMsg{T: "user", Text: req.Text}, false)
 		switch {
+		case errors.Is(err, errGuestGone):
+			httpErr(w, 409, "the manager's guest is gone: "+err.Error())
 		case errors.Is(err, errNoRunner):
 			if m.view().Status == "failed" {
 				httpErr(w, 409, "the manager failed to start; remove it from the menu and try again")
@@ -396,6 +398,9 @@ func (s *server) callManagerTool(mgr *thread, name string, raw json.RawMessage) 
 				return nil, fmt.Errorf("text is required")
 			}
 			waking, err := s.enqueueUser(t, wireMsg{T: "user", Text: a.Text}, false)
+			if errors.Is(err, errGuestGone) {
+				return nil, fmt.Errorf("worker %s: %v", a.ThreadID, err)
+			}
 			if errors.Is(err, errNoRunner) {
 				return nil, fmt.Errorf("worker %s isn't connected (status %s)", a.ThreadID, t.view().Status)
 			}

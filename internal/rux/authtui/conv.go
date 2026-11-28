@@ -56,6 +56,8 @@ func decodeThread(evs []StoredEvent) threadData {
 			}
 		case "rux_interrupt":
 			r.Add(harness.Entry{Kind: "note", Text: "Interrupted"})
+		case "rux_guest_lost":
+			r.Add(harness.Entry{Kind: "note", Text: "guest gone · the next message starts a new one"})
 		case "rux_asleep":
 			r.Add(harness.Entry{Kind: "note", Text: "asleep · the guest is stopped until the next message"})
 		case "result":
@@ -86,7 +88,7 @@ func (d *threadData) snapshot(status string) harness.Snapshot {
 		snap.Status, snap.Detail = harness.Starting, status
 	case "failed":
 		snap.Status = harness.Failed
-	case "asleep", "sleeping", "destroyed":
+	case "asleep", "sleeping", "lost", "destroyed":
 		snap.Status = harness.Stopped
 	default:
 		snap.Status = harness.Waiting
