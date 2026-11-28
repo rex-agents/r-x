@@ -260,6 +260,10 @@ func TestPackEndToEnd(t *testing.T) {
 		t.Errorf("audit doesn't attribute the thread:\n%s", audit)
 	}
 	// A member the policy doesn't allow is refused, and the proxy says so without leaking anything.
+	if err := a.s.node.Deny(ctx, "c", quorum.DefaultAllow...); err != nil { // new members may read model keys by default
+		t.Fatal(err)
+	}
+	waitUntil(t, "policy on c", 10*time.Second, func() bool { return !c.s.node.Config().Policy.Allows("c", "ANTHROPIC_API_KEY") })
 	tokC := c.s.get(idC).meta.Token
 	req, _ = http.NewRequest("POST", c.guest.URL+"/proxy/anthropic/v1/messages", strings.NewReader("{}"))
 	req.Header.Set("x-api-key", tokC)

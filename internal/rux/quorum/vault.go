@@ -202,6 +202,7 @@ type LeaderVault struct {
 	noted    map[string]time.Time // thread\x00secret -> when the host last heard of its use
 	lastOK   time.Time
 	lastFail time.Time
+	failHost string // the vault host lastFail was about
 	now      func() time.Time
 }
 
@@ -251,7 +252,7 @@ func (v *LeaderVault) Get(ctx context.Context, thread, name string) (Secret, err
 		if errors.Is(err, ErrVaultDenied) || errors.Is(err, ErrSecretMissing) {
 			return Secret{}, err
 		}
-		v.lastFail = v.now()
+		v.lastFail, v.failHost = v.now(), host
 		return Secret{}, fmt.Errorf("%w: %s: %v", ErrVaultUnreachable, host, err)
 	}
 	v.lastOK = v.now()
@@ -330,7 +331,7 @@ func (v *LeaderVault) OK() bool {
 		return true
 	}
 	v.mu.Lock()
-	failed := v.lastFail.After(v.lastOK) && v.now().Sub(v.lastFail) < time.Minute
+	failed := v.failHost == host && v.lastFail.After(v.lastOK) && v.now().Sub(v.lastFail) < time.Minute
 	v.mu.Unlock()
 	if failed {
 		return false
