@@ -1,4 +1,4 @@
----
+`esc` | leave the conversation (interrupt it first, if it is working) or a dialog |---
 sidebar:
   order: 2
 ---
@@ -43,7 +43,7 @@ pack › mac › web app › fix the login bug     ←↑↓→ move  enter open
 
 ### Conversation (THREAD)
 
-`enter` on a thread opens it: the same events the web app's thread page shows (your messages, the agent's text, tool calls, `duration · turns · cost` when a turn ends), live. Type at the bottom and press `enter` to send a message (`POST /api/threads/{id}/messages`). `↑`/`↓`/`pgup`/`pgdown` scroll; `esc` returns to the graph.
+`enter` on a thread opens it. It looks and works like a thread in `rux agent`, with the same renderer: markdown text, tool calls with their results under `└`, a spinner and a "working… esc to interrupt" line, messages from other agents as `◂ name`, and errors in red. Type in the box at the bottom and press `enter` to send a message (`POST /api/threads/{id}/messages`). Click a tool call (or press `ctrl+e` for all of them) to open it. `↑`/`↓`/`pgup`/`pgdown`/`home`/`end` and the mouse wheel scroll. `esc` interrupts a working thread (`POST /api/threads/{id}/interrupt`) and, otherwise, returns to the graph; `tab` goes to the monitor. A sub-agent's conversation is read-only.
 
 ### New thread
 

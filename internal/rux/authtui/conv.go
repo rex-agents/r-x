@@ -3,214 +3,204 @@ package authtui
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/rex-agents/r-x/internal/harness"
 )
 
-// evSummary is a decoded thread event, reduced to what the TUI shows.
-type evSummary struct {
-	kind  string // user, text, tool, result, error, note
-	text  string
-	tool  string
-	turns int
-	ms    int64
-	cost  float64
-	file  string
+// threadData is a thread's stored events as the harness shows them, with the totals the
+// preview and the title line use.
+type threadData struct {
+	entries []harness.Entry
+	files   []string
+	ms      int64
+	turns   int64
+	cost    float64
 }
 
-// summarize turns one stored event into zero or more summaries, like the web app's thread page.
-func summarize(se StoredEvent) []evSummary {
-	var ev struct {
-		Type    string  `json:"type"`
-		Subtype string  `json:"subtype"`
-		Text    string  `json:"text"`
-		Name    string  `json:"name"`
-		Caption string  `json:"caption"`
-		Quiet   bool    `json:"quiet"`
-		IsError bool    `json:"is_error"`
-		Dur     int64   `json:"duration_ms"`
-		Turns   int     `json:"num_turns"`
-		Cost    float64 `json:"total_cost_usd"`
-		Message struct {
-			Content json.RawMessage `json:"content"`
-		} `json:"message"`
-	}
-	if json.Unmarshal(se.Ev, &ev) != nil {
-		return nil
-	}
-	switch ev.Type {
-	case "rux_user":
-		if strings.HasPrefix(ev.Text, "[rux] ") {
-			return []evSummary{{kind: "note", text: strings.TrimPrefix(ev.Text, "[rux] ")}}
+// worker names the agent a "[rux] worker ID ("name") ..." message comes from.
+var workerName = regexp.MustCompile(`^worker \S+ \("(.*?)"\)`)
+
+// decodeThread turns stored events into transcript entries. Claude Code's stream-json goes
+// through the harness's own parser; rux's events become user, note and error entries.
+func decodeThread(evs []StoredEvent) threadData {
+	var d threadData
+	var r harness.Replay
+	for _, se := range evs {
+		var ev map[string]any
+		if json.Unmarshal(se.Ev, &ev) != nil {
+			continue
 		}
-		return []evSummary{{kind: "user", text: ev.Text}}
-	case "rux_error":
-		return []evSummary{{kind: "error", text: ev.Text}}
-	case "rux_asset":
-		if ev.Quiet {
-			return nil
-		}
-		return []evSummary{{kind: "file", file: ev.Name, text: cmpOr(ev.Caption, ev.Name)}}
-	case "rux_interrupt":
-		return []evSummary{{kind: "note", text: "stopped"}}
-	case "rux_asleep":
-		return []evSummary{{kind: "note", text: "asleep · the guest is stopped until the next message"}}
-	case "assistant":
-		var parts []struct {
-			Type  string          `json:"type"`
-			Text  string          `json:"text"`
-			Name  string          `json:"name"`
-			Input json.RawMessage `json:"input"`
-		}
-		_ = json.Unmarshal(ev.Message.Content, &parts)
-		var out []evSummary
-		for _, p := range parts {
-			switch p.Type {
-			case "text":
-				if strings.TrimSpace(p.Text) != "" {
-					out = append(out, evSummary{kind: "text", text: strings.TrimSpace(p.Text)})
+		str := func(k string) string { s, _ := ev[k].(string); return s }
+		num := func(k string) float64 { f, _ := ev[k].(float64); return f }
+		switch str("type") {
+		case "rux_user":
+			text, from := str("text"), "you"
+			if rest, ok := strings.CutPrefix(text, "[rux] "); ok {
+				text, from = rest, "rux"
+				if m := workerName.FindStringSubmatch(rest); m != nil {
+					from = m[1]
 				}
-			case "tool_use":
-				out = append(out, evSummary{kind: "tool", tool: p.Name, text: toolArg(p.Input)})
 			}
+			r.Add(harness.Entry{Kind: "user", From: from, Text: text})
+		case "rux_error":
+			r.Add(harness.Entry{Kind: "error", Text: str("text")})
+		case "rux_asset":
+			if quiet, _ := ev["quiet"].(bool); !quiet {
+				d.files = append(d.files, str("name"))
+				r.Add(harness.Entry{Kind: "note", Text: "▤ " + cmpOr(str("caption"), str("name"))})
+			}
+		case "rux_interrupt":
+			r.Add(harness.Entry{Kind: "note", Text: "Interrupted"})
+		case "rux_asleep":
+			r.Add(harness.Entry{Kind: "note", Text: "asleep · the guest is stopped until the next message"})
+		case "result":
+			d.ms += int64(num("duration_ms"))
+			d.turns += int64(num("num_turns"))
+			d.cost += num("total_cost_usd")
+		default:
+			r.Event(ev)
 		}
-		return out
-	case "result":
-		return []evSummary{{kind: "result", turns: ev.Turns, ms: ev.Dur, cost: ev.Cost, text: ev.Subtype}}
 	}
-	return nil
+	d.entries = r.Entries
+	return d
 }
 
-func toolArg(in json.RawMessage) string {
-	var m map[string]any
-	if json.Unmarshal(in, &m) != nil {
-		return ""
-	}
-	for _, k := range []string{"command", "file_path", "path", "pattern", "url", "description", "query", "prompt"} {
-		if s, ok := m[k].(string); ok && s != "" {
-			return strings.Join(strings.Fields(s), " ")
-		}
-	}
-	b, _ := json.Marshal(m)
-	return string(b)
-}
-
-// wrap breaks s at word boundaries to width w.
-func wrap(s string, w int) []string {
-	w = max(w, 8)
-	var out []string
-	for _, para := range strings.Split(s, "\n") {
-		line := ""
-		for _, word := range strings.Fields(para) {
-			for lipgloss.Width(word) > w {
-				if line != "" {
-					out = append(out, line)
-					line = ""
-				}
-				out = append(out, ansi.Truncate(word, w, ""))
-				word = ansi.TruncateLeft(word, w, "")
-			}
-			switch {
-			case line == "":
-				line = word
-			case lipgloss.Width(line)+1+lipgloss.Width(word) <= w:
-				line += " " + word
-			default:
-				out = append(out, line)
-				line = word
+// snapshot is what the transcript renderer draws for a thread (or sub-agent) with the
+// given status.
+func (d *threadData) snapshot(status string) harness.Snapshot {
+	snap := harness.Snapshot{Entries: append([]harness.Entry(nil), d.entries...)}
+	switch status {
+	case "running":
+		snap.Status, snap.Detail = harness.Working, "thinking"
+		for _, e := range snap.Entries {
+			if e.Kind == "tool" && e.Running {
+				snap.Detail = e.Tool + " " + e.Label
 			}
 		}
-		out = append(out, line)
+	case "starting", "waking":
+		snap.Status, snap.Detail = harness.Starting, status
+	case "failed":
+		snap.Status = harness.Failed
+	case "asleep", "sleeping", "destroyed":
+		snap.Status = harness.Stopped
+	default:
+		snap.Status = harness.Waiting
 	}
-	return out
+	if snap.Status != harness.Working {
+		for i := range snap.Entries {
+			snap.Entries[i].Running = false // no result is coming for these
+		}
+	}
+	return snap
 }
 
 func (m *Model) layoutConversation() {
-	m.vp.Width = max(m.w-2, 10)
-	m.vp.Height = max(m.h-5, 3)
+	m.vp.Width = max(m.w-4, 10)
+	m.vp.Height = max(m.h-8, 3)
 	m.input.Width = max(m.w-6, 10)
 }
 
-// refreshConversation re-renders the open thread into the viewport.
+// convStatus is the status of the open thread, or of the open sub-agent.
+func (m *Model) convStatus() string {
+	t := m.threadByID(m.convID)
+	if t == nil {
+		return ""
+	}
+	if m.convSub != "" {
+		for _, s := range t.SubAgents {
+			if s.ID == m.convSub {
+				return s.Status
+			}
+		}
+	}
+	return t.Status
+}
+
+// busy reports whether the open conversation shows a spinner.
+func (m *Model) busy() bool {
+	switch m.convStatus() {
+	case "running", "starting", "waking":
+		return true
+	}
+	return false
+}
+
+// working reports whether the open thread is running a turn, which esc interrupts.
+func (m *Model) working() bool { return m.convSub == "" && m.convStatus() == "running" }
+
+// refreshConversation decodes the open thread's events and draws them.
 func (m *Model) refreshConversation() {
 	if m.convID == "" {
 		return
 	}
-	w := max(m.w-4, 20)
-	var lines []string
-	for _, se := range m.events[m.convSlot()] {
-		for _, s := range summarize(se) {
-			lines = append(lines, renderSummary(s, w)...)
-		}
+	m.conv = decodeThread(m.events[m.convSlot()])
+	m.repaint()
+}
+
+// repaint draws the decoded thread into the viewport.
+func (m *Model) repaint() {
+	if m.convID == "" {
+		return
 	}
-	if len(lines) == 0 {
-		lines = []string{stDim.Render("  no events yet")}
-	}
-	m.vp.SetContent(strings.Join(lines, "\n"))
+	m.tr.ReadOnly = m.convSub != ""
+	slot := m.convSlot()
+	m.vp.SetContent(m.tr.Render(m.conv.snapshot(m.convStatus()), m.vp.Width, m.expandAll, m.expanded[slot], "tool:"+slot+":"))
 	if m.follow {
 		m.vp.GotoBottom()
 	}
 }
 
-func renderSummary(s evSummary, w int) []string {
-	var out []string
-	hang := func(first, rest string, st lipgloss.Style, text string) {
-		for i, l := range wrap(text, w-2) {
-			p := rest
-			if i == 0 {
-				p = first
-			}
-			out = append(out, p+st.Render(l))
-		}
+// toggleEntry opens or closes entry i of the open conversation.
+func (m *Model) toggleEntry(i int) {
+	slot := m.convSlot()
+	if m.expanded[slot] == nil {
+		m.expanded[slot] = map[int]bool{}
 	}
-	switch s.kind {
-	case "user":
-		out = append(out, "")
-		hang(stAccent.Render("❯ "), "  ", stText, s.text)
-	case "text":
-		hang("  ", "  ", stText, s.text)
-	case "tool":
-		label := ansi.Truncate(s.text, max(w-lipgloss.Width(s.tool)-6, 8), "…")
-		out = append(out, lipgloss.NewStyle().Foreground(hGreen).Render("● ")+stBold.Render(s.tool)+" "+stDim.Render(label))
-	case "result":
-		bits := []string{}
-		if s.text != "" && s.text != "success" {
-			bits = append(bits, s.text)
-		}
-		if s.ms > 0 {
-			bits = append(bits, fmt.Sprintf("%ds", s.ms/1000))
-		}
-		if s.turns > 0 {
-			bits = append(bits, fmt.Sprintf("%d turns", s.turns))
-		}
-		if s.cost > 0 {
-			bits = append(bits, fmt.Sprintf("~$%.2f", s.cost))
-		}
-		out = append(out, stFaint.Render("  "+strings.Join(bits, " · ")))
-	case "error":
-		hang(lipgloss.NewStyle().Foreground(hRed).Render("✗ "), "  ", lipgloss.NewStyle().Foreground(hRed), s.text)
-	case "note":
-		hang(stFaint.Render("# "), "  ", stDim, s.text)
-	case "file":
-		out = append(out, stDim.Render("▤ "+s.text))
-	}
-	return out
+	m.expanded[slot][i] = !m.expanded[slot][i]
+	m.follow = false
+	m.repaint()
 }
 
-// oneLine is an event as a single line, for the preview.
-func oneLine(s evSummary, w int) string {
-	first := strings.Join(strings.Fields(s.text), " ")
-	switch s.kind {
+// oneLine is an entry as a single line, for the preview; empty for the kinds it skips.
+func oneLine(e harness.Entry, w int) string {
+	first := strings.Join(strings.Fields(e.Text), " ")
+	switch e.Kind {
 	case "user":
+		if e.From != "you" {
+			return stDim.Render(ansi.Truncate("◂ "+e.From+" "+first, w, "…"))
+		}
 		return stAccent.Render("❯ ") + stText.Render(ansi.Truncate(first, w-2, "…"))
 	case "text":
 		return stDim.Render("  " + ansi.Truncate(first, w-2, "…"))
 	case "tool":
-		return lipgloss.NewStyle().Foreground(hGreen).Render("● ") + stBold.Render(s.tool) + " " + stDim.Render(ansi.Truncate(first, max(w-lipgloss.Width(s.tool)-3, 4), "…"))
+		d := lipgloss.NewStyle().Foreground(hGreen)
+		if e.IsError {
+			d = lipgloss.NewStyle().Foreground(hRed)
+		}
+		label := strings.Join(strings.Fields(e.Label), " ")
+		return d.Render("● ") + stBold.Render(e.Tool) + " " + stDim.Render(ansi.Truncate(label, max(w-lipgloss.Width(e.Tool)-3, 4), "…"))
 	case "error":
 		return lipgloss.NewStyle().Foreground(hRed).Render("✗ " + ansi.Truncate(first, w-2, "…"))
 	}
 	return ""
+}
+
+// statsLine is the totals shown next to the title: "3 turns · 12s · ~$0.42".
+func (d *threadData) statsLine() string {
+	var bits []string
+	if d.turns > 0 {
+		bits = append(bits, fmt.Sprintf("%d turns", d.turns))
+	}
+	if d.ms > 0 {
+		bits = append(bits, fmt.Sprintf("%ds", d.ms/1000))
+	}
+	if d.cost > 0 {
+		bits = append(bits, fmt.Sprintf("~$%.2f", d.cost))
+	}
+	return strings.Join(bits, " · ")
 }

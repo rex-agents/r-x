@@ -1,26 +1,26 @@
 package authtui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
 
-// rux's palette: the same colors as internal/rux/harness_render.go (hOrange, hPink, hViolet,
-// hGreen, hYellow, hRed, hDim, hFaint, hText). authtui can't import package rux, so they're
-// repeated here; keep them in step.
+	"github.com/rex-agents/r-x/internal/rux/transcript"
+)
+
+// rux's palette, shared with the agent harness through package transcript.
 var (
-	hOrange  = lipgloss.Color("#ff9a3c")
-	hPink    = lipgloss.Color("#f472b6")
-	hViolet  = lipgloss.Color("#a78bfa")
-	hAccent  = hPink
-	hGreen   = lipgloss.Color("#4ade80")
-	hYellow  = lipgloss.Color("#facc15")
-	hRed     = lipgloss.Color("#f87171")
-	hDim     = lipgloss.Color("244")
-	hFaint   = lipgloss.Color("239")
-	hText    = lipgloss.Color("252")
-	stDim    = lipgloss.NewStyle().Foreground(hDim)
-	stFaint  = lipgloss.NewStyle().Foreground(hFaint)
-	stAccent = lipgloss.NewStyle().Foreground(hAccent)
-	stBold   = lipgloss.NewStyle().Bold(true).Foreground(hText)
-	stText   = lipgloss.NewStyle().Foreground(hText)
+	hViolet  = transcript.Violet
+	hAccent  = transcript.Accent
+	hGreen   = transcript.Green
+	hYellow  = transcript.Yellow
+	hRed     = transcript.Red
+	hDim     = transcript.Dim
+	hFaint   = transcript.Faint
+	hText    = transcript.Text
+	stDim    = transcript.StDim
+	stFaint  = transcript.StFaint
+	stAccent = transcript.StAccent
+	stBold   = transcript.StBold
+	stText   = transcript.StText
 )
 
 func statusColor(s string) lipgloss.Color {

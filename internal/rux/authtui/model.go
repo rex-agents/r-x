@@ -11,8 +11,10 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	zone "github.com/lrstanley/bubblezone"
 
 	"github.com/rex-agents/r-x/internal/rux/authapi"
+	"github.com/rex-agents/r-x/internal/rux/transcript"
 )
 
 // Options configure the TUI.
@@ -107,6 +109,12 @@ type Model struct {
 	vp      viewport.Model
 	input   textinput.Model
 	follow  bool
+	conv    threadData // the open conversation, decoded
+	tr      *transcript.Renderer
+	// expandAll opens every tool call; expanded opens single ones, by conversation slot.
+	expandAll bool
+	expanded  map[string]map[int]bool
+	zones     map[string]func() // clickable entries of the frame
 
 	form *newForm
 	help bool
@@ -127,18 +135,21 @@ type newForm struct {
 
 // New returns the TUI model for the authority behind c.
 func New(c *Client, o Options) *Model {
+	zone.NewGlobal() // click zones for the thread view
 	if o.Now == nil {
 		o.Now = time.Now
 	}
 	in := textinput.New()
-	in.Prompt = "❯ "
-	in.Placeholder = "message this thread"
+	in.Prompt = ""
+	in.Placeholder = "Message this thread"
+	in.PlaceholderStyle = stFaint
 	return &Model{
 		c: c, opts: o, w: 120, h: 40,
 		projects: map[string]Project{},
 		act:      map[string][]int{},
 		events:   map[string][]StoredEvent{},
 		input:    in, vp: viewport.New(80, 20), follow: true,
+		tr: transcript.New(), expanded: map[string]map[int]bool{}, zones: map[string]func(){},
 		feed: make(chan tea.Msg, 256),
 	}
 }
@@ -146,7 +157,7 @@ func New(c *Client, o Options) *Model {
 // Run opens the TUI on the authority at baseURL.
 func Run(baseURL string, o Options) error {
 	m := New(NewClient(baseURL), o)
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	m.Close()
 	return err
@@ -163,7 +174,7 @@ func (m *Model) Init() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	go m.follow_(ctx)
-	return tea.Batch(m.fetchPack(), m.fetchProjects(), m.waitFeed(), tick())
+	return tea.Batch(m.fetchPack(), m.fetchProjects(), m.waitFeed(), tick(), m.tr.Spin.Tick)
 }
 
 func tick() tea.Cmd {
@@ -462,6 +473,9 @@ func (m *Model) applyFeed(e SSE) tea.Cmd {
 		if json.Unmarshal(data, &t) == nil {
 			m.upsertThread(t)
 			m.bump(t.ID)
+			if t.ID == m.convID {
+				m.repaint()
+			}
 		}
 	case authapi.EventThreadEvent:
 		var te authapi.ThreadEvent

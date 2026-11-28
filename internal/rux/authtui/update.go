@@ -5,8 +5,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	zone "github.com/lrstanley/bubblezone"
 
 	"github.com/rex-agents/r-x/internal/rux/authapi"
 )
@@ -61,6 +63,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.flash = "send failed: " + msg.err.Error()
 		}
+	case spinner.TickMsg:
+		var c tea.Cmd
+		m.tr.Spin, c = m.tr.Spin.Update(msg)
+		if m.tab == tabThread && m.busy() {
+			m.repaint()
+		}
+		return m, c
+	case tea.MouseMsg:
+		return m, m.mouse(msg)
 	case tea.KeyMsg:
 		return m.key(msg)
 	}
@@ -189,22 +200,38 @@ func (m *Model) openConv(id, sub string) tea.Cmd {
 	return tea.Batch(m.fetchEvents(id, sub), textinput.Blink)
 }
 
+// convKey takes the harness's keys: esc interrupts a working thread, ctrl+e opens every tool
+// call, pgup, pgdown, home and end scroll. A sub-agent's conversation is read-only.
 func (m *Model) convKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "esc":
+		if m.working() {
+			id := m.convID
+			m.flash = "Interrupted " + id
+			return m, func() tea.Msg { return sentMsg{m.c.Interrupt(id)} }
+		}
 		m.tab = tabPack
 		m.input.Blur()
 		return m, nil
 	case "tab":
 		m.tab = tabMonitor
 		return m, nil
-	case "pgup", "pgdown", "up", "down":
-		m.follow = false
+	case "ctrl+e":
+		m.expandAll = !m.expandAll
+		m.repaint()
+		return m, nil
+	case "pgup", "ctrl+u", "ctrl+b":
+		m.vp.HalfViewUp()
+	case "pgdown", "ctrl+f":
+		m.vp.HalfViewDown()
+	case "home":
+		m.vp.GotoTop()
+	case "end":
+		m.vp.GotoBottom()
+	case "up", "down":
 		var cmd tea.Cmd
 		m.vp, cmd = m.vp.Update(k)
-		if m.vp.AtBottom() {
-			m.follow = true
-		}
+		m.follow = m.vp.AtBottom()
 		return m, cmd
 	case "enter":
 		text := trim(m.input.Value())
@@ -215,13 +242,39 @@ func (m *Model) convKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		id := m.convID
 		m.follow = true
 		return m, func() tea.Msg { return sentMsg{m.c.Send(id, text)} }
+	default:
+		if m.convSub != "" {
+			return m, nil // read-only
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(k)
+		return m, cmd
 	}
-	if m.convSub != "" {
-		return m, nil // read-only
+	m.follow = m.vp.AtBottom()
+	return m, nil
+}
+
+// mouse opens a tool call that's clicked, and scrolls the open conversation with the wheel.
+func (m *Model) mouse(msg tea.MouseMsg) tea.Cmd {
+	if m.tab != tabThread || m.form != nil || m.help {
+		return nil
 	}
-	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(k)
-	return m, cmd
+	if msg.Action == tea.MouseActionRelease && msg.Button == tea.MouseButtonLeft {
+		for id, f := range m.zones {
+			if zone.Get(id).InBounds(msg) {
+				f()
+				break
+			}
+		}
+		return nil
+	}
+	if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+		var c tea.Cmd
+		m.vp, c = m.vp.Update(msg)
+		m.follow = m.vp.AtBottom()
+		return c
+	}
+	return nil
 }
 
 // ---- new thread ----
