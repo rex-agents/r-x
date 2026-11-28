@@ -1092,7 +1092,7 @@ function showNew(pid) {
   const mp = modelPicker({ provider: saved.provider, model: saved.model, effort: saved.effort });
   const runsin = h("span", { class: "runsin" });
   const form = h("form", { class: "nt" },
-    h("h1", {}, h("span", { "aria-hidden": "true" }, "›"), " what should claude do?"),
+    h("h1", {}, h("span", { "aria-hidden": "true" }, "›"), " what would you like to do today?"),
     proj ? h("div", { class: "inproj" }, "in project ", h("b", {}, proj.name)) : null,
     h("div", { style: "display:flex;flex-direction:column;gap:10px" },
       h("div", { class: "composer-card" }, prompt,
