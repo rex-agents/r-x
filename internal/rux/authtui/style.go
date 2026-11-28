@@ -27,7 +27,7 @@ func statusColor(s string) lipgloss.Color {
 	switch s {
 	case "up", "running", "working", "ok":
 		return hGreen
-	case "idle", "done", "sleeping", "asleep":
+	case "idle", "done", "sleeping", "asleep", "lost":
 		return hDim
 	case "failed", "down", "error", "destroyed":
 		return hRed
