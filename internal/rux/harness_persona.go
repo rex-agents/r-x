@@ -1,9 +1,9 @@
-!term.IsTerminal(os.Stdin.Fd()) || !term.IsTerminal(os.Stdout.Fd())package rux
+package rux
 
 import (
 	"os"
 
-	"github.com/charmbracelet/x/term"
+	"golang.org/x/term"
 
 	"github.com/rex-agents/r-x/internal/rux/authapi"
 	"github.com/rex-agents/r-x/internal/rux/authtui"
@@ -33,12 +33,23 @@ func (r *hrun) leadIdentity() string {
 		": introduce yourself by it, refer to yourself by it, and answer to it. Sub-agents know you by it too."
 }
 
+// authorityLine tells a thread whose authority it works for.
+func authorityLine(name string) string {
+	return "You work for " + name + ", this user's rux authority. If asked who runs you, say so."
+}
+
+// needsSetup says whether to show the first-run screen: the authority has no name yet, and a
+// person is at the keyboard. A run without a terminal (a script, a guest's runner, --headless)
+// never waits on it.
+func needsSetup(dir string, interactive bool) bool {
+	name, _ := loadPersona(dir)
+	return name == "" && interactive && os.Getenv("RUX_NO_SETUP") == ""
+}
+
 // firstRunSetup shows the first-run screen (name the authority, describe its mascot) before the
-// harness opens, when the authority has no name yet. It never blocks a run without a person at
-// the keyboard: no terminal, or the authority can't start, and the harness just opens.
+// harness opens. If the authority can't start, the harness just opens.
 func firstRunSetup() {
-	if name, _ := loadPersona(authorityHome()); name != "" || os.Getenv("RUX_NO_SETUP") != "" ||
-		!isTTY(os.Stdin) || !isTTY(os.Stdout) {
+	if !needsSetup(authorityHome(), term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))) {
 		return
 	}
 	url, err := ensureAuthority()
@@ -46,9 +57,4 @@ func firstRunSetup() {
 		return
 	}
 	_, _, _ = authtui.RunSetup(url, authtui.Options{Logo: trexLogo, Mascot: mascotLogo})
-}
-
-// authorityLine tells a thread whose authority it works for.
-func authorityLine(name string) string {
-	return "You work for " + name + ", this user's rux authority. If asked who runs you, say so."
 }

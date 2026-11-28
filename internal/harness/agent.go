@@ -45,8 +45,8 @@ type message struct{ from, text string }
 // Agent is one agent: a conversation with a model, the tools it works with, and its
 // transcript. It runs a turn for each batch of messages it gets.
 type Agent struct {
-	ID    string
-	Name  string // the key everything finds an agent by; "lead" for the lead
+	ID   string
+	Name string // the key everything finds an agent by; "lead" for the lead
 	// Label is what the UI calls the agent, when that isn't Name (the lead goes by its authority's name).
 	Label string
 	Role  string // lead or sub
