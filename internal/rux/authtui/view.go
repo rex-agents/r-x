@@ -86,15 +86,6 @@ func center(box string, w, h int) []string {
 // ---- header and footer ----
 
 func (m *Model) header() string {
-	var tabs []string
-	for i, n := range tabNames {
-		if tab(i) == m.tab {
-			tabs = append(tabs, lipgloss.NewStyle().Bold(true).Foreground(hAccent).Underline(true).Render(n))
-		} else {
-			tabs = append(tabs, stDim.Render(n))
-		}
-	}
-	left := stBold.Render("rux") + "  " + strings.Join(tabs, "  ")
 	state, st := "live", "up"
 	switch {
 	case !m.live:
@@ -121,7 +112,8 @@ func (m *Model) header() string {
 	pieces = append(pieces, stFaint.Render(m.c.Base))
 	for {
 		right := strings.Join(pieces, "  ")
-		if lipgloss.Width(left)+2+lipgloss.Width(right) <= m.w || len(pieces) <= 1 {
+		left, ok := m.headerLeft(m.w - 2 - lipgloss.Width(right))
+		if ok || len(pieces) <= 1 {
 			gap := max(m.w-lipgloss.Width(left)-lipgloss.Width(right), 1)
 			return fit(left+blank(gap)+right, m.w)
 		}
@@ -168,11 +160,6 @@ func (m *Model) breadcrumb() string {
 			parts = append(parts, n.name)
 		}
 	}
-	if m.tab == tabThread {
-		if t := m.threadByID(m.convID); t != nil {
-			parts = append(parts[:min(len(parts), 2)], cmpOr(t.Title, t.ID))
-		}
-	}
 	if len(parts) == 0 {
 		return stDim.Render("pack")
 	}
@@ -208,6 +195,9 @@ func (m *Model) footer() string {
 			chip("a", map[bool]string{true: "hide archived", false: "archived"}[m.archived]), chip("?", "help"), chip("q", "quit")}
 	}
 	left := m.breadcrumb()
+	if m.tab == tabThread { // the header already shows where we are
+		left = ""
+	}
 	for len(chips) > 0 {
 		right := strings.Join(chips, " ")
 		if lipgloss.Width(left)+2+lipgloss.Width(right) <= m.w {
@@ -257,26 +247,24 @@ func (m *Model) threadPreview(id string, n *node, w int) []string {
 
 func (m *Model) threadView(h int) []string {
 	t := m.threadByID(m.convID)
-	title := m.convID
+	// The header's breadcrumb carries the title; this line is the status.
+	title := ""
 	where := ""
 	if g := m.mgr; g != nil {
 		st := "not started"
 		if g.starting {
 			st = "starting"
 		}
-		title = dot(st) + " " + stBold.Render("manager · "+cmpOr(g.name, g.project)) + stDim.Render("  "+st)
+		title = dot(st) + " " + stDim.Render(st)
 	}
 	if t != nil {
-		title = dot(t.Status) + " " + stBold.Render(cmpOr(t.Title, t.ID)) + stDim.Render("  "+t.Authority+" · "+t.Status)
+		title = dot(t.Status) + " " + stDim.Render(t.Authority+" · "+t.Status)
 		if s := m.conv.statsLine(); s != "" {
 			title += stDim.Render(" · " + s)
 		}
 		where = t.Authority
 		if t.Guest != "" {
 			where += " · " + t.Guest
-		}
-		if m.convSub != "" {
-			title += stDim.Render("  › sub-agent ") + stBold.Render(m.subLabel(t))
 		}
 	}
 	out := []string{fit(" "+title, m.w), blank(m.w)}
@@ -344,7 +332,7 @@ func (m *Model) helpView() string {
 		{"→ on a thread", "its sub-agents, read-only; enter opens one"},
 		{"n", "new thread in the selected project (VM by default)"},
 		{"p", "new project: from one of your GitHub repos, or from a git checkout on this machine (ctrl+a adds the highlighted folder)"},
-		{"tab / 1 2 3", "PACK / THREAD / MONITOR (clients, hosts, guests; enter on a guest opens its thread)"},
+		{"tab / 1 2", "PACK / MONITOR (clients, hosts, guests; enter on a guest opens its thread)"},
 		{"a", "show or hide archived threads"},
 		{"esc", "back to the pack"},
 		{"q  ctrl+c", "quit"},
@@ -383,4 +371,89 @@ func (m *Model) subLabel(t *authapi.ThreadSummary) string {
 		}
 	}
 	return m.convSub
+}
+
+// headerLeft is the top bar's left side in at most w cells: the PACK and MONITOR tabs, or, while
+// a conversation is open, a breadcrumb that continues from PACK. ok is false if it can't fit.
+func (m *Model) headerLeft(w int) (string, bool) {
+	lead := stBold.Render("rux") + "  "
+	if m.tab != tabThread {
+		var tabs []string
+		for i, n := range tabNames {
+			if tab(i) == m.tab {
+				tabs = append(tabs, lipgloss.NewStyle().Bold(true).Foreground(hAccent).Underline(true).Render(n))
+			} else {
+				tabs = append(tabs, stDim.Render(n))
+			}
+		}
+		s := lead + strings.Join(tabs, "  ")
+		return s, lipgloss.Width(s) <= w
+	}
+	crumbs := m.crumbs()
+	const sep = " › "
+	budget := w - lipgloss.Width(lead)
+	plainW := func(c []string) int {
+		n := 0
+		for i, s := range c {
+			n += lipgloss.Width(s)
+			if i > 0 {
+				n += lipgloss.Width(sep)
+			}
+		}
+		return n
+	}
+	if plainW(crumbs) > budget && len(crumbs) > 2 {
+		crumbs = []string{crumbs[0], crumbs[len(crumbs)-1]} // drop the middle crumbs first
+	}
+	if over := plainW(crumbs) - budget; over > 0 {
+		last := len(crumbs) - 1
+		keep := lipgloss.Width(crumbs[last]) - over
+		if keep < 6 {
+			return "", false
+		}
+		crumbs[last] = ansi.Truncate(crumbs[last], keep, "…")
+	}
+	active := lipgloss.NewStyle().Bold(true).Foreground(hAccent).Underline(true)
+	var parts []string
+	for i, c := range crumbs {
+		switch {
+		case i == len(crumbs)-1:
+			parts = append(parts, active.Render(c))
+		case i == 0:
+			parts = append(parts, zone.Mark("crumb:pack", stDim.Render(c)))
+		default:
+			parts = append(parts, stDim.Render(c))
+		}
+	}
+	m.zones["crumb:pack"] = m.closeConv
+	return lead + strings.Join(parts, stFaint.Render(sep)), true
+}
+
+// crumbs are the open conversation's path from PACK: its project, its title, its sub-agent.
+func (m *Model) crumbs() []string {
+	out := []string{"PACK"}
+	if g := m.mgr; g != nil {
+		return append(out, cmpOr(g.name, m.projectName(g.project)), "manager")
+	}
+	t := m.threadByID(m.convID)
+	if t == nil {
+		return append(out, m.convID)
+	}
+	out = append(out, m.projectName(t.Project), cmpOr(t.Title, t.ID))
+	if m.convSub != "" {
+		name := m.convSub
+		for _, s := range t.SubAgents {
+			if s.ID == m.convSub {
+				name = cmpOr(s.Name, s.ID)
+			}
+		}
+		out = append(out, "sub-agent "+name)
+	}
+	return out
+}
+
+// closeConv leaves the open conversation for the pack.
+func (m *Model) closeConv() {
+	m.mgr, m.tab = nil, tabPack
+	m.input.Blur()
 }

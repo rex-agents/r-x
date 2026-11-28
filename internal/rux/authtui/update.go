@@ -145,10 +145,6 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "1":
 		m.tab = tabPack
 	case "2":
-		if m.convID != "" || m.mgr != nil {
-			m.tab = tabThread
-		}
-	case "3":
 		m.tab = tabMonitor
 	case "a":
 		m.archived = !m.archived

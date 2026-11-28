@@ -12,7 +12,7 @@ For the single-window lead-and-sub-agents harness, use [`rux agent`](lead-and-su
 ## The window
 
 ```
-rux  PACK  THREAD  MONITOR                                   ● live  leader mac  term 3  ● vault ok  up 2h00m  http://127.0.0.1:7700
+rux  PACK  MONITOR                                         ● live  leader mac  term 3  ● vault ok  up 2h00m  http://127.0.0.1:7700
 LEADER                                       PROJECT AGENTS              THREADS                   ╭ preview ───────────────╮
 ╭────────────────────────────────────────╮   ╭───────────────────────╮   ╭───────────────────────╮ │ ● fix the login bug    │
 │ ● mac                                  │   │ ● api                 │   │ ● fix the login bug   │ │ status running         │
@@ -48,15 +48,15 @@ The columns:
 | `enter` | on a thread or a project's manager: open its conversation; on a project with no manager: open its empty conversation, where `enter` starts one; elsewhere: step into the next column |
 | `n` | new thread in the selected project |
 | `p` | new project, from GitHub or a local directory |
-| `tab` | PACK ↔ MONITOR (`1` `2` `3` jump to PACK, THREAD, MONITOR) |
+| `tab` | PACK ↔ MONITOR (`1` `2` jump to PACK, MONITOR) |
 | `a` | show or hide archived threads |
 | `?` | help |
 | `esc` | leave the conversation or a dialog |
 | `q`, `ctrl+c` | quit (`ctrl+c` anywhere; `q` outside text fields) |
 
-### Conversation (THREAD)
+### Conversation
 
-`enter` on a thread opens it. It looks and works like a thread in `rux agent`, with the same renderer: markdown text, tool calls with their results under `└`, a spinner and a "working… esc to interrupt" line, messages from other agents as `◂ name`, and errors in red. Type in the box at the bottom and press `enter` to send a message (`POST /api/threads/{id}/messages`). Click a tool call (or press `ctrl+e` for all of them) to open it. `↑`/`↓`/`pgup`/`pgdown`/`home`/`end` and the mouse wheel scroll. `esc` interrupts a working thread (`POST /api/threads/{id}/interrupt`) and, otherwise, returns to the graph; `tab` goes to the monitor. A sub-agent's conversation is read-only.
+`enter` on a thread opens it. It looks and works like a thread in `rux agent`, with the same renderer: markdown text, tool calls with their results under `└`, a spinner and a "working… esc to interrupt" line, messages from other agents as `◂ name`, and errors in red. Type in the box at the bottom and press `enter` to send a message (`POST /api/threads/{id}/messages`). Click a tool call (or press `ctrl+e` for all of them) to open it. `↑`/`↓`/`pgup`/`pgdown`/`home`/`end` and the mouse wheel scroll. The header shows the path as `PACK › project › thread` (click `PACK` to go back). `esc` interrupts a working thread (`POST /api/threads/{id}/interrupt`) and, otherwise, returns to the graph; `tab` goes to the monitor. A sub-agent's conversation is read-only.
 
 A project with no manager opens the same view, titled *manager · project · not started*, with a hint and the box "Tell the manager what to do". `enter` sends the first message: it shows as your message with the starting spinner, and when the API returns the manager's thread the view switches to it and its events stream in. If starting fails, the text goes back into the box and the error shows in the transcript. `esc` returns to the graph.
 
