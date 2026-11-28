@@ -2,6 +2,7 @@ package authtui
 
 import (
 	"fmt"
+	"github.com/rex-agents/r-x/internal/rux/authapi"
 	"sort"
 	"strings"
 	"time"
@@ -595,7 +596,7 @@ func (m *Model) threadView(h int) []string {
 	if t != nil {
 		title = dot(t.Status) + " " + stBold.Render(cmpOr(t.Title, t.ID)) + stDim.Render("  "+t.Authority+" · "+t.Status)
 		if m.convSub != "" {
-			title += stDim.Render("  › sub-agent ") + stBold.Render(m.convSub)
+			title += stDim.Render("  › sub-agent ") + stBold.Render(m.subLabel(t))
 		}
 	}
 	out := []string{fit(" "+title, m.w)}
@@ -705,4 +706,14 @@ func (m *Model) authorityUptime() string {
 		return uptime(m.opts.Now().Sub(m.since))
 	}
 	return ""
+}
+
+// subLabel names the open sub-agent: its name and where it runs.
+func (m *Model) subLabel(t *authapi.ThreadSummary) string {
+	for _, s := range t.SubAgents {
+		if s.ID == m.convSub {
+			return cmpOr(s.Name, s.ID) + stDim.Render(" on "+cmpOr(s.Authority, t.Authority))
+		}
+	}
+	return m.convSub
 }

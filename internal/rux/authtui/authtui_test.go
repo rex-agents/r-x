@@ -420,7 +420,7 @@ func TestSubAgentConversationAndUptime(t *testing.T) {
 		t.Fatalf("tab %v sub %q", m.tab, m.convSub)
 	}
 	v := plain(m.View())
-	for _, want := range []string{"sub-agent s1", "run the tests for s1", "All green.", "read-only", "up 1h05m"} {
+	for _, want := range []string{"sub-agent tests", "run the tests for s1", "All green.", "read-only", "up 1h05m"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("lacks %q\n%s", want, v)
 		}
