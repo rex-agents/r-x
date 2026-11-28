@@ -154,6 +154,14 @@ func (r *agentRunner) Detach(c sys.Cmd, _ string) (sys.Process, error) {
 
 func TestFailedKeyLoadStopsTheAgentItStarted(t *testing.T) {
 	isolate(t)
+	// This test binds a real unix socket; t.TempDir under macOS's long $TMPDIR pushes its path past
+	// the ~104-byte sun_path limit, so run it from a short directory.
+	short, err := os.MkdirTemp("/tmp", "rix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(short) })
+	t.Setenv("XDG_RUNTIME_DIR", short)
 	runner := &agentRunner{Fake: sys.NewFake(), process: &agentProcess{}}
 	runner.Handle = func(c sys.Call) sys.Result {
 		switch {
