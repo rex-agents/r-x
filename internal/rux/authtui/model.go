@@ -57,7 +57,11 @@ type (
 		id  string
 		err error
 	}
-	sentMsg struct{ err error }
+	sentMsg     struct{ err error }
+	guestActMsg struct {
+		done string // "sleeping g-t1"
+		err  error
+	}
 )
 
 // Model is the bubbletea model of the authority TUI.
@@ -99,11 +103,12 @@ type Model struct {
 	expanded  map[string]map[int]bool
 	zones     map[string]func() // clickable entries of the frame
 
-	mgr   *mgrConv // a project's manager conversation that has no thread yet
-	form  *newForm
-	pform *projForm // the new-project modal
-	home  string    // the authority's home directory, once the directory browser has said
-	help  bool
+	mgr     *mgrConv // a project's manager conversation that has no thread yet
+	form    *newForm
+	pform   *projForm // the new-project modal
+	downAsk *guestAsk // the "down this guest? y/n" prompt on the MONITOR tab
+	home    string    // the authority's home directory, once the directory browser has said
+	help    bool
 
 	feed   chan tea.Msg
 	cancel context.CancelFunc
@@ -401,4 +406,10 @@ func (m *Model) setPack(p authapi.Pack) {
 			}
 		}
 	}
+}
+
+// guestAsk is a pending "down this guest?" question.
+type guestAsk struct {
+	authority, name, thread string
+	working                 bool // its thread is mid-turn
 }

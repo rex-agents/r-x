@@ -98,6 +98,8 @@ MONITOR has three columns in the same card style, from the same feed. `←` `→
 - **HOSTS**: every authority: up, down or joining, a ★ for the leader, OS, CPUs, load, guest slots used and maximum, working threads, uptime.
 - **GUESTS**: the rox VMs (`guests`) on the selected host, or on every host while CLIENTS is focused: phase, backend, CPU %, memory used and limit, and the thread using it.
 
+With a guest selected, `s` sleeps it and `d` downs it (after a `down NAME (thread ID)? y/n` prompt in the footer). *Sleep* stops the guest and keeps its disk, like `rox stop` and the server's idle sleep; on a stopped guest `s` wakes it (`rox start`). *Down* removes the guest, like `rox down`. A guest that a thread uses goes through the thread's own sleep, wake and destroy path, so the thread's status stays right; a spare guest with no thread goes straight to rox. Downing a guest whose thread is mid-turn says so in the prompt. The web app's monitor has the same buttons on each guest card.
+
 The TUI identifies itself to the authority with `X-Rux-Client: tui` and `X-Rux-Device: <host name>` on its pack stream, which is how it shows up as a client.
 
 ## One API, two clients
@@ -108,6 +110,7 @@ The TUI keeps no state of its own and reads nothing from `~/.rux`: it is only a 
 | --- | --- |
 | The pack, and live updates | `GET /api/pack`, SSE `GET /api/pack/stream` (`pack`, `pack.delta`, `pack.clients`, `thread.status`, `thread.event`) |
 | Project names | `GET /api/projects` |
+| Sleep, wake or remove a guest | `POST /api/guests/{name}/sleep`, `/wake`, `/down` (`?authority=NAME` for a guest on another member of the pack, which forwards it; `?force=1` to down a guest whose thread is mid-turn, else 409 `busy`) |
 | A thread's conversation | `GET /api/threads/{id}/events/page` (a sub-agent's, read-only: `/api/threads/{id}/subagents/{sub}/events/page`) |
 | Send a message | `POST /api/threads/{id}/messages` |
 | New thread, with `placement` | `POST /api/threads` |

@@ -171,6 +171,9 @@ func chip(k, label string) string {
 }
 
 func (m *Model) footer() string {
+	if m.downAsk != nil {
+		return fit(lipgloss.NewStyle().Foreground(hYellow).Bold(true).Render(m.downAsk.text()), m.w)
+	}
 	if m.flash != "" {
 		return fit(lipgloss.NewStyle().Foreground(hYellow).Render(m.flash), m.w)
 	}
@@ -188,6 +191,13 @@ func (m *Model) footer() string {
 			esc = chip("esc", "interrupt")
 		}
 		chips = []string{chip("enter", "send"), esc, chip("ctrl+e", "expand"), chip("↑↓", "scroll"), chip("tab", "monitor"), chip("ctrl+c", "quit")}
+	case m.tab == tabMonitor && m.mfocus == mcGuest && m.mselected(mcGuest) != nil:
+		_, _, _, phase, _ := m.selectedGuest()
+		sl := "sleep"
+		if guestAsleep(phase) {
+			sl = "wake"
+		}
+		chips = []string{chip("←↑↓→", "move"), chip("enter", "open"), chip("s", sl), chip("d", "down"), chip("tab", "pack"), chip("?", "help"), chip("q", "quit")}
 	case m.tab == tabMonitor:
 		chips = []string{chip("←↑↓→", "move"), chip("enter", "open"), chip("tab", "pack"), chip("?", "help"), chip("q", "quit")}
 	default:
@@ -333,6 +343,7 @@ func (m *Model) helpView() string {
 		{"n", "new thread in the selected project (VM by default)"},
 		{"p", "new project: from one of your GitHub repos, or from a git checkout on this machine (ctrl+a adds the highlighted folder)"},
 		{"tab / 1 2", "PACK / MONITOR (clients, hosts, guests; enter on a guest opens its thread)"},
+		{"s  d", "on a MONITOR guest: s sleeps it (stops it, keeps its disk) or wakes it if it's asleep; d downs it (removes it) after a y/n"},
 		{"a", "show or hide archived threads"},
 		{"esc", "back to the pack"},
 		{"q  ctrl+c", "quit"},
