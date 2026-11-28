@@ -652,8 +652,12 @@ func restart(t *testing.T, old *tnode) *tnode {
 	n, err := New(Config{
 		Dir: tn.dir, Name: tn.name, AdvertiseURL: "http://" + addr, ReportInterval: 100 * time.Millisecond,
 		PlaceTimeout: 10 * time.Second, Vault: tn.vault,
-		LocalReport: func(ctx context.Context) Report { return Report{Host: HostInfo{OS: "linux", CPUs: 4, GuestsMax: tn.slots}} },
-		Execute:     func(ctx context.Context, p Placement) (json.RawMessage, error) { return json.RawMessage(`"started"`), nil },
+		LocalReport: func(ctx context.Context) Report {
+			return Report{Host: HostInfo{OS: "linux", CPUs: 4, GuestsMax: tn.slots}}
+		},
+		Execute: func(ctx context.Context, p Placement) (json.RawMessage, error) {
+			return json.RawMessage(`"started"`), nil
+		},
 		Raft: func(c *raft.Config) {
 			c.HeartbeatTimeout = 150 * time.Millisecond
 			c.ElectionTimeout = 150 * time.Millisecond
