@@ -3,7 +3,6 @@ package authtui
 import (
 	"fmt"
 	"github.com/rex-agents/r-x/internal/rux/authapi"
-	"sort"
 	"strings"
 	"time"
 
@@ -15,7 +14,7 @@ import (
 )
 
 const (
-	cardH     = 5
+	cardH     = 6
 	gutterW   = 3
 	cardW     = 25
 	logoW     = 42
@@ -25,8 +24,6 @@ const (
 	sparkRune = "▁▂▃▄▅▆▇█"
 	boxH      = 3 // the thread's input box
 )
-
-var colTitles = [numCols]string{"HOSTS", "PROJECTS", "THREADS", "SUB-AGENTS"}
 
 func fit(s string, w int) string {
 	if w <= 0 {
@@ -153,6 +150,15 @@ func (m *Model) banners() []string {
 }
 
 func (m *Model) breadcrumb() string {
+	if m.tab == tabMonitor {
+		var parts []string
+		for c := 0; c <= m.mfocus; c++ {
+			if n := m.mselected(c); n != nil {
+				parts = append(parts, n.name)
+			}
+		}
+		return stDim.Render("monitor") + stText.Render(strings.Join(append([]string{""}, parts...), " › "))
+	}
 	var parts []string
 	for c := 0; c <= m.focus && c < numCols; c++ {
 		if n := m.selected(c); n != nil {
@@ -188,6 +194,8 @@ func (m *Model) footer() string {
 			esc = chip("esc", "interrupt")
 		}
 		chips = []string{chip("enter", "send"), esc, chip("ctrl+e", "expand"), chip("↑↓", "scroll"), chip("tab", "monitor"), chip("ctrl+c", "quit")}
+	case m.tab == tabMonitor:
+		chips = []string{chip("←↑↓→", "move"), chip("enter", "open"), chip("tab", "pack"), chip("?", "help"), chip("q", "quit")}
 	default:
 		chips = []string{chip("←↑↓→", "move"), chip("enter", "open"), chip("n", "new thread"), chip("tab", "monitor"),
 			chip("a", map[bool]string{true: "hide archived", false: "archived"}[m.archived]), chip("?", "help"), chip("q", "quit")}
@@ -202,358 +210,6 @@ func (m *Model) footer() string {
 		chips = chips[:len(chips)-1]
 	}
 	return fit(left, m.w)
-}
-
-// ---- the graph ----
-
-type layout struct {
-	cols    []int // visible columns
-	widths  map[int]int
-	logo    bool
-	preview int // preview width, 0 = hidden
-}
-
-func (m *Model) plan(bodyH int) layout {
-	l := layout{widths: map[int]int{}}
-	avail := m.w
-	if avail >= minPrevW {
-		l.preview = previewW
-		if avail >= 170 {
-			l.preview = 36
-		}
-		avail -= l.preview + 1
-	}
-	l.logo = m.opts.Logo != nil && bodyH >= logoH+cardH+2 && avail >= logoW+gutterW+cardW
-	for c := 0; c < numCols; c++ {
-		l.widths[c] = cardW
-		if l.logo && c == 0 {
-			l.widths[c] = logoW
-		}
-		if avail < cardW+2 { // a very narrow terminal: one full-width column
-			l.widths[c] = max(avail, 12)
-		}
-	}
-	used, n := 0, 0
-	for c := 0; c < numCols; c++ {
-		w := l.widths[c]
-		if n > 0 {
-			w += gutterW
-		}
-		if used+w > avail && n > 0 {
-			break
-		}
-		used += w
-		n++
-	}
-	start := max(0, m.focus-n+1)
-	for c := start; c < numCols && c < start+n; c++ {
-		l.cols = append(l.cols, c)
-	}
-	// Columns after a collapsed start can use the width col 0 would have taken.
-	for c := start + n; start > 0 && c < numCols; c++ {
-		w := l.widths[c] + gutterW
-		if used+w > avail {
-			break
-		}
-		used += w
-		l.cols = append(l.cols, c)
-	}
-	return l
-}
-
-type colRender struct {
-	lines []string
-	mid   int // body row of the selected card's middle, -1 if none
-}
-
-func (m *Model) renderColumn(c, w, h int, logo bool) colRender {
-	lines := make([]string, 0, h)
-	// The T-rex sits at the bottom of column 0, under the cards.
-	var logoLines []string
-	if logo && c == 0 {
-		for _, l := range strings.Split(m.opts.Logo(m.phase), "\n") {
-			logoLines = append(logoLines, fit(l, w))
-		}
-		logoLines = logoLines[:min(len(logoLines), max(h-1, 0))]
-	}
-	titleStyle := stFaint
-	if c == m.focus {
-		titleStyle = stAccent
-	}
-	lines = append(lines, fit(titleStyle.Render(colTitles[c]), w))
-	nodes := m.column(c)
-	room := h - len(lines) - len(logoLines)
-	rows := max(room/cardH, 1)
-	sel := min(max(m.sel[c], 0), max(len(nodes)-1, 0))
-	off := 0
-	if len(nodes) > rows {
-		off = min(max(sel-rows/2, 0), len(nodes)-rows)
-	}
-	mid := -1
-	if len(nodes) == 0 {
-		lines = append(lines, fit(stDim.Render(emptyText(c)), w))
-	}
-	for i := off; i < len(nodes) && i < off+rows; i++ {
-		isSel := i == sel
-		if isSel {
-			mid = len(lines) + 2
-		}
-		lines = append(lines, m.card(nodes[i], w, isSel, c == m.focus)...)
-	}
-	lines = lines[:min(len(lines), h-len(logoLines))]
-	for len(lines) < h-len(logoLines) {
-		lines = append(lines, blank(w))
-	}
-	lines = append(lines, logoLines...)
-	return colRender{lines[:h], mid}
-}
-
-func emptyText(c int) string {
-	switch c {
-	case colHost:
-		return "no authorities"
-	case colProject:
-		return "no projects"
-	case colThread:
-		return "no threads"
-	}
-	return "no sub-agents"
-}
-
-func (m *Model) card(n node, w int, selected, focused bool) []string {
-	bc := hFaint
-	if selected {
-		bc = hAccent
-		if !focused {
-			bc = hViolet
-		}
-	}
-	bs := lipgloss.NewStyle().Foreground(bc)
-	inner := w - 4
-	name := stText.Render(ansi.Truncate(n.name, inner-2, "…"))
-	if selected {
-		name = stBold.Render(ansi.Truncate(n.name, inner-2, "…"))
-	}
-	l1 := dot(n.status) + " " + name
-	l2 := stDim.Render(ansi.Truncate(n.summary, inner, "…"))
-	l3 := ""
-	switch n.kind {
-	case colHost:
-		l3 = stDim.Render(plural(n.threads, "thread"))
-		if n.host != nil && n.host.Host.GuestsMax > 0 {
-			l3 += stFaint.Render(fmt.Sprintf(" · %d/%d vms", n.host.Host.GuestsUsed, n.host.Host.GuestsMax))
-		}
-	case colProject:
-		l3 = stDim.Render(plural(n.threads, "thread"))
-	case colThread:
-		l3 = stDim.Render(plural(n.threads, "sub-agent"))
-	case colSub:
-		l3 = stDim.Render(n.status)
-	}
-	if n.kind <= colThread {
-		spark := m.spark(n)
-		if pad := inner - lipgloss.Width(l3) - lipgloss.Width(spark); pad > 0 {
-			l3 += blank(pad) + spark
-		}
-	}
-	row := func(s string) string { return bs.Render("│") + " " + fit(s, inner) + " " + bs.Render("│") }
-	return []string{
-		bs.Render("╭" + strings.Repeat("─", w-2) + "╮"),
-		row(l1), row(l2), row(l3),
-		bs.Render("╰" + strings.Repeat("─", w-2) + "╯"),
-	}
-}
-
-func plural(n int, w string) string {
-	if n == 1 {
-		return "1 " + w
-	}
-	return fmt.Sprintf("%d %ss", n, w)
-}
-
-// spark is the node's recent activity: its own for a thread, the sum of its threads' otherwise.
-func (m *Model) spark(n node) string {
-	sum := make([]int, sparkLen)
-	add := func(id string) {
-		for i, v := range m.act[id] {
-			sum[i] += v
-		}
-	}
-	switch n.kind {
-	case colThread:
-		add(n.th.ID)
-	case colProject:
-		if h := m.selected(colHost); h != nil {
-			for _, t := range h.host.Threads {
-				if t.Project == n.project {
-					add(t.ID)
-				}
-			}
-		}
-	case colHost:
-		for _, t := range n.host.Threads {
-			add(t.ID)
-		}
-	}
-	top := 0
-	for _, v := range sum {
-		top = max(top, v)
-	}
-	rs := []rune(sparkRune)
-	var b strings.Builder
-	for _, v := range sum {
-		i := 0
-		if top > 0 && v > 0 {
-			i = 1 + (v-1)*(len(rs)-2)/max(top, 1)
-		}
-		b.WriteRune(rs[min(i, len(rs)-1)])
-	}
-	return lipgloss.NewStyle().Foreground(hViolet).Render(b.String())
-}
-
-// gutter draws the line from the selected card of one column to the selected card of the next.
-func gutter(h, yl, yr int) []string {
-	g := make([]string, h)
-	for i := range g {
-		g[i] = blank(gutterW)
-	}
-	if yl < 0 || yr < 0 {
-		return g
-	}
-	st := lipgloss.NewStyle().Foreground(hAccent)
-	set := func(y int, s string) {
-		if y >= 0 && y < h {
-			g[y] = st.Render(s)
-		}
-	}
-	switch {
-	case yl == yr:
-		set(yl, "───")
-	case yl < yr:
-		set(yl, "─┐ ")
-		for y := yl + 1; y < yr; y++ {
-			set(y, " │ ")
-		}
-		set(yr, " └─")
-	default:
-		set(yl, "─┘ ")
-		for y := yr + 1; y < yl; y++ {
-			set(y, " │ ")
-		}
-		set(yr, " ┌─")
-	}
-	return g
-}
-
-func (m *Model) packView(h int) []string {
-	if !m.havePack {
-		return center(stDim.Render("connecting to "+m.c.Base+"…"), m.w, h)
-	}
-	l := m.plan(h)
-	cols := make([]colRender, len(l.cols))
-	for i, c := range l.cols {
-		cols[i] = m.renderColumn(c, l.widths[c], h, l.logo)
-	}
-	rows := make([]string, h)
-	for y := range rows {
-		var b strings.Builder
-		for i, c := range l.cols {
-			if i > 0 {
-				var yr int = cols[i].mid
-				if m.selected(c) == nil {
-					yr = -1
-				}
-				b.WriteString(gutterCell(h, cols[i-1].mid, yr, y))
-			}
-			b.WriteString(cols[i].lines[y])
-		}
-		rows[y] = b.String()
-	}
-	if l.preview > 0 {
-		pv := m.previewPanel(l.preview, h)
-		for y := range rows {
-			rows[y] += " " + pv[y]
-		}
-	}
-	for y := range rows {
-		rows[y] = fit(rows[y], m.w)
-	}
-	return rows
-}
-
-func gutterCell(h, yl, yr, y int) string { return gutter(h, yl, yr)[y] }
-
-// ---- preview ----
-
-func (m *Model) previewPanel(w, h int) []string {
-	var lines []string
-	n := m.current()
-	if n != nil {
-		lines = m.previewLines(n, w-4)
-	}
-	if n == nil {
-		lines = []string{stDim.Render("nothing selected")}
-	}
-	bs := lipgloss.NewStyle().Foreground(hFaint)
-	out := []string{bs.Render("╭" + strings.Repeat("─", w-2) + "╮")}
-	for i := 0; i < h-2; i++ {
-		l := ""
-		if i < len(lines) {
-			l = lines[i]
-		}
-		out = append(out, bs.Render("│")+" "+fit(l, w-4)+" "+bs.Render("│"))
-	}
-	return append(out, bs.Render("╰"+strings.Repeat("─", w-2)+"╯"))
-}
-
-func (m *Model) previewLines(n *node, w int) []string {
-	kv := func(k, v string) string { return stFaint.Render(fmt.Sprintf("%-8s", k)) + stText.Render(v) }
-	head := dot(n.status) + " " + stBold.Render(ansi.Truncate(n.name, w-2, "…"))
-	lines := []string{head, ""}
-	switch n.kind {
-	case colHost:
-		a := n.host
-		lines = append(lines, kv("status", a.Status), kv("url", a.URL), kv("os", cmpOr(a.Host.OS, "?")),
-			kv("cpus", fmt.Sprint(a.Host.CPUs)), kv("load", fmt.Sprintf("%.2f", a.Host.Load)),
-			kv("memory", fmt.Sprintf("%.1f GiB", float64(a.Host.Mem)/(1<<30))),
-			kv("vms", fmt.Sprintf("%d / %d", a.Host.GuestsUsed, a.Host.GuestsMax)),
-			kv("threads", fmt.Sprint(n.threads)))
-		if a.Name == m.pack.Leader {
-			lines = append(lines, kv("role", "pack leader"))
-		}
-		if a.Name == m.pack.VaultHost {
-			lines = append(lines, kv("role", "vault host"))
-		}
-	case colProject:
-		var cost float64
-		counts := map[string]int{}
-		if h := m.selected(colHost); h != nil {
-			for _, t := range h.host.Threads {
-				if t.Project == n.project && m.visible(t) {
-					cost += t.Cost
-					counts[t.Status]++
-				}
-			}
-		}
-		if p, ok := m.projects[n.project]; ok && p.Repo != "" {
-			lines = append(lines, kv("repo", p.Repo))
-		}
-		lines = append(lines, kv("threads", fmt.Sprint(n.threads)), kv("cost", fmt.Sprintf("$%.2f", cost)))
-		var st []string
-		for s, c := range counts {
-			st = append(st, fmt.Sprintf("%d %s", c, s))
-		}
-		sort.Strings(st)
-		lines = append(lines, kv("status", strings.Join(st, ", ")))
-	case colThread:
-		lines = append(lines, m.threadPreview(n.th.ID, n, w)...)
-	case colSub:
-		lines = append(lines, kv("status", n.sub.Status), kv("guest", cmpOr(n.sub.Guest, "none")), kv("id", n.sub.ID))
-		if t := m.selected(colThread); t != nil {
-			lines = append(lines, kv("thread", t.name))
-		}
-	}
-	return lines
 }
 
 func (m *Model) threadPreview(id string, n *node, w int) []string {
@@ -637,36 +293,6 @@ func (m *Model) threadView(h int) []string {
 	return out[:h]
 }
 
-func (m *Model) monitorView(h int) []string {
-	out := []string{fit(stFaint.Render(fmt.Sprintf(" %-18s %-8s %-8s %-6s %-9s %-8s %s", "AUTHORITY", "STATUS", "OS", "CPUS", "LOAD", "VMS", "THREADS (working/total)")), m.w)}
-	for _, a := range m.pack.Authorities {
-		work := 0
-		for _, t := range a.Threads {
-			if t.Status == "running" || t.Status == "working" {
-				work++
-			}
-		}
-		name := a.Name
-		if a.Name == m.pack.Leader {
-			name += " ★"
-		}
-		out = append(out, fit(fmt.Sprintf(" %-18s %s %-6s %-8s %-6d %-9.2f %-8s %d/%d", name, dot(a.Status), a.Status, cmpOr(a.Host.OS, "?"), a.Host.CPUs, a.Host.Load,
-			fmt.Sprintf("%d/%d", a.Host.GuestsUsed, a.Host.GuestsMax), work, len(a.Threads)), m.w))
-	}
-	out = append(out, "", fit(stFaint.Render(" RUNNING"), m.w))
-	for _, a := range m.pack.Authorities {
-		for _, t := range a.Threads {
-			if t.Status == "running" || t.Status == "working" {
-				out = append(out, fit(fmt.Sprintf(" %s %-30s %-12s %s  $%.2f", dot(t.Status), ansi.Truncate(cmpOr(t.Title, t.ID), 30, "…"), a.Name, plural(len(t.SubAgents), "sub-agent"), t.Cost), m.w))
-			}
-		}
-	}
-	for len(out) < h {
-		out = append(out, blank(m.w))
-	}
-	return out[:h]
-}
-
 func (m *Model) formView() string {
 	f := m.form
 	row := func(i int, label, val string) string {
@@ -676,11 +302,17 @@ func (m *Model) formView() string {
 		}
 		return mark + stFaint.Render(fmt.Sprintf("%-10s", label)) + val
 	}
+	if f.manager {
+		body := []string{stBold.Render("Start the manager") + stDim.Render("  of "+cmpOr(f.projLabel, scratchName)), "", row(0, "prompt", f.prompt.View()), "",
+			stDim.Render("the manager runs this project's work · enter starts it · esc cancels")}
+		return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(hAccent).Padding(1, 2).
+			Width(min(m.w-4, 74)).Render(strings.Join(body, "\n"))
+	}
 	place := "● VM   ○ local"
 	if f.local {
 		place = "○ VM   ● local"
 	}
-	proj := cmpOr(f.projLabel, noProject)
+	proj := cmpOr(f.projLabel, scratchName)
 	body := []string{
 		stBold.Render("New thread") + stDim.Render("  in "+proj),
 		"",
@@ -697,9 +329,10 @@ func (m *Model) formView() string {
 func (m *Model) helpView() string {
 	keys := [][2]string{
 		{"← ↑ ↓ →  h j k l", "move between and within columns"},
-		{"enter", "open: a thread's conversation, else step into the next column"},
+		{"enter", "open a thread or a project's manager; start a missing manager; step into the next column"},
+		{"→ on a thread", "its sub-agents, read-only; enter opens one"},
 		{"n", "new thread in the selected project (VM by default)"},
-		{"tab / 1 2 3", "PACK / THREAD / MONITOR"},
+		{"tab / 1 2 3", "PACK / THREAD / MONITOR (clients, hosts, guests; enter on a guest opens its thread)"},
 		{"a", "show or hide archived threads"},
 		{"esc", "back to the pack"},
 		{"q  ctrl+c", "quit"},

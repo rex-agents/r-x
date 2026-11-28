@@ -136,6 +136,10 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.tab = tabPack
 	}
+	if m.tab == tabMonitor {
+		cmd := m.monitorKey(s)
+		return m, cmd
+	}
 	if m.tab != tabPack {
 		return m, nil
 	}
@@ -147,7 +151,7 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "left", "h":
 		m.focus = max(m.focus-1, 0)
 	case "right", "l":
-		if m.selected(m.focus+1) != nil && m.focus+1 < numCols {
+		if m.focus+1 < numCols && m.selected(m.focus+1) != nil {
 			m.focus++
 		}
 	case "enter":
@@ -156,6 +160,9 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case n == nil:
 		case n.th != nil:
 			return m, m.openThread(n.th.ID)
+		case n.kind == colProject && n.noMgr && !n.scratch:
+			m.openManagerForm(n, "")
+			return m, textinput.Blink
 		case n.sub != nil:
 			if t := m.selected(colThread); t != nil {
 				return m, m.openConv(t.th.ID, n.sub.ID)
@@ -163,8 +170,58 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case m.focus+1 < numCols && m.selected(m.focus+1) != nil:
 			m.focus++
 		}
+	default:
+		// Typing on a project that has no manager starts one with what's typed.
+		if n := m.current(); len(k.Runes) > 0 && m.focus == colProject && n != nil && n.noMgr && !n.scratch && !strings.ContainsRune("q?123an", k.Runes[0]) {
+			m.openManagerForm(n, string(k.Runes))
+			return m, textinput.Blink
+		}
 	}
 	return m, m.wantPreview()
+}
+
+// monitorKey moves the MONITOR tab's cursor; enter on a guest opens its thread.
+func (m *Model) monitorKey(s string) tea.Cmd {
+	switch s {
+	case "up", "k", "down", "j":
+		d := 1
+		if s == "up" || s == "k" {
+			d = -1
+		}
+		if n := len(m.monitorColumn(m.mfocus)); n > 0 {
+			m.msel[m.mfocus] = min(max(m.msel[m.mfocus]+d, 0), n-1)
+		}
+		switch m.mfocus {
+		case mcClient: // the client's host is the one it connected through
+			if c := m.mselected(mcClient); c != nil {
+				for i, a := range m.pack.Authorities {
+					if a.Name == c.client.Authority {
+						m.msel[mcHost] = i
+					}
+				}
+			}
+			m.msel[mcGuest] = 0
+		case mcHost:
+			m.msel[mcGuest] = 0
+		}
+	case "left", "h":
+		m.mfocus = max(m.mfocus-1, 0)
+	case "right", "l":
+		if m.mfocus+1 < numMCols && len(m.monitorColumn(m.mfocus+1)) > 0 {
+			m.mfocus++
+		}
+	case "enter":
+		if n := m.mselected(m.mfocus); n != nil {
+			if n.guest != nil && n.guest.Thread != "" {
+				return m.openThread(n.guest.Thread)
+			}
+			if m.mfocus+1 < numMCols && len(m.monitorColumn(m.mfocus+1)) > 0 {
+				m.mfocus++
+			}
+		}
+	}
+	m.clamp()
+	return nil
 }
 
 func (m *Model) move(d int) {
@@ -294,8 +351,42 @@ func (m *Model) openForm() {
 	m.form = f
 }
 
+// openManagerForm asks what a project's new manager should do.
+func (m *Model) openManagerForm(n *node, seed string) {
+	in := textinput.New()
+	in.Prompt = "❯ "
+	in.Placeholder = "what should the manager do?"
+	in.SetValue(seed)
+	in.CursorEnd()
+	in.Focus()
+	m.form = &newForm{prompt: in, manager: true, project: n.project, projLabel: n.name, choices: []string{""}}
+}
+
 func (m *Model) formKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	f := m.form
+	if f.manager {
+		switch k.String() {
+		case "esc":
+			m.form = nil
+		case "enter":
+			text := trim(f.prompt.Value())
+			if text == "" {
+				m.flash = "type what the manager should do first"
+				return m, nil
+			}
+			project := f.project
+			m.form = nil
+			return m, func() tea.Msg {
+				id, err := m.c.StartManager(project, text)
+				return createdMsg{id, err}
+			}
+		default:
+			var cmd tea.Cmd
+			f.prompt, cmd = f.prompt.Update(k)
+			return m, cmd
+		}
+		return m, nil
+	}
 	switch k.String() {
 	case "esc":
 		m.form = nil
