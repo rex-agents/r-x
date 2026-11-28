@@ -18,8 +18,7 @@ import (
 // rux with no command makes this Rex pane Claude Code, as the lead agent. You talk to it
 // as you would to any Claude Code session. It delegates the work to sub-agents with rux
 // agent spawn: each is Claude Code or Codex itself, in its own rox guest and Rex pane, and
-// the lead watches them and reports back. A rux monitor pane below shows the stack, and
-// Claude Code's status line shows the sub-agents' states.
+// the lead watches them and reports back. Claude Code's status line shows the sub-agents' states.
 
 const leadBrief = `You are the lead agent in rux. You're running in a Rex pane on the user's machine, and the
 work happens in sub-agents you start with rux. Each sub-agent is Claude Code or Codex itself, in
@@ -47,13 +46,12 @@ How to work:
 
 // leadTools may run without a permission prompt: rux's own commands and read-only status.
 var leadTools = []string{
-	"Bash(rux agent:*)", "Bash(rux monitor:*)", "Bash(rox ls:*)", "Bash(rox inspect:*)",
+	"Bash(rux agent:*)", "Bash(rox ls:*)", "Bash(rox inspect:*)",
 	"Bash(rix status:*)", "Bash(rex hosts:*)", "Bash(git remote:*)", "Bash(git status:*)", "Bash(git log:*)",
 }
 
 func runLead(args []string) {
 	fs := flag.NewFlagSet("rux", flag.ExitOnError)
-	noMonitor := fs.Bool("no-monitor", false, "don't open the rux monitor pane")
 	model := fs.String("model", "", "model for the lead Claude Code")
 	fs.Parse(args)
 	prompt := strings.TrimSpace(strings.Join(fs.Args(), " "))
@@ -67,12 +65,6 @@ func runLead(args []string) {
 		fail("rux's lead agent is Claude Code, which isn't installed. Install it: %s", "https://code.claude.com/docs/en/setup")
 	}
 	refreshSkill()
-	dir := sessionDir(sess)
-	_ = os.MkdirAll(dir, 0o700)
-	_ = saveJSON(filepath.Join(dir, ".lead"), map[string]string{"block": block})
-	if !*noMonitor {
-		openMonitor(sess, block, dir)
-	}
 
 	settings, _ := json.Marshal(map[string]any{
 		"statusLine": map[string]any{"type": "command", "command": shQuote(selfExe()) + " statusline", "padding": 0},
@@ -88,23 +80,6 @@ func runLead(args []string) {
 	}
 	if err := syscall.Exec(claude, argv, os.Environ()); err != nil {
 		fail("starting Claude Code: %v", err)
-	}
-}
-
-// openMonitor opens rux monitor in a short pane below the lead, once per session.
-func openMonitor(sess, block, dir string) {
-	state := filepath.Join(dir, ".monitor")
-	var mon struct{ Block string }
-	if loadJSON(state, &mon) == nil && mon.Block != "" && rexBlockAlive(sess, mon.Block) {
-		return
-	}
-	var out struct {
-		BlockIDs []string `json:"block_ids"`
-	}
-	err := rexJSON(&out, "split", "-s", sess, "-b", block, "--split=below", "--ratio", "30", "--label", "rux monitor",
-		"--focus=false", "--json", "--", selfExe(), "monitor")
-	if err == nil && len(out.BlockIDs) > 0 {
-		_ = saveJSON(state, map[string]string{"block": out.BlockIDs[0]})
 	}
 }
 
@@ -183,13 +158,4 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
-}
-
-// leadBlock is the lead's pane in sess, if rux started one.
-func leadBlock(sess string) string {
-	var lead struct{ Block string }
-	if loadJSON(filepath.Join(sessionDir(sess), ".lead"), &lead) == nil {
-		return lead.Block
-	}
-	return ""
 }

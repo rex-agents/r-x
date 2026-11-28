@@ -672,6 +672,8 @@ func (a *subAgent) refresh() {
 	}
 }
 
+func agentLive(a *subAgent) bool { return a.Phase != "stopped" && a.Phase != "exited" }
+
 func (a *subAgent) display() string {
 	if a.Phase != "running" {
 		return a.Phase
@@ -721,7 +723,7 @@ func cmpTime(a, b time.Time) time.Time {
 func agentLs(args []string) {
 	fs := flag.NewFlagSet("rux agent ls", flag.ExitOnError)
 	asJSON := fs.Bool("json", false, "print JSON")
-	watch := fs.Bool("watch", false, "refresh every 2 seconds (for a monitor pane or tab)")
+	watch := fs.Bool("watch", false, "refresh every 2 seconds (for a pane or tab to watch)")
 	session := fs.String("session", "", "Rex session (default: $REX_SESSION)")
 	fs.Parse(args)
 	sess := currentSession(*session)

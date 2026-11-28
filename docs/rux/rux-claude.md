@@ -9,7 +9,7 @@ sidebar:
 
 ## rux claude: Claude Code as the lead
 
-`rux claude [--model M] [--no-monitor] [PROMPT]` (alias `rux lead`) runs in a Rex terminal, and needs `claude` installed.
+`rux claude [--model M] [PROMPT]` (alias `rux lead`) runs in a Rex terminal, and needs `claude` installed.
 The sub-agents are Claude Code or Codex, each in its own guest and Rex pane. The lead delegates with [`rux agent spawn`](rux-agent.md), follows the
 sub-agents with `rux agent wait`, `read` and `send`, and reports back.
 
@@ -17,9 +17,8 @@ Before starting sub-agents, the lead settles anything you didn't say, in one que
 
 `rux claude` also:
 
-- opens [`rux monitor`](monitor.md) in a short pane below the lead (`--no-monitor` to skip it),
 - shows the sub-agents' states in Claude Code's status line (`rux statusline`: working, waiting for you, starting, done, failed),
-- lets the lead run `rux agent`, `rux monitor`, `rox ls`, `rox inspect`, `rix status`, `rex hosts`, `git remote`, `git status`
+- lets the lead run `rux agent`, `rox ls`, `rox inspect`, `rix status`, `rex hosts`, `git remote`, `git status`
   and `git log` without asking, and
 - keeps the lead's rux skill current with this rux.
 
