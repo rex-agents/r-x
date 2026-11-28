@@ -83,8 +83,14 @@ func validateMascot(m *authapi.Mascot) error {
 // parseMascot reads a model's reply, which should be a JSON object {"mask": [...], "colors":
 // [...]}, perhaps in a code fence or after some words, and checks it.
 func parseMascot(reply string) (authapi.Mascot, error) {
+	if strings.TrimSpace(reply) == "" {
+		return authapi.Mascot{}, errors.New("the reply was empty")
+	}
 	i, j := strings.Index(reply, "{"), strings.LastIndex(reply, "}")
-	if i < 0 || j < i {
+	if i >= 0 && j < i {
+		return authapi.Mascot{}, errors.New("the reply is cut off: it has no closing brace")
+	}
+	if i < 0 {
 		return authapi.Mascot{}, errors.New("the reply has no JSON object")
 	}
 	var m authapi.Mascot
