@@ -555,8 +555,8 @@ func TestConnectorsAndPreview(t *testing.T) {
 	m := boot(t, f, 160, 45)
 	press(m, "right", "down", "right") // thread "fix the login bug"
 	v := plain(m.View())
-	if !strings.ContainsAny(v, "┐┘┌└") || !strings.Contains(v, "───") {
-		t.Error("no connector lines")
+	if !strings.Contains(v, "│───│") {
+		t.Error("no straight connector between the selected cards")
 	}
 	for _, want := range []string{"fix the login bug", "FILES", "shot.png", "RECENT", "Read auth.go", "3 turns", "$0.42", "2 sub-agents", "on     mac · vm"} {
 		if !strings.Contains(v, want) {
@@ -867,5 +867,69 @@ func TestEscInterruptsAWorkingThread(t *testing.T) {
 	press(m, "esc")
 	if m.tab != tabPack {
 		t.Error("esc did not go back from an idle thread")
+	}
+}
+
+// The selected card sits in the middle of the graph area, both ways.
+func TestPackCentersSelectedCard(t *testing.T) {
+	f := newFake(t)
+	m := boot(t, f, 160, 50)
+	press(m, "right", "down", "right")
+	lines := strings.Split(plain(m.View()), "\n")
+	if len(lines) > 50 {
+		t.Fatalf("%d lines overflow the terminal", len(lines))
+	}
+	bodyTop := 2 // header, blank
+	bodyH := 50 - bodyTop - 2
+	l := m.plan(bodyH)
+	// The focused column is horizontally centred in the graph area.
+	f0 := m.focus
+	if cx := l.xs[f0] + l.widths[f0]/2; abs(cx-l.avail/2) > 2 {
+		t.Errorf("focused column centre %d, graph area centre %d", cx, l.avail/2)
+	}
+	// Its selected card is drawn around the vertical middle of the body.
+	var top, bot = -1, -1
+	for y := bodyTop; y < bodyTop+bodyH; y++ {
+		r := []rune(lines[y])
+		if x := l.xs[f0] + l.widths[f0]/2; x < len(r) && (r[l.xs[f0]] == '╭' || r[l.xs[f0]] == '╰') {
+			if r[l.xs[f0]] == '╭' && top < 0 {
+				top = y - bodyTop
+			}
+			if r[l.xs[f0]] == '╰' && y-bodyTop >= bodyH/2 {
+				if bot < 0 {
+					bot = y - bodyTop
+				}
+			}
+		}
+	}
+	if top < 0 || bot < 0 {
+		t.Fatalf("selected card not found: %d %d\n%s", top, bot, strings.Join(lines, "\n"))
+	}
+	if mid := (top + bot) / 2; abs(mid-bodyH/2) > 1 {
+		t.Errorf("card middle row %d, body middle %d", mid, bodyH/2)
+	}
+	// No row is wider than the screen, and the preview is intact.
+	for i, ln := range lines {
+		if w := len([]rune(ln)); w > 160 {
+			t.Errorf("row %d is %d wide", i, w)
+		}
+	}
+}
+
+func abs(a int) int {
+	if a < 0 {
+		return -a
+	}
+	return a
+}
+
+func TestPackRenderSizes(t *testing.T) {
+	if testing.Short() || os.Getenv("DUMP") == "" {
+		t.Skip("set DUMP=1 to print renderings")
+	}
+	for _, sz := range [][2]int{{80, 24}, {120, 40}, {160, 50}, {200, 60}} {
+		m := boot(t, newFake(t), sz[0], sz[1])
+		press(m, "right", "down", "right")
+		fmt.Printf("=== %dx%d\n%s\n", sz[0], sz[1], plain(m.View()))
 	}
 }
