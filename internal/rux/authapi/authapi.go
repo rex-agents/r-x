@@ -11,6 +11,29 @@ type Pack struct {
 	VaultOK     bool            `json:"vault_ok"`
 	Degraded    bool            `json:"degraded,omitempty"` // local view served because no leader is reachable
 	Authorities []AuthorityInfo `json:"authorities"`
+	// Clients are the UIs connected to the pack right now (live GET /api/pack/stream connections).
+	Clients []ClientInfo `json:"clients"`
+}
+
+// ClientInfo is a UI connected to the pack.
+type ClientInfo struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`      // "tui" or "web"
+	Device    string `json:"device"`    // machine or device name
+	Authority string `json:"authority"` // the authority it connected through
+	Since     string `json:"since"`     // RFC 3339
+	LastSeen  string `json:"last_seen"` // RFC 3339
+}
+
+// GuestInfo is a rox guest on an authority's host.
+type GuestInfo struct {
+	Name     string  `json:"name"`
+	Phase    string  `json:"phase"`             // running, stopped, starting, ...
+	Backend  string  `json:"backend,omitempty"` // container, linux, macos, fly, railway
+	CPU      float64 `json:"cpu"`               // percent of one CPU
+	MemBytes int64   `json:"mem_bytes"`
+	MemLimit int64   `json:"mem_limit,omitempty"`
+	Thread   string  `json:"thread,omitempty"` // the thread ID using it
 }
 
 // AuthorityInfo is one authority in the pack.
@@ -22,6 +45,7 @@ type AuthorityInfo struct {
 	Local   bool            `json:"local"`             // the authority answering the request
 	Started string          `json:"started,omitempty"` // RFC 3339 time the authority started, for uptime
 	Threads []ThreadSummary `json:"threads,omitempty"`
+	Guests  []GuestInfo     `json:"guests,omitempty"` // rox guests on this host
 }
 
 // HostInfo describes the machine an authority runs on.
@@ -66,7 +90,8 @@ type ThreadSummary struct {
 	Parent          string  `json:"parent,omitempty"`
 	ParentAuthority string  `json:"parent_authority,omitempty"`
 	Cost            float64 `json:"cost"`
-	Updated         string  `json:"updated"` // RFC 3339
+	Updated         string  `json:"updated"`        // RFC 3339
+	Kind            string  `json:"kind,omitempty"` // "manager" for a project's manager, else ""
 }
 
 // Event types carried by PackEvent.
@@ -75,6 +100,7 @@ const (
 	EventPackDelta    = "pack.delta"
 	EventThreadEvent  = "thread.event"
 	EventThreadStatus = "thread.status"
+	EventPackClients  = "pack.clients" // payload: []ClientInfo, sent when the set changes
 )
 
 // PackEvent is the envelope of every SSE event on GET /api/pack/stream. There is one form:
