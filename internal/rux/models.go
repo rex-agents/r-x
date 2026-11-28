@@ -160,8 +160,18 @@ func (s *server) effectiveModel(model string) string {
 }
 
 func (s *server) handleModels(w http.ResponseWriter, r *http.Request) {
+	if id := r.URL.Query().Get("provider"); id != "" {
+		models, errMsg := s.listProvider(r.Context(), id)
+		resp := map[string]any{"provider": id, "models": models}
+		if errMsg != "" {
+			resp["error"] = errMsg
+		}
+		writeJSONResp(w, 200, resp)
+		return
+	}
 	models, err := s.models.list()
-	resp := map[string]any{"models": append(models[:len(models):len(models)], codexModel)}
+	// "models" (Claude's, then Codex) is what older clients read; "providers" is the three-step picker.
+	resp := map[string]any{"models": append(models[:len(models):len(models)], codexModel), "providers": s.modelProviders(models)}
 	if err != nil {
 		resp["error"] = err.Error()
 	}
@@ -209,13 +219,25 @@ func (s *server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "bad JSON")
 		return
 	}
-	model, effort, err := validSettings(req.Model, req.Effort)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var model, effort string
+	var err error
+	if t.meta.Engine == "harness" { // provider/MODEL on the API provider the thread was started on
+		name, bare, serr := splitModel(req.Model)
+		if cur, _, _ := splitModel(t.meta.Model); serr != nil || name != cur {
+			httpErr(w, 400, "a thread keeps its provider ("+cur+"); pick one of its models")
+			return
+		}
+		_, effort, err = validSettings(bare, req.Effort)
+		model = req.Model
+	} else {
+		model, effort, err = validSettings(req.Model, req.Effort)
+	}
 	if err != nil {
 		httpErr(w, 400, err.Error())
 		return
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	if was, now := s.agentOf(t.meta.Model), s.agentOf(model); was != now {
 		httpErr(w, 400, "a thread keeps its agent ("+was+"); start a new thread to use "+now)
 		return

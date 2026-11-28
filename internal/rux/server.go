@@ -586,8 +586,9 @@ type createReq struct {
 	Depth                                        int
 	Title                                        string            `json:"-"` // set by managers; otherwise the prompt's first line
 	Placement                                    authapi.Placement `json:"placement"`
-	Vault                                        string            `json:"vault"`  // "local" or "leader"; default: authority.json, else local
-	Engine                                       string            `json:"engine"` // "claude-code" (default) or "harness", which takes a provider/model such as anthropic/claude-sonnet-5-5
+	Vault                                        string            `json:"vault"`    // "local" or "leader"; default: authority.json, else local
+	Engine                                       string            `json:"engine"`   // "claude-code" (default) or "harness", which takes a provider/model such as anthropic/claude-sonnet-5-5
+	Provider                                     string            `json:"provider"` // optional: claude-code, codex, anthropic or openai; sets engine and model prefix
 }
 
 type reqError struct {
@@ -651,6 +652,12 @@ func (s *server) createThread(req createReq) (*thread, error) {
 			req.Repo, req.Branch = proj.Repo, ""
 		}
 		req.Model, req.Effort = cmpOr(req.Model, proj.Model), cmpOr(req.Effort, proj.Effort)
+	}
+	if req.Provider != "" {
+		var perr error
+		if req.Engine, req.Model, perr = applyProvider(req.Provider, req.Engine, req.Model); perr != nil {
+			return nil, &reqError{400, perr.Error()}
+		}
 	}
 	engine, err := s.resolveEngine(req.Engine, req.Model)
 	if err != nil {
