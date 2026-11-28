@@ -1,5 +1,5 @@
-// Package authtui is the rux authority TUI: a node graph of the pack (hosts → projects →
-// threads → sub-agents) with a preview column. It is only a client of the authority HTTP
+// Package authtui is the rux authority TUI: a node graph of the pack (leader → project agents →
+// threads, with a thread's sub-agents one step further) and a monitor of clients, hosts and guests. It is only a client of the authority HTTP
 // API (see docs/rux/authority.md): GET /api/pack, the SSE feed GET /api/pack/stream,
 // /api/threads and thread events. It holds no private state paths.
 package authtui
@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -23,6 +24,8 @@ import (
 type Client struct {
 	Base string
 	HTTP *http.Client
+	// Device names this machine to the authority (default: the host name).
+	Device string
 }
 
 // NewClient returns a client for the authority at baseURL.
@@ -40,6 +43,7 @@ func (c *Client) do(method, path string, in, out any) error {
 	if err != nil {
 		return err
 	}
+	c.identify(req)
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -140,6 +144,7 @@ func (c *Client) Stream(ctx context.Context, path string, fn func(SSE)) error {
 		return err
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	c.identify(req)
 	hc := &http.Client{} // no overall timeout: the stream is long-lived
 	resp, err := hc.Do(req)
 	if err != nil {
@@ -189,4 +194,24 @@ func (c *Client) SubAgentEvents(id, sub string, min int) ([]StoredEvent, error) 
 // Interrupt is POST /api/threads/{id}/interrupt: it ends the thread's current turn.
 func (c *Client) Interrupt(id string) error {
 	return c.do("POST", "/api/threads/"+url.PathEscape(id)+"/interrupt", nil, nil)
+}
+
+// StartManager is POST /api/projects/{id}/manager: it starts the project's manager with its
+// first instruction. The response is the manager thread; only its id is used.
+func (c *Client) StartManager(project, text string) (string, error) {
+	var out struct {
+		ID string `json:"id"`
+	}
+	err := c.do("POST", "/api/projects/"+url.PathEscape(project)+"/manager", map[string]string{"text": text}, &out)
+	return out.ID, err
+}
+
+// identify tells the authority what this client is, so the pack's monitor lists it as a TUI on
+// this machine.
+func (c *Client) identify(req *http.Request) {
+	req.Header.Set("X-Rux-Client", "tui")
+	if c.Device == "" {
+		c.Device, _ = os.Hostname()
+	}
+	req.Header.Set("X-Rux-Device", c.Device)
 }

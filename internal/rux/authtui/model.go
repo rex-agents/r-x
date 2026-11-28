@@ -3,8 +3,6 @@ package authtui
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -36,30 +34,6 @@ const (
 
 var tabNames = []string{"PACK", "THREAD", "MONITOR"}
 
-// Node kinds, which are also the graph's columns.
-const (
-	colHost = iota
-	colProject
-	colThread
-	colSub
-	numCols
-)
-
-const noProject = "(no project)"
-
-type node struct {
-	kind    int
-	key     string // identity within its column
-	name    string
-	summary string
-	status  string
-	threads int
-	host    *authapi.AuthorityInfo
-	th      *authapi.ThreadSummary
-	sub     *authapi.SubAgentSummary
-	project string // for project nodes: the project id ("" for none)
-}
-
 // Messages.
 type (
 	packMsg     struct{ pack authapi.Pack }
@@ -87,7 +61,7 @@ type Model struct {
 	w, h int
 	tab  tab
 
-	pack     authapi.Pack
+	pack     authapi.Pack // Clients come from pack and pack.clients events
 	havePack bool
 	projects map[string]Project
 	live     bool
@@ -97,6 +71,8 @@ type Model struct {
 
 	focus    int
 	sel      [numCols]int
+	mfocus   int // the MONITOR tab's focused column
+	msel     [numMCols]int
 	archived bool
 
 	act    map[string][]int // thread id → activity buckets
@@ -131,6 +107,7 @@ type newForm struct {
 	choices   []string
 	project   string
 	projLabel string
+	manager   bool // starts the project's manager instead of a thread
 }
 
 // New returns the TUI model for the authority behind c.
@@ -144,7 +121,7 @@ func New(c *Client, o Options) *Model {
 	in.Placeholder = "Message this thread"
 	in.PlaceholderStyle = stFaint
 	return &Model{
-		c: c, opts: o, w: 120, h: 40,
+		c: c, opts: o, w: 120, h: 40, mfocus: mcHost,
 		projects: map[string]Project{},
 		act:      map[string][]int{},
 		events:   map[string][]StoredEvent{},
@@ -241,169 +218,6 @@ func (m *Model) fetchEvents(id, sub string) tea.Cmd {
 	}
 }
 
-// ---- data ----
-
-func (m *Model) allThreads() []authapi.ThreadSummary {
-	var out []authapi.ThreadSummary
-	for _, a := range m.pack.Authorities {
-		out = append(out, a.Threads...)
-	}
-	return out
-}
-
-func (m *Model) visible(t authapi.ThreadSummary) bool {
-	return m.archived || (t.Status != "archived" && !t.Archived)
-}
-
-func (m *Model) projectName(id string) string {
-	if id == "" {
-		return noProject
-	}
-	if p, ok := m.projects[id]; ok && p.Name != "" {
-		return p.Name
-	}
-	return id
-}
-
-// column returns the nodes of column c, given the selections to its left.
-func (m *Model) column(c int) []node {
-	switch c {
-	case colHost:
-		var out []node
-		for i := range m.pack.Authorities {
-			a := &m.pack.Authorities[i]
-			n := 0
-			for _, t := range a.Threads {
-				if m.visible(t) {
-					n++
-				}
-			}
-			role := ""
-			if a.Name == m.pack.Leader {
-				role = " · leader"
-			}
-			sum := fmt.Sprintf("%s · %d cpu · load %.1f%s", cmpOr(a.Host.OS, "?"), a.Host.CPUs, a.Host.Load, role)
-			if a.Status != "up" {
-				sum = a.Status + " · unreachable" + role
-			}
-			out = append(out, node{kind: colHost, key: a.Name, name: a.Name, host: a, status: a.Status, threads: n, summary: sum})
-		}
-		return out
-	case colProject:
-		h := m.selected(colHost)
-		if h == nil {
-			return nil
-		}
-		type agg struct {
-			n, active int
-			cost      float64
-		}
-		by := map[string]*agg{}
-		for _, t := range h.host.Threads {
-			if !m.visible(t) {
-				continue
-			}
-			a := by[t.Project]
-			if a == nil {
-				a = &agg{}
-				by[t.Project] = a
-			}
-			a.n++
-			a.cost += t.Cost
-			if t.Status == "running" || t.Status == "working" {
-				a.active++
-			}
-		}
-		var out []node
-		for id, a := range by {
-			st := "idle"
-			if a.active > 0 {
-				st = "running"
-			}
-			sum := m.projects[id].Repo
-			if sum == "" {
-				sum = fmt.Sprintf("%d active · $%.2f", a.active, a.cost)
-			}
-			out = append(out, node{kind: colProject, key: id, project: id, name: m.projectName(id), status: st, threads: a.n, summary: sum})
-		}
-		sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
-		return out
-	case colThread:
-		h, p := m.selected(colHost), m.selected(colProject)
-		if h == nil || p == nil {
-			return nil
-		}
-		var out []node
-		for i := range h.host.Threads {
-			t := &h.host.Threads[i]
-			if t.Project != p.project || !m.visible(*t) {
-				continue
-			}
-			where := "vm"
-			if t.Placement.Local {
-				where = "local"
-			}
-			out = append(out, node{kind: colThread, key: t.ID, name: cmpOr(t.Title, t.ID), th: t, status: t.Status, threads: len(t.SubAgents),
-				summary: fmt.Sprintf("%s · %s · $%.2f", t.Status, where, t.Cost)})
-		}
-		sort.SliceStable(out, func(i, j int) bool { return out[i].th.Updated > out[j].th.Updated })
-		return out
-	case colSub:
-		t := m.selected(colThread)
-		if t == nil {
-			return nil
-		}
-		var out []node
-		for i := range t.th.SubAgents {
-			s := &t.th.SubAgents[i]
-			out = append(out, node{kind: colSub, key: s.ID, name: cmpOr(s.Name, s.ID), sub: s, status: s.Status,
-				summary: subSummary(*s)})
-		}
-		return out
-	}
-	return nil
-}
-
-// selected is the selected node of column c, or nil.
-func (m *Model) selected(c int) *node {
-	for i := 0; i < c; i++ {
-		if len(m.column(i)) == 0 {
-			return nil
-		}
-	}
-	col := m.column(c)
-	if len(col) == 0 {
-		return nil
-	}
-	i := min(max(m.sel[c], 0), len(col)-1)
-	return &col[i]
-}
-
-// current is the node under the cursor: the selection of the focused column.
-func (m *Model) current() *node { return m.selected(m.focus) }
-
-func (m *Model) clamp() {
-	for c := 0; c < numCols; c++ {
-		n := len(m.column(c))
-		m.sel[c] = min(max(m.sel[c], 0), max(n-1, 0))
-	}
-	for m.focus > 0 && m.selected(m.focus) == nil {
-		m.focus--
-	}
-}
-
-// threadByID finds a thread anywhere in the pack.
-func (m *Model) threadByID(id string) *authapi.ThreadSummary {
-	for i := range m.pack.Authorities {
-		for j := range m.pack.Authorities[i].Threads {
-			if t := &m.pack.Authorities[i].Threads[j]; t.ID == id {
-				return t
-			}
-		}
-	}
-	return nil
-}
-
 func (m *Model) bump(id string) {
 	b := m.act[id]
 	if len(b) == 0 {
@@ -421,19 +235,6 @@ func (m *Model) shiftActivity() {
 		b[len(b)-1] = 0
 		m.act[id] = b
 	}
-}
-
-// preview data for the selected thread.
-func (m *Model) previewThread() string {
-	if n := m.current(); n != nil && n.th != nil {
-		return n.th.ID
-	}
-	if n := m.current(); n != nil && n.kind == colSub {
-		if t := m.selected(colThread); t != nil {
-			return t.th.ID
-		}
-	}
-	return ""
 }
 
 func (m *Model) applyFeed(e SSE) tea.Cmd {
@@ -467,6 +268,11 @@ func (m *Model) applyFeed(e SSE) tea.Cmd {
 			if !found {
 				m.pack.Authorities = append(m.pack.Authorities, a)
 			}
+		}
+	case authapi.EventPackClients:
+		var cs []authapi.ClientInfo
+		if json.Unmarshal(data, &cs) == nil {
+			m.pack.Clients = cs
 		}
 	case authapi.EventThreadStatus:
 		var t authapi.ThreadSummary
@@ -573,7 +379,7 @@ func (m *Model) setPack(p authapi.Pack) {
 	if first {
 		for i, a := range p.Authorities {
 			if a.Local {
-				m.sel[colHost] = i
+				m.msel[mcHost] = i
 			}
 		}
 	}
