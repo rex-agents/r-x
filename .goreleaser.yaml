@@ -69,6 +69,8 @@ changelog:
 release:
   # Tags such as v1.2.0-rc.1 become prereleases, which self-update never installs.
   prerelease: auto
+  # Rebuilding an existing tag from the Actions tab replaces its archives instead of failing.
+  replace_existing_artifacts: true
   footer: |
     ## Install
 
@@ -86,7 +88,7 @@ homebrew_casks:
       owner: rex-agents
       name: homebrew-tap
       token: '{{ index .Env "HOMEBREW_TAP_TOKEN" }}'
-    # Without the tap token, publish the release and skip the cask.
+    # Without the tap token (a local run), skip the cask. CI refuses to release without it.
     skip_upload: '{{ if index .Env "HOMEBREW_TAP_TOKEN" }}auto{{ else }}true{{ end }}'
     homepage: https://github.com/rex-agents/r-x
     description: Rex guests (rox), the vault for their secrets (rix), and agents on them (rux)
