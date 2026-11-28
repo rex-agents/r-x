@@ -125,6 +125,9 @@ func (m *Model) convStatus() string {
 
 // busy reports whether the open conversation shows a spinner.
 func (m *Model) busy() bool {
+	if m.mgr != nil {
+		return m.mgr.starting
+	}
 	switch m.convStatus() {
 	case "running", "starting", "waking":
 		return true
@@ -146,6 +149,28 @@ func (m *Model) refreshConversation() {
 
 // repaint draws the decoded thread into the viewport.
 func (m *Model) repaint() {
+	if g := m.mgr; g != nil {
+		var snap harness.Snapshot
+		if g.text != "" {
+			snap.Entries = append(snap.Entries, harness.Entry{Kind: "user", From: "you", Text: g.text})
+		}
+		if g.err != "" {
+			snap.Entries = append(snap.Entries, harness.Entry{Kind: "error", Text: g.err})
+		}
+		snap.Status = harness.Waiting
+		if g.starting {
+			snap.Status, snap.Detail = harness.Starting, "starting"
+		}
+		content := m.tr.Render(snap, m.vp.Width, false, nil, "tool:mgr:")
+		if len(snap.Entries) == 0 {
+			content = stDim.Render("This project has no manager yet. Tell it what to work on; it starts sub-agents for the work.")
+		}
+		m.vp.SetContent(content)
+		if m.follow {
+			m.vp.GotoBottom()
+		}
+		return
+	}
 	if m.convID == "" {
 		return
 	}

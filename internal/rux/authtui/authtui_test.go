@@ -2,6 +2,7 @@ package authtui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -410,11 +411,17 @@ func TestStartAMissingManager(t *testing.T) {
 	f := newFake(t)
 	m := boot(t, f, 140, 40)
 	press(m, "right", "enter") // api: no manager
-	if m.form == nil || !m.form.manager {
-		t.Fatal("enter did not offer to start the manager")
+	if m.form != nil || m.mgr == nil || m.tab != tabThread || m.convID != "" {
+		t.Fatalf("enter did not open the manager conversation: form %v mgr %v tab %v", m.form, m.mgr, m.tab)
 	}
-	if !strings.Contains(plain(m.View()), "Start the manager") {
-		t.Error("no manager form")
+	v := plain(m.View())
+	for _, want := range []string{"manager · api", "not started", "This project has no manager yet", "Tell the manager what to do"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("view lacks %q\n%s", want, v)
+		}
+	}
+	if strings.Contains(v, "Start the manager") {
+		t.Error("the old modal is still drawn")
 	}
 	for _, r := range "triage the backlog" {
 		press(m, string(r))
@@ -426,18 +433,39 @@ func TestStartAMissingManager(t *testing.T) {
 	if len(got) != 1 || got[0] != "api:triage the backlog" {
 		t.Fatalf("managers %v", got)
 	}
-	if m.convID != "m-api" || m.tab != tabThread {
-		t.Errorf("did not open the new manager: %q", m.convID)
+	if m.convID != "m-api" || m.tab != tabThread || m.mgr != nil {
+		t.Errorf("did not switch to the new manager: %q", m.convID)
 	}
-	// Typing on the card starts the form with what was typed; scratch can't have a manager.
+	// Typing on the card seeds the input; esc goes back to the pack; scratch has no manager.
 	m = boot(t, f, 140, 40)
 	press(m, "right", "x")
-	if m.form == nil || !m.form.manager || m.form.prompt.Value() != "x" {
-		t.Fatalf("typing did not start the form: %+v", m.form)
+	if m.mgr == nil || m.input.Value() != "x" {
+		t.Fatalf("typing did not seed the conversation: %+v", m.mgr)
 	}
-	press(m, "esc", "down", "down", "enter")
-	if m.form != nil {
+	press(m, "esc")
+	if m.tab != tabPack || m.mgr != nil {
+		t.Error("esc did not return to the pack")
+	}
+	press(m, "down", "down", "enter")
+	if m.mgr != nil {
 		t.Error("scratch has no manager to start")
+	}
+}
+
+func TestStartManagerErrorKeepsTheText(t *testing.T) {
+	m := boot(t, newFake(t), 140, 40)
+	press(m, "right", "enter")
+	g := m.mgr
+	m.input.SetValue("do the thing")
+	g.text, g.starting = "do the thing", true
+	m.input.SetValue("")
+	m.Update(mgrStartedMsg{g, "", errors.New("boom")})
+	v := plain(m.View())
+	if m.input.Value() != "do the thing" || m.mgr != g || m.convID != "" {
+		t.Errorf("text %q mgr %v conv %q", m.input.Value(), m.mgr, m.convID)
+	}
+	if !strings.Contains(v, "boom") || !strings.Contains(v, "❯ do the thing") {
+		t.Errorf("error not shown\n%s", v)
 	}
 }
 

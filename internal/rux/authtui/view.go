@@ -258,6 +258,13 @@ func (m *Model) threadView(h int) []string {
 	t := m.threadByID(m.convID)
 	title := m.convID
 	where := ""
+	if g := m.mgr; g != nil {
+		st := "not started"
+		if g.starting {
+			st = "starting"
+		}
+		title = dot(st) + " " + stBold.Render("manager · "+cmpOr(g.name, g.project)) + stDim.Render("  "+st)
+	}
 	if t != nil {
 		title = dot(t.Status) + " " + stBold.Render(cmpOr(t.Title, t.ID)) + stDim.Render("  "+t.Authority+" · "+t.Status)
 		if s := m.conv.statsLine(); s != "" {
@@ -285,6 +292,9 @@ func (m *Model) threadView(h int) []string {
 		out = append(out, fit("  "+l, m.w))
 	}
 	left, ph := "", "Message this thread"
+	if m.mgr != nil {
+		ph = "Tell the manager what to do"
+	}
 	if m.convSub != "" {
 		if t != nil {
 			left = m.subLabel(t)
@@ -308,12 +318,6 @@ func (m *Model) formView() string {
 		}
 		return mark + stFaint.Render(fmt.Sprintf("%-10s", label)) + val
 	}
-	if f.manager {
-		body := []string{stBold.Render("Start the manager") + stDim.Render("  of "+cmpOr(f.projLabel, scratchName)), "", row(0, "prompt", f.prompt.View()), "",
-			stDim.Render("the manager runs this project's work · enter starts it · esc cancels")}
-		return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(hAccent).Padding(1, 2).
-			Width(min(m.w-4, 74)).Render(strings.Join(body, "\n"))
-	}
 	place := "● VM   ○ local"
 	if f.local {
 		place = "○ VM   ● local"
@@ -335,7 +339,7 @@ func (m *Model) formView() string {
 func (m *Model) helpView() string {
 	keys := [][2]string{
 		{"← ↑ ↓ →  h j k l", "move between and within columns"},
-		{"enter", "open a thread or a project's manager; start a missing manager; step into the next column"},
+		{"enter", "open a thread or a project's manager; a missing manager opens as an empty conversation; step into the next column"},
 		{"→ on a thread", "its sub-agents, read-only; enter opens one"},
 		{"n", "new thread in the selected project (VM by default)"},
 		{"p", "new project: from one of your GitHub repos, or from a git checkout on this machine (ctrl+a adds the highlighted folder)"},
