@@ -191,15 +191,8 @@ func (m *Model) footer() string {
 			esc = chip("esc", "interrupt")
 		}
 		chips = []string{chip("enter", "send"), esc, chip("ctrl+e", "expand"), chip("↑↓", "scroll"), chip("tab", "monitor"), chip("ctrl+c", "quit")}
-	case m.tab == tabMonitor && m.mfocus == mcGuest && m.mselected(mcGuest) != nil:
-		_, _, _, phase, _ := m.selectedGuest()
-		sl := "sleep"
-		if guestAsleep(phase) {
-			sl = "wake"
-		}
-		chips = []string{chip("←↑↓→", "move"), chip("enter", "open"), chip("s", sl), chip("d", "down"), chip("tab", "pack"), chip("?", "help"), chip("q", "quit")}
 	case m.tab == tabMonitor:
-		chips = []string{chip("←↑↓→", "move"), chip("enter", "open"), chip("tab", "pack"), chip("?", "help"), chip("q", "quit")}
+		chips = m.monitorChips()
 	default:
 		chips = []string{chip("←↑↓→", "move"), chip("enter", "open"), chip("n", "new thread"), chip("p", "new project"), chip("tab", "monitor"),
 			chip("a", map[bool]string{true: "hide archived", false: "archived"}[m.archived]), chip("?", "help"), chip("q", "quit")}
@@ -342,7 +335,8 @@ func (m *Model) helpView() string {
 		{"→ on a thread", "its sub-agents, read-only; enter opens one"},
 		{"n", "new thread in the selected project (VM by default)"},
 		{"p", "new project: from one of your GitHub repos, or from a git checkout on this machine (ctrl+a adds the highlighted folder)"},
-		{"tab / 1 2", "PACK / MONITOR (clients, hosts, guests; enter on a guest opens its thread)"},
+		{"tab / 1 2", "PACK / MONITOR (clients, hosts, guests)"},
+		{"enter  o", "on a MONITOR guest or host: enter opens a shell on it (a new Rex pane when inside Rex); o opens the guest's thread"},
 		{"s  d", "on a MONITOR guest: s sleeps it (stops it, keeps its disk) or wakes it if it's asleep; d downs it (removes it) after a y/n"},
 		{"a", "show or hide archived threads"},
 		{"esc", "back to the pack"},
@@ -467,4 +461,25 @@ func (m *Model) crumbs() []string {
 func (m *Model) closeConv() {
 	m.mgr, m.tab = nil, tabPack
 	m.input.Blur()
+}
+
+// monitorChips are the MONITOR tab's key hints for the selected node.
+func (m *Model) monitorChips() []string {
+	chips := []string{chip("←↑↓→", "move")}
+	if n := m.mselected(m.mfocus); n != nil {
+		if argv, _ := m.shellArgv(n); len(argv) > 0 || n.host != nil {
+			chips = append(chips, chip("enter", "shell"))
+		}
+		if _, _, thread, phase, ok := m.selectedGuest(); ok {
+			if thread != "" {
+				chips = append(chips, chip("o", "open thread"))
+			}
+			sl := "sleep"
+			if guestAsleep(phase) {
+				sl = "wake"
+			}
+			chips = append(chips, chip("s", sl), chip("d", "down"))
+		}
+	}
+	return append(chips, chip("tab", "pack"), chip("?", "help"), chip("q", "quit"))
 }

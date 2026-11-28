@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -514,16 +515,16 @@ func TestMonitorColumns(t *testing.T) {
 	if m.mselected(mcHost).name != "nuc" {
 		t.Errorf("host after selecting phone: %v", m.mselected(mcHost).name)
 	}
-	// enter on a guest with a thread opens that thread; one without does nothing.
-	press(m, "right", "right", "enter")
+	// o on a guest with a thread opens that thread; one without does nothing.
+	press(m, "right", "right", "o")
 	if m.tab != tabThread || m.convID != "t5" {
 		t.Fatalf("tab %v conv %q", m.tab, m.convID)
 	}
 	press(m, "esc", "2")
-	press(m, "up", "enter") // mac: g-t1
+	press(m, "up", "o") // mac: g-t1
 	m.tab = tabMonitor
 	m.mfocus, m.msel[mcHost], m.msel[mcGuest] = mcGuest, 0, 2
-	press(m, "enter")
+	press(m, "o")
 	if m.tab != tabMonitor {
 		t.Error("enter on a guest without a thread left the monitor")
 	}
@@ -1148,5 +1149,81 @@ func TestMonitorGuestSleepWakeDown(t *testing.T) {
 	press(m, "s", "d")
 	if len(f.guestCalls) != n || m.downAsk != nil {
 		t.Error("s/d acted outside the guests column")
+	}
+}
+
+func TestMonitorShell(t *testing.T) {
+	f := newFake(t)
+	m := boot(t, f, 160, 50)
+	m.c.Base = "http://127.0.0.1:7700" // attached through loopback, so mac is this machine
+	env := map[string]string{"SHELL": "/bin/zsh"}
+	oldEnv, oldRex, oldExec := lookEnv, runRex, execProc
+	defer func() { lookEnv, runRex, execProc = oldEnv, oldRex, oldExec }()
+	lookEnv = func(k string) string { return env[k] }
+	var rex [][]string
+	var execd []string
+	runRex = func(a []string) error { rex = append(rex, a); return nil }
+	execProc = func(c *exec.Cmd, done func(error) tea.Msg) tea.Cmd {
+		execd = append(execd, strings.Join(c.Args, " "))
+		return func() tea.Msg { return done(nil) }
+	}
+	m.tab = tabMonitor
+
+	// A guest on this machine; a guest on another host; this machine; another host.
+	m.mfocus, m.msel[mcHost], m.msel[mcGuest] = mcGuest, 0, 0
+	press(m, "enter")
+	m.mfocus, m.msel[mcHost], m.msel[mcGuest] = mcGuest, 1, 0
+	press(m, "enter")
+	m.mfocus, m.msel[mcHost] = mcHost, 0
+	press(m, "enter")
+	m.mfocus, m.msel[mcHost] = mcHost, 1
+	press(m, "enter")
+	want := []string{"rox shell g-t1", "rox shell -S nuc g-t5", "/bin/zsh", "ssh nuc"}
+	if strings.Join(execd, "|") != strings.Join(want, "|") {
+		t.Errorf("commands %q, want %q", execd, want)
+	}
+	if len(rex) != 0 {
+		t.Errorf("rex used outside Rex: %v", rex)
+	}
+
+	// Inside Rex the shell opens in a pane beside the TUI instead.
+	env["REX_SESSION"], env["REX_BLOCK"] = "work", "b7"
+	m.mfocus, m.msel[mcHost], m.msel[mcGuest] = mcGuest, 1, 0
+	press(m, "enter")
+	if len(rex) != 1 || strings.Join(rex[0], " ") != "split -s work -b b7 --split=right --label shell g-t5 -- rox shell -S nuc g-t5" || len(execd) != 4 {
+		t.Errorf("rex %v exec %v", rex, execd)
+	}
+
+	// A client has no shell: enter does nothing and the footer doesn't offer it.
+	m.mfocus = mcClient
+	n := len(execd) + len(rex)
+	m.flash = ""
+	press(m, "enter")
+	if len(execd)+len(rex) != n || strings.Contains(plain(m.View()), "enter  shell") {
+		t.Error("a client got a shell")
+	}
+	// Footer chips on a guest; o still opens its thread.
+	m.mfocus, m.msel[mcHost], m.msel[mcGuest] = mcGuest, 0, 0
+	v := plain(m.View())
+	for _, w := range []string{"enter  shell", "o  open thread", "s  sleep", "d  down"} {
+		if !strings.Contains(v, w) {
+			t.Errorf("footer lacks %q", w)
+		}
+	}
+	press(m, "o")
+	if m.tab != tabThread || m.convID != "t1" {
+		t.Errorf("o: tab %v conv %q", m.tab, m.convID)
+	}
+}
+
+func TestMonitorShellRemoteHostWithoutAddress(t *testing.T) {
+	m := boot(t, newFake(t), 160, 50)
+	m.c.Base = "http://127.0.0.1:7700"
+	m.pack.Authorities[1].URL = "http://127.0.0.1:9"
+	m.tab = tabMonitor
+	m.mfocus, m.msel[mcHost] = mcHost, 1
+	press(m, "enter")
+	if !strings.Contains(m.flash, "no address for nuc") {
+		t.Errorf("flash %q", m.flash)
 	}
 }
