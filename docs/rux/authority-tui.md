@@ -31,7 +31,7 @@ pack › mac › web app › fix the login bug     ←↑↓→ move  enter open
 The columns:
 
 - **LEADER**: one card for the quorum leader: its name, term and vault status, authorities up out of total, and threads working out of total across the pack. The other authorities are in the monitor. The T-rex sits under it.
-- **PROJECT AGENTS**: one card per project, showing its **manager**, the agent that runs all of the project's work: its status, how many of its workers are working out of the total, and the project's cost. A project that has threads but no manager yet says *no manager yet*; `enter` on it (or just typing) opens a prompt and starts the manager (`POST /api/projects/{id}/manager`). Threads with no project go under a **scratch** card, which never has a manager. `enter` on a card with a manager opens the manager's conversation.
+- **PROJECT AGENTS**: one card per project, showing its **manager**, the agent that runs all of the project's work: its status, how many of its workers are working out of the total, and the project's cost. A project that has threads but no manager yet says *no manager yet*; `enter` on it (or just typing) opens an empty conversation with the project's manager (typing seeds the input); the first message you send starts it (`POST /api/projects/{id}/manager`). Threads with no project go under a **scratch** card, which never has a manager. `enter` on a card with a manager opens the manager's conversation.
 - **THREADS**: the selected project's threads, newest first: the manager's workers (threads whose `parent` is the manager) and the threads you started by hand in that project. Each card has its status, authority and guest, and a count of its own sub-agents. `→` steps into a **SUB-AGENTS** column (shown only then) and `enter` there opens a sub-agent's conversation, read-only. Archived threads stay hidden until you press `a`.
 
 - **Cards** show a status dot, the name, three short lines and, on most, a small activity sparkline (events in the last ~40 seconds). The selected card has a bright border, and a line connects the selected path from the leader to its threads.
@@ -45,7 +45,7 @@ The columns:
 | --- | --- |
 | `←` `→` `h` `l` | move between columns |
 | `↑` `↓` `j` `k` | move within a column (the columns to the right follow) |
-| `enter` | on a thread or a project's manager: open its conversation; on a project with no manager: start one; elsewhere: step into the next column |
+| `enter` | on a thread or a project's manager: open its conversation; on a project with no manager: open its empty conversation, where `enter` starts one; elsewhere: step into the next column |
 | `n` | new thread in the selected project |
 | `p` | new project, from GitHub or a local directory |
 | `tab` | PACK ↔ MONITOR (`1` `2` `3` jump to PACK, THREAD, MONITOR) |
@@ -57,6 +57,8 @@ The columns:
 ### Conversation (THREAD)
 
 `enter` on a thread opens it. It looks and works like a thread in `rux agent`, with the same renderer: markdown text, tool calls with their results under `└`, a spinner and a "working… esc to interrupt" line, messages from other agents as `◂ name`, and errors in red. Type in the box at the bottom and press `enter` to send a message (`POST /api/threads/{id}/messages`). Click a tool call (or press `ctrl+e` for all of them) to open it. `↑`/`↓`/`pgup`/`pgdown`/`home`/`end` and the mouse wheel scroll. `esc` interrupts a working thread (`POST /api/threads/{id}/interrupt`) and, otherwise, returns to the graph; `tab` goes to the monitor. A sub-agent's conversation is read-only.
+
+A project with no manager opens the same view, titled *manager · project · not started*, with a hint and the box "Tell the manager what to do". `enter` sends the first message: it shows as your message with the starting spinner, and when the API returns the manager's thread the view switches to it and its events stream in. If starting fails, the text goes back into the box and the error shows in the transcript. `esc` returns to the graph.
 
 ### New thread
 
