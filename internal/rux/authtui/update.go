@@ -84,6 +84,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flash = msg.done
 		}
 		return m, m.fetchPack()
+	case shellDoneMsg:
+		if msg.err != nil {
+			m.flash = "shell: " + errMessage(msg.err)
+		} else {
+			m.flash = ""
+		}
 	case sentMsg:
 		if msg.err != nil {
 			m.flash = "send failed: " + msg.err.Error()
@@ -245,13 +251,10 @@ func (m *Model) monitorKey(s string) tea.Cmd {
 	case "s", "d":
 		return m.guestKey(s)
 	case "enter":
-		if n := m.mselected(m.mfocus); n != nil {
-			if n.guest != nil && n.guest.Thread != "" {
-				return m.openThread(n.guest.Thread)
-			}
-			if m.mfocus+1 < numMCols && len(m.monitorColumn(m.mfocus+1)) > 0 {
-				m.mfocus++
-			}
+		return m.shellKey()
+	case "o":
+		if n := m.mselected(m.mfocus); n != nil && n.guest != nil && n.guest.Thread != "" {
+			return m.openThread(n.guest.Thread)
 		}
 	}
 	m.clamp()

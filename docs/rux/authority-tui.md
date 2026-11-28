@@ -92,11 +92,13 @@ adding directories only work from the machine itself, so the TUI there talks to 
 
 ### Monitor
 
-MONITOR has three columns in the same card style, from the same feed. `←` `→` move between them, `↑` `↓` within one, and `enter` steps right or, on a guest that has a thread, opens that thread.
+MONITOR has three columns in the same card style, from the same feed. `←` `→` move between them, `↑` `↓` within one. `enter` opens a shell on the selected guest or host (nothing on a client), and `o` opens a guest's thread.
 
 - **CLIENTS**: every UI connected to the pack right now (`clients` in the pack view): TUI or web, the device, the authority it connected through, when it connected and when it was last seen. Selecting one selects the host it came through.
 - **HOSTS**: every authority: up, down or joining, a ★ for the leader, OS, CPUs, load, guest slots used and maximum, working threads, uptime.
 - **GUESTS**: the rox VMs (`guests`) on the selected host, or on every host while CLIENTS is focused: phase, backend, CPU %, memory used and limit, and the thread using it.
+
+**Shell.** On a guest, `enter` runs `rox shell GUEST` (with `-S HOST` for a guest on another authority; rux's guests have no project checkout, so no directory is added). On the host this machine runs, it opens your `$SHELL`; on another host of the pack it runs `ssh <the authority URL's hostname>`, or says there's no address when the URL is only loopback. Inside Rex (`REX_SESSION` and `REX_BLOCK` set) the shell opens in a new pane to the right of the TUI with `rex split`, so the TUI stays live; otherwise the TUI suspends until the shell exits.
 
 With a guest selected, `s` sleeps it and `d` downs it (after a `down NAME (thread ID)? y/n` prompt in the footer). *Sleep* stops the guest and keeps its disk, like `rox stop` and the server's idle sleep; on a stopped guest `s` wakes it (`rox start`). *Down* removes the guest, like `rox down`. A guest that a thread uses goes through the thread's own sleep, wake and destroy path, so the thread's status stays right; a spare guest with no thread goes straight to rox. Downing a guest whose thread is mid-turn says so in the prompt. The web app's monitor has the same buttons on each guest card.
 
