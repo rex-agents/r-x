@@ -254,3 +254,67 @@ func TestPersonaRenameRefusedInPack(t *testing.T) {
 		t.Errorf("same name: %d", code)
 	}
 }
+
+func fakeMask() string {
+	rows := []string{"    ########    ", "  ############  ", " ############## ", " ## ######## ## ", " ############## ", "  ############  ", "   ##  ##  ##   "}
+	b, _ := json.Marshal(map[string]any{"mask": rows, "colors": []string{"#ff9a3c", "#f472b6", "#a78bfa"}})
+	return string(b)
+}
+
+func TestGenerateMascotReplies(t *testing.T) {
+	for _, c := range []struct {
+		name, reply, wantErr string
+	}{
+		{"empty", "", "empty"},
+		{"truncated", `{"mask": ["    ########    ", "  ####`, "cut off"},
+		{"no json", "I can't draw that.", "no JSON object"},
+		{"fenced with prose", "Here is your robot:\n```json\n" + fakeMask() + "\n```\nHope you like it!", ""},
+		{"bare", fakeMask(), ""},
+	} {
+		s := &server{}
+		asked := 0
+		s.askModel = func(ctx context.Context, system, user string) (string, string, error) {
+			asked++
+			return c.reply, "claude-haiku-5-5", nil
+		}
+		m, err := s.generateMascot(context.Background(), "a cute robot")
+		switch {
+		case c.wantErr == "" && (err != nil || len(m.Mask) != 7 || m.Model != "claude-haiku-5-5"):
+			t.Errorf("%s: %+v, %v", c.name, m, err)
+		case c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), c.wantErr)):
+			t.Errorf("%s: err = %v, want %q", c.name, err, c.wantErr)
+		}
+		if c.wantErr != "" && asked != 2 {
+			t.Errorf("%s: asked %d times, want a retry", c.name, asked)
+		}
+	}
+}
+
+// The model API's answer shapes behind "the reply has no JSON object": thinking only, a cut-off answer, a refusal.
+func TestAskAnthropicReplyShapes(t *testing.T) {
+	var sent map[string]any
+	var answer string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&sent)
+		w.Write([]byte(answer))
+	}))
+	defer up.Close()
+	t.Setenv("RUX_ANTHROPIC_URL", up.URL)
+	s := &server{dataDir: t.TempDir()}
+	s.vaults = map[string]VaultSource{"local": &fakeVault{cred: Credential{Kind: "api_key", Value: "sk"}}}
+	for _, c := range []struct{ answer, wantErr string }{
+		{`{"stop_reason":"end_turn","content":[{"type":"thinking","thinking":"hm"}]}`, "no text"},
+		{`{"stop_reason":"max_tokens","content":[{"type":"text","text":"{\"mask\": [\"##"}]}`, "max_tokens"},
+		{`{"stop_reason":"refusal","content":[]}`, "declined"},
+		{`{"stop_reason":"end_turn","content":[{"type":"text","text":"ok {}"}]}`, ""},
+	} {
+		answer = c.answer
+		_, _, err := s.askAnthropic(context.Background(), "sys", "user")
+		if (c.wantErr == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.wantErr)) {
+			t.Errorf("%s: err = %v, want %q", c.answer, err, c.wantErr)
+		}
+	}
+	if th, _ := sent["thinking"].(map[string]any); th["type"] != "disabled" || sent["max_tokens"].(float64) < 4000 {
+		t.Errorf("request: thinking=%v max_tokens=%v", sent["thinking"], sent["max_tokens"])
+	}
+}

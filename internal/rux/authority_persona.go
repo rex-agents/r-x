@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -30,6 +31,9 @@ var personaNameRe = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
 
 // mascotModel is the model that draws mascots: fast, and good enough for a few lines of dots.
 const mascotModel = "claude-haiku-5-5"
+
+// mascotMaxTokens leaves room for a 40x16 mask in JSON and a few words around it.
+const mascotMaxTokens = 8000
 
 // checkPersonaName says why name can't be an authority's name, or "" when it can.
 func checkPersonaName(name string) string {
@@ -203,6 +207,7 @@ func (s *server) generateMascot(ctx context.Context, desc string) (authapi.Masco
 			m.Prompt, m.Model, m.Created = desc, model, time.Now().UTC().Format(time.RFC3339)
 			return m, nil
 		}
+		log.Printf("mascot: model %s, reply rejected (%v): %q", model, err, truncate(reply, 300))
 		lastErr = err
 		user = mascotPrompt(desc) + "\n\nYour last reply was rejected: " + err.Error() + ". Reply with only the JSON object, fixed."
 	}
@@ -228,7 +233,10 @@ func (s *server) askAnthropic(ctx context.Context, system, user string) (reply, 
 	if cred.Kind == "oauth" { // a Claude Code subscription token must say whom it speaks for
 		sys = append([]map[string]string{{"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."}}, sys...)
 	}
-	body, _ := json.Marshal(map[string]any{"model": model, "max_tokens": 2000, "system": sys,
+	// No thinking: a mask in JSON is a few thousand tokens, and thinking blocks (on by default for the
+	// newer models) share max_tokens with the answer, which can leave no text at all.
+	body, _ := json.Marshal(map[string]any{"model": model, "max_tokens": mascotMaxTokens, "system": sys,
+		"thinking": map[string]string{"type": "disabled"},
 		"messages": []map[string]string{{"role": "user", "content": user}}})
 	req, err := http.NewRequestWithContext(ctx, "POST", cmpOr(os.Getenv("RUX_ANTHROPIC_URL"), anthropicHost)+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
@@ -244,19 +252,47 @@ func (s *server) askAnthropic(ctx context.Context, system, user string) (reply, 
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode/100 != 2 {
-		return "", "", fmt.Errorf("the model answered %s", resp.Status)
+		var e struct {
+			Error struct{ Type, Message string }
+		}
+		json.Unmarshal(data, &e)
+		log.Printf("mascot: %s answered %s: %s", model, resp.Status, truncate(string(data), 300))
+		return "", "", fmt.Errorf("the model %s answered %s%s", model, resp.Status, cmpOr(": "+e.Error.Message, ""))
 	}
 	var out struct {
-		Content []struct{ Type, Text string }
+		Content    []struct{ Type, Text string }
+		StopReason string `json:"stop_reason"`
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
 		return "", "", err
 	}
 	var b strings.Builder
+	var kinds []string
 	for _, c := range out.Content {
+		kinds = append(kinds, c.Type)
 		if c.Type == "text" {
 			b.WriteString(c.Text)
 		}
 	}
-	return b.String(), model, nil
+	reply = b.String()
+	if reply == "" || out.StopReason == "max_tokens" || out.StopReason == "refusal" {
+		log.Printf("mascot: %s stop_reason=%q blocks=%v reply=%q", model, out.StopReason, kinds, truncate(reply, 300))
+	}
+	switch {
+	case out.StopReason == "refusal":
+		return "", "", fmt.Errorf("the model %s declined to draw that", model)
+	case out.StopReason == "max_tokens":
+		return "", "", fmt.Errorf("the model %s stopped at max_tokens before finishing the drawing", model)
+	case strings.TrimSpace(reply) == "":
+		return "", "", fmt.Errorf("the model %s sent no text (stop_reason %q, blocks %v)", model, out.StopReason, kinds)
+	}
+	return reply, model, nil
+}
+
+// truncate shortens s for a log line.
+func truncate(s string, n int) string {
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
 }
