@@ -9,6 +9,9 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	zone "github.com/lrstanley/bubblezone"
+
+	"github.com/rex-agents/r-x/internal/rux/transcript"
 )
 
 const (
@@ -20,6 +23,7 @@ const (
 	previewW  = 32
 	minPrevW  = 90 // narrower terminals drop the preview column
 	sparkRune = "▁▂▃▄▅▆▇█"
+	boxH      = 3 // the thread's input box
 )
 
 var colTitles = [numCols]string{"HOSTS", "PROJECTS", "THREADS", "SUB-AGENTS"}
@@ -41,6 +45,7 @@ func (m *Model) View() string {
 	if m.w < 24 || m.h < 7 {
 		return "rux: terminal too small"
 	}
+	m.zones = map[string]func(){}
 	var out []string
 	out = append(out, m.header())
 	banners := m.banners()
@@ -61,7 +66,7 @@ func (m *Model) View() string {
 	}
 	out = append(out, body...)
 	out = append(out, m.footer())
-	return strings.Join(out, "\n")
+	return zone.Scan(strings.Join(out, "\n"))
 }
 
 func center(box string, w, h int) []string {
@@ -178,7 +183,11 @@ func (m *Model) footer() string {
 	case m.form != nil:
 		chips = []string{chip("enter", "create"), chip("tab", "field"), chip("ctrl+l", "local"), chip("esc", "cancel")}
 	case m.tab == tabThread:
-		chips = []string{chip("enter", "send"), chip("↑↓", "scroll"), chip("esc", "back"), chip("ctrl+c", "quit")}
+		esc := chip("esc", "back")
+		if m.working() {
+			esc = chip("esc", "interrupt")
+		}
+		chips = []string{chip("enter", "send"), esc, chip("ctrl+e", "expand"), chip("↑↓", "scroll"), chip("tab", "monitor"), chip("ctrl+c", "quit")}
 	default:
 		chips = []string{chip("←↑↓→", "move"), chip("enter", "open"), chip("n", "new thread"), chip("tab", "monitor"),
 			chip("a", map[bool]string{true: "hide archived", false: "archived"}[m.archived]), chip("?", "help"), chip("q", "quit")}
@@ -556,30 +565,19 @@ func (m *Model) threadPreview(id string, n *node, w int) []string {
 	if t.Placement.Local {
 		where = "local"
 	}
-	var dur, turns int64
-	var files []string
+	d := decodeThread(m.events[id])
 	var recent []string
-	for _, se := range m.events[id] {
-		for _, s := range summarize(se) {
-			switch s.kind {
-			case "result":
-				dur += s.ms
-				turns += int64(s.turns)
-			case "file":
-				files = append(files, s.file)
-			}
-			switch s.kind {
-			case "user", "text", "tool", "error":
-				recent = append(recent, oneLine(s, w))
-			}
+	for _, e := range d.entries {
+		if l := oneLine(e, w); l != "" {
+			recent = append(recent, l)
 		}
 	}
 	lines := []string{kv("status", t.Status), kv("on", t.Authority+" · "+where), kv("guest", cmpOr(t.Guest, "none")),
-		kv("stats", fmt.Sprintf("%s · %d turns · $%.2f", uptime(durMs(dur)), turns, t.Cost)), "", stFaint.Render("FILES")}
-	if len(files) == 0 {
+		kv("stats", fmt.Sprintf("%s · %d turns · $%.2f", uptime(durMs(d.ms)), d.turns, t.Cost)), "", stFaint.Render("FILES")}
+	if len(d.files) == 0 {
 		lines = append(lines, stDim.Render("  none"))
 	}
-	for _, f := range files[max(len(files)-3, 0):] {
+	for _, f := range d.files[max(len(d.files)-3, 0):] {
 		lines = append(lines, stText.Render("  ▤ "+ansi.Truncate(f, w-4, "…")))
 	}
 	lines = append(lines, "", stFaint.Render("RECENT"))
@@ -597,22 +595,42 @@ func (m *Model) threadPreview(id string, n *node, w int) []string {
 func (m *Model) threadView(h int) []string {
 	t := m.threadByID(m.convID)
 	title := m.convID
+	where := ""
 	if t != nil {
 		title = dot(t.Status) + " " + stBold.Render(cmpOr(t.Title, t.ID)) + stDim.Render("  "+t.Authority+" · "+t.Status)
+		if s := m.conv.statsLine(); s != "" {
+			title += stDim.Render(" · " + s)
+		}
+		where = t.Authority
+		if t.Guest != "" {
+			where += " · " + t.Guest
+		}
 		if m.convSub != "" {
 			title += stDim.Render("  › sub-agent ") + stBold.Render(m.subLabel(t))
 		}
 	}
 	out := []string{fit(" "+title, m.w)}
-	m.vp.Height = max(h-3, 1)
+	m.vp.Width = max(m.w-4, 10)
+	m.vp.Height = max(h-1-boxH, 1)
+	// Each tool call in view opens with a click.
+	slot := m.convSlot()
+	for i, e := range m.conv.entries {
+		if transcript.Opens(e) {
+			m.zones[fmt.Sprintf("tool:%s:%d", slot, i)] = func() { m.toggleEntry(i) }
+		}
+	}
 	for _, l := range strings.Split(m.vp.View(), "\n") {
-		out = append(out, fit(" "+l, m.w))
+		out = append(out, fit("  "+l, m.w))
 	}
-	out = append(out[:min(len(out), h-1)], "")
-	out[len(out)-1] = fit(" "+m.input.View(), m.w)
+	left, ph := "", "Message this thread"
 	if m.convSub != "" {
-		out[len(out)-1] = fit(stDim.Render(" read-only: a sub-agent's conversation (esc to go back)"), m.w)
+		if t != nil {
+			left = m.subLabel(t)
+		}
+		ph = "Read-only: a sub-agent's conversation (esc to go back)"
 	}
+	m.input.Placeholder = ph
+	out = append(out, strings.Split(transcript.PromptBox(m.w, stFaint, left, "", func(s string) string { return s }, transcript.Truncate(where, m.w/2), m.input.View()), "\n")...)
 	for len(out) < h {
 		out = append(out, blank(m.w))
 	}

@@ -185,3 +185,8 @@ func (c *Client) SubAgentEvents(id, sub string, min int) ([]StoredEvent, error) 
 	err := c.do("GET", fmt.Sprintf("/api/threads/%s/subagents/%s/events/page?min=%d", url.PathEscape(id), url.PathEscape(sub), min), nil, &out)
 	return out.Events, err
 }
+
+// Interrupt is POST /api/threads/{id}/interrupt: it ends the thread's current turn.
+func (c *Client) Interrupt(id string) error {
+	return c.do("POST", "/api/threads/"+url.PathEscape(id)+"/interrupt", nil, nil)
+}

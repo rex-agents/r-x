@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/rex-agents/r-x/internal/rux/authapi"
+	"github.com/rex-agents/r-x/internal/rux/transcript"
 )
 
 type fake struct {
@@ -23,6 +24,7 @@ type fake struct {
 	pack    authapi.Pack
 	created []map[string]any
 	sent    []string
+	stopped []string // threads interrupted
 	sse     chan string
 	srv     *httptest.Server
 }
@@ -76,9 +78,13 @@ func newFake(t *testing.T) *fake {
 	mux.HandleFunc("GET /api/threads/{id}/events/page", func(w http.ResponseWriter, r *http.Request) {
 		evs := []string{
 			`{"id":1,"ts":1,"ev":{"type":"rux_user","text":"fix the login bug"}}`,
-			`{"id":2,"ts":2,"ev":{"type":"assistant","message":{"content":[{"type":"text","text":"Looking at the auth handler."},{"type":"tool_use","name":"Read","input":{"file_path":"auth.go"}}]}}}`,
-			`{"id":3,"ts":3,"ev":{"type":"rux_asset","name":"shot.png","caption":"screenshot"}}`,
-			`{"id":4,"ts":4,"ev":{"type":"result","duration_ms":12000,"num_turns":3,"total_cost_usd":0.42}}`,
+			`{"id":2,"ts":2,"ev":{"type":"assistant","message":{"content":[{"type":"text","text":"Looking at the **auth handler**."},{"type":"tool_use","id":"tu1","name":"Read","input":{"file_path":"auth.go"}}]}}}`,
+			`{"id":3,"ts":3,"ev":{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","content":"package auth\nfunc Login() {}"}]}}}`,
+			`{"id":4,"ts":4,"ev":{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu2","name":"Bash","input":{"command":"go test ./..."}}]}}}`,
+			`{"id":5,"ts":5,"ev":{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu2","is_error":true,"content":"FAIL: login_test.go"}]}}}`,
+			`{"id":6,"ts":6,"ev":{"type":"rux_error","text":"runner lost the guest"}}`,
+			`{"id":7,"ts":7,"ev":{"type":"rux_asset","name":"shot.png","caption":"screenshot"}}`,
+			`{"id":8,"ts":8,"ev":{"type":"result","duration_ms":12000,"num_turns":3,"total_cost_usd":0.42}}`,
 		}
 		fmt.Fprintf(w, `{"start":1,"events":[%s]}`, strings.Join(evs, ","))
 	})
@@ -90,6 +96,11 @@ func newFake(t *testing.T) *fake {
 		json.NewDecoder(r.Body).Decode(&b)
 		f.mu.Lock()
 		f.sent = append(f.sent, r.PathValue("id")+":"+b.Text)
+		f.mu.Unlock()
+	})
+	mux.HandleFunc("POST /api/threads/{id}/interrupt", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.stopped = append(f.stopped, r.PathValue("id"))
 		f.mu.Unlock()
 	})
 	mux.HandleFunc("POST /api/threads", func(w http.ResponseWriter, r *http.Request) {
@@ -145,6 +156,8 @@ func press(m *Model, keys ...string) {
 			msg = tea.KeyMsg{Type: tea.KeyEsc}
 		case "ctrl+l":
 			msg = tea.KeyMsg{Type: tea.KeyCtrlL}
+		case "ctrl+e":
+			msg = tea.KeyMsg{Type: tea.KeyCtrlE}
 		default:
 			msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 		}
@@ -344,7 +357,7 @@ func TestFeedEvents(t *testing.T) {
 		t.Error("event not shown")
 	}
 	// Archived toggle.
-	press(m, "esc", "a")
+	press(m, "tab", "1", "a")
 	if !m.archived {
 		t.Error("archived off")
 	}
@@ -424,7 +437,7 @@ func TestSubAgentConversationAndUptime(t *testing.T) {
 		t.Fatalf("tab %v sub %q", m.tab, m.convSub)
 	}
 	v := plain(m.View())
-	for _, want := range []string{"sub-agent tests", "run the tests for s1", "All green.", "read-only", "up 1h05m"} {
+	for _, want := range []string{"sub-agent tests", "run the tests for s1", "All green.", "Read-only", "up 1h05m"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("lacks %q\n%s", want, v)
 		}
@@ -454,5 +467,88 @@ func TestArchivedFlag(t *testing.T) {
 	}
 	if !found {
 		t.Error("archived thread hidden with the toggle on")
+	}
+}
+
+func TestThreadRendersMarkdownToolResultsAndErrors(t *testing.T) {
+	m := boot(t, newFake(t), 120, 40)
+	press(m, "right", "down", "right", "enter")
+	v := plain(m.View())
+	for _, want := range []string{
+		"Looking at the auth handler.", // markdown: the ** are gone
+		"● Read auth.go", "└ package auth", "func Login() {}",
+		"● Bash go test ./...", "└ FAIL: login_test.go",
+		"✗ runner lost the guest", "· ▤ screenshot",
+		"esc to interrupt", // a running thread, like the harness
+	} {
+		if !strings.Contains(v, want) {
+			t.Errorf("thread view lacks %q\n%s", want, v)
+		}
+	}
+	if strings.Contains(v, "**") {
+		t.Errorf("markdown not rendered\n%s", v)
+	}
+}
+
+// The thread's body is the harness's: the shared renderer draws the same snapshot the same way.
+func TestThreadBodyIsTheSharedRenderer(t *testing.T) {
+	m := boot(t, newFake(t), 120, 40)
+	press(m, "right", "down", "right", "enter")
+	want := plain(transcript.New().Render(m.conv.snapshot("running"), m.vp.Width, false, nil, "tool:t1:"))
+	got := plain(m.View())
+	for _, l := range strings.Split(want, "\n") {
+		if l = strings.TrimRight(l, " "); l != "" && !strings.Contains(got, l) {
+			t.Errorf("view lacks the renderer's line %q\n%s", l, got)
+		}
+	}
+}
+
+func TestThreadToolsOpenWithKeyAndClick(t *testing.T) {
+	m := boot(t, newFake(t), 120, 40)
+	press(m, "right", "down", "right", "enter")
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	if strings.Contains(plain(m.View()), "└ FAIL") == false {
+		t.Fatal("short result should show")
+	}
+	m.toggleEntry(2) // the Read call
+	if !m.expanded["t1"][2] {
+		t.Error("entry not opened")
+	}
+	press(m, "ctrl+e")
+	if !m.expandAll {
+		t.Error("ctrl+e did not expand all")
+	}
+	// A click on a tool line opens it: find it on screen.
+	m.expandAll, m.expanded = false, map[string]map[int]bool{}
+	m.repaint()
+	lines := strings.Split(plain(m.View()), "\n")
+	for y, l := range lines {
+		if x := strings.Index(l, "Read auth.go"); x >= 0 {
+			m.mouse(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
+			break
+		}
+	}
+	if !m.expanded["t1"][2] {
+		t.Error("a click did not open the tool call")
+	}
+}
+
+func TestEscInterruptsAWorkingThread(t *testing.T) {
+	f := newFake(t)
+	m := boot(t, f, 120, 40)
+	press(m, "right", "down", "right", "enter") // t1 is running
+	press(m, "esc")
+	if m.tab != tabThread {
+		t.Error("esc left a working thread")
+	}
+	f.mu.Lock()
+	if len(f.stopped) != 1 || f.stopped[0] != "t1" {
+		t.Errorf("interrupted %v", f.stopped)
+	}
+	f.mu.Unlock()
+	m.pack.Authorities[0].Threads[0].Status = "idle"
+	press(m, "esc")
+	if m.tab != tabPack {
+		t.Error("esc did not go back from an idle thread")
 	}
 }
