@@ -171,8 +171,8 @@ func (p *localPack) Subscribe(ctx context.Context) (<-chan authapi.PackEvent, er
 
 // authName is this authority's name in the pack: ~/.rux/authority.json "name", else the host name.
 func (s *server) authName() string {
-	if s.name != "" {
-		return s.name
+	if n := s.personaName(); n != "" {
+		return n
 	}
 	h, _ := os.Hostname()
 	if i := strings.IndexByte(h, '.'); i > 0 {

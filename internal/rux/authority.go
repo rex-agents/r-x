@@ -28,7 +28,8 @@ import (
 //	~/.rux/authority.url   its HTTP base URL, written once it's listening
 //	~/.rux/authority.sock  the same HTTP API on a unix socket (trusted like loopback)
 //	~/.rux/authority.log   its output when started without --foreground
-//	~/.rux/authority.json  optional settings: {"name": "...", "vault": "local|leader"}
+//	~/.rux/authority.json  settings: {"name": "...", "vault": "local|leader"}; the name is set by the first-run setup
+//	~/.rux/mascot.json     the custom mascot, if the user made one|leader"}
 
 // authorityConfig is ~/.rux/authority.json.
 type authorityConfig struct {
@@ -89,6 +90,9 @@ const authorityUsage = `usage: rux authority start [--foreground] [serve flags]
        rux authority stop
        rux authority status
        rux authority logs [-f]
+       rux authority rename NAME
+       rux authority mascot "WHAT YOUR AGENT LOOKS LIKE"
+       rux authority mascot --reset
 `
 
 func runAuthority(args []string) {
@@ -125,6 +129,10 @@ func runAuthority(args []string) {
 		}
 	case "status":
 		os.Exit(statusAuthority(dir, os.Stdout))
+	case "rename":
+		authorityRename(args)
+	case "mascot":
+		authorityMascot(args)
 	case "logs":
 		follow := len(args) > 0 && (args[0] == "-f" || args[0] == "--follow")
 		if err := showLogs(dir, os.Stdout, follow); err != nil {

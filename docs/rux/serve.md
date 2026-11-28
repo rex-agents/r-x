@@ -59,6 +59,7 @@ Threads are grouped in [projects with managers](projects-and-managers.md). In a 
 | `rux authority stop` | stop it |
 | `rux authority status` | pid, URL, and the pack summary (exit status 1 when it isn't running) |
 | `rux authority logs [-f]` | the last 200 lines of the log, and follow it with `-f` |
+| `rux authority rename NAME`, `rux authority mascot "DESCRIPTION" \| --reset` | name the authority and draw its mascot (see [below](#your-authoritys-name-and-mascot-first-run)) |
 | `rux serve [FLAGS]` | a hidden alias of `rux authority start --foreground` |
 
 | File | Holds |
@@ -66,7 +67,8 @@ Threads are grouped in [projects with managers](projects-and-managers.md). In a 
 | `~/.rux/authority.pid`, `authority.url` | the running daemon's pid and HTTP base URL |
 | `~/.rux/authority.sock` | the same HTTP API on a unix socket (mode 0600, trusted like loopback, so `--allow-user` doesn't apply) |
 | `~/.rux/authority.log` | output of a detached daemon |
-| `~/.rux/authority.json` | optional: `{"name": "mac-studio", "vault": "local"}`. The name defaults to the host name; `vault` is the default [vault source](credentials.md#the-model-proxy) |
+| `~/.rux/authority.json` | `{"name": "jarvis", "vault": "local"}`. The first-run setup sets `name` (see [below](#your-authoritys-name-and-mascot-first-run)); until then the pack uses the host name. `vault` is the default [vault source](credentials.md#the-model-proxy) |
+| `~/.rux/mascot.json` | the custom mascot, if you made one |
 
 Go code (the TUI) calls `rux.EnsureAuthority()` to start the daemon if needed and get its base URL, or
 `rux.AuthorityClient()` for an HTTP client that dials the socket.
@@ -84,6 +86,42 @@ sub-agent the thread started. A leader proxies all `/api/threads/{id}/...` reque
 authority's threads to that authority. `GET /api/threads` also returns `authority`, `placement`, `subagents`
 (a manager's workers) and `cost` for each thread; `?authority=NAME` or `?authority=all` lists another
 authority's or the whole pack's threads. The Go types are in `internal/rux/authapi`.
+
+### Your authority's name and mascot (first run)
+
+The first time you open rux (bare `rux`, or `rux agent`), it asks two things: **what to call your
+authority** (say `jarvis`) and **what your agent should look like**. A model draws a mascot from the
+description (a `#` mask of dots in three gradient colours), and it replaces the rux T-rex on the
+authority TUI, the harness welcome screen and the web app. Blank keeps the T-rex. Answering the name
+marks the setup done, so it never shows again. A run with no terminal, `--headless`, and the runner
+in a guest never wait on it (`RUX_NO_SETUP=1` also skips it).
+
+The name goes in `~/.rux/authority.json` (`{"name": "jarvis", "vault": "local"}`) and the mascot in
+`~/.rux/mascot.json` (`{"prompt", "mask", "colors", "model", "created"}`). The name is the authority's
+name in the pack, the header of the TUI and web app, and what the lead agent calls itself: the
+harness lead's system prompt says "You are jarvis, ...", it introduces itself that way, and its tab,
+prompt box, welcome screen and the speaker on its messages to sub-agents show `jarvis` instead of
+"lead". Threads are told which authority they work for. Without a name the wording stays as it was.
+A name is 1 to 32 lowercase letters, digits and hyphens.
+
+| Command | Does |
+| --- | --- |
+| `rux authority rename NAME` | rename the authority. It applies live to a running daemon; open sessions keep the name they started with, new sessions use the new one. An authority that's in a pack can't be renamed (the other members know it by its name): it says so and asks you to `rux quorum leave` first |
+| `rux authority mascot "DESCRIPTION"` | draw a mascot, keep it and print it |
+| `rux authority mascot --reset` | back to the T-rex |
+
+The model runs on the authority, through the same vault the model proxy uses, so no client holds a
+key. The default is `claude-haiku-5-5` (set `RUX_MASCOT_MODEL` for another Claude model). The reply is
+checked (at most 40 wide and 16 tall, only `#` and spaces, not nearly empty, three `#rrggbb` colours)
+and asked for again once if it isn't usable; if it still isn't, the request fails and the previous
+mascot (or the T-rex) stays.
+
+The API (types in `authapi`): `GET /api/persona` returns `{"name","host_name","setup","mascot","default"}`
+(`setup` is false until the authority has a name; `default` is the T-rex, for clients that draw);
+`PUT /api/persona/name {"name"}` (400 for a bad name, 409 when in a pack);
+`POST /api/persona/mascot {"prompt","save"}` draws one (a preview unless `save`; 502 and the T-rex stays
+on failure); `PUT /api/persona/mascot` keeps a previewed mascot; `DELETE /api/persona/mascot` resets.
+The TUI and the web app run the same setup through these calls.
 
 ### Projects from a local directory
 

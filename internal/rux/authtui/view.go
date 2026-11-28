@@ -51,6 +51,8 @@ func (m *Model) View() string {
 	bodyH := max(m.h-len(out)-2, 1) // the footer, and a blank row above it
 	var body []string
 	switch {
+	case m.setup != nil:
+		body = center(m.setup.view(m.w), m.w, bodyH)
 	case m.pform != nil:
 		body = center(m.projFormView(), m.w, bodyH)
 	case m.form != nil:
@@ -171,6 +173,9 @@ func chip(k, label string) string {
 }
 
 func (m *Model) footer() string {
+	if m.setup != nil {
+		return blank(m.w)
+	}
 	if m.downAsk != nil {
 		return fit(lipgloss.NewStyle().Foreground(hYellow).Bold(true).Render(m.downAsk.text()), m.w)
 	}
@@ -381,7 +386,7 @@ func (m *Model) subLabel(t *authapi.ThreadSummary) string {
 // headerLeft is the top bar's left side in at most w cells: the PACK and MONITOR tabs, or, while
 // a conversation is open, a breadcrumb that continues from PACK. ok is false if it can't fit.
 func (m *Model) headerLeft(w int) (string, bool) {
-	lead := stBold.Render("rux") + "  "
+	lead := stBold.Render(m.brand()) + "  "
 	if m.tab != tabThread {
 		var tabs []string
 		for i, n := range tabNames {

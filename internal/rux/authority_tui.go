@@ -15,7 +15,7 @@ func runAuthorityTUI() {
 		fmt.Fprintf(os.Stderr, "rux: %v\n", err)
 		os.Exit(1)
 	}
-	if err := authtui.Run(url, authtui.Options{Logo: trexLogo}); err != nil {
+	if err := authtui.Run(url, authtui.Options{Logo: trexLogo, Mascot: mascotLogo}); err != nil {
 		fmt.Fprintf(os.Stderr, "rux: %v\n", err)
 		os.Exit(1)
 	}
