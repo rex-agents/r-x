@@ -125,6 +125,25 @@ case "$action" in
             rm -f "$HOME/.codex/auth.json" "$HOME/.codex/auth.json.tmp" "$HOME/.rox/rix-codex-login"
         fi
         ;;
+    git-identity)
+        # stdin: the user's name and email, each in base64 on its own line. The guest's global Git
+        # identity is set when it has none, or when rix set it earlier (the marker). One the guest's
+        # user chose stays.
+        command -v git >/dev/null 2>&1 || exit 0
+        IFS= read -r enc_name
+        IFS= read -r enc_email
+        id_name=$(printf '%s' "$enc_name" | base64 -d)
+        id_email=$(printf '%s' "$enc_email" | base64 -d)
+        [ -n "$id_name" ] && [ -n "$id_email" ] || exit 0
+        have_name=$(git config --global --get user.name 2>/dev/null || true)
+        have_email=$(git config --global --get user.email 2>/dev/null || true)
+        if [ -f "$HOME/.rox/rix-git-identity" ] || { [ -z "$have_name" ] && [ -z "$have_email" ]; }; then
+            git config --global user.name "$id_name"
+            git config --global user.email "$id_email"
+            mkdir -p "$HOME/.rox"
+            : > "$HOME/.rox/rix-git-identity"
+        fi
+        ;;
     read)
         # Each file that exists, as its path and its contents in base64 on one line.
         cd "$HOME"
