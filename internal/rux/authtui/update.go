@@ -23,7 +23,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tick()
 	case packMsg:
-		m.pack, m.havePack, m.err = msg.pack, true, ""
+		m.setPack(msg.pack)
 		m.clamp()
 		return m, m.wantPreview()
 	case projectsMsg:

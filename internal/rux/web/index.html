@@ -296,6 +296,9 @@ footer { flex: none; padding: 10px 0 calc(env(safe-area-inset-bottom) + 12px); b
 .pack-card .l2, .pack-card .l3 { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pack-card .l3 { display: flex; justify-content: space-between; gap: 8px; }
 .pack-card .spark { color: var(--green-dim); letter-spacing: -1px; }
+.pack-detail { margin: 0 16px 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
+.pack-detail h3 { margin: 0 0 6px; font-size: 13px; color: var(--text); letter-spacing: 0; font-weight: 600; }
+.pack-detail .kv { display: flex; gap: 12px; padding: 1px 0; color: var(--muted); } .pack-detail .kv span { width: 80px; flex: none; } .pack-detail .kv b { color: var(--text); font-weight: 400; overflow-wrap: anywhere; }
 .pack-empty { color: var(--faint); font-size: 12px; padding: 4px 2px; }
 .pack-actions { padding: 0 16px 16px; display: flex; gap: 10px; }
 @media (max-width: 899px) { .pack-grid { grid-template-columns: minmax(0, 1fr); } .pack-col:not(.show) { display: none; } .pack-col h3 { display: none; } }
@@ -520,7 +523,8 @@ function showPack() {
     packSel.thread = thread?.id || null;
 
     const loc = hosts.find(a => a.local), started = loc?.started ? new Date(loc.started) : (live ? new Date(since) : null);
-    const up = started ? ago(started).replace("now", "0s") : "";
+    const secs = started ? Math.max(0, Math.round((Date.now() - started) / 1000)) : -1;
+    const up = secs < 0 ? "" : secs < 60 ? secs + "s" : secs < 3600 ? Math.floor(secs / 60) + "m" : Math.floor(secs / 3600) + "h" + String(Math.floor(secs / 60) % 60).padStart(2, "0") + "m";
     const bar = h("div", { class: "pack-bar" },
       h("span", {}, h("span", { class: "dot " + (!live ? "failed" : p.degraded ? "provisioning" : "running") }), !live ? "offline" : p.degraded ? "degraded" : "live"),
       p.leader ? h("span", {}, "leader ", h("b", {}, p.leader)) : null, h("span", {}, "term " + (p.term || 0)),
@@ -537,7 +541,7 @@ function showPack() {
       left != null ? h("div", { class: "l3" }, h("span", {}, left), act ? h("span", { class: "spark" }, packSpark({ act })) : null) : null);
     const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
     const hostCards = hosts.map(a => card(a.name === packSel.host, () => { packSel.host = a.name; packSel.project = null; focus = 1; draw(); }, a.status, a.name,
-      `${a.host?.os || "?"} · ${a.host?.cpus || 0} cpu · load ${(a.host?.load || 0).toFixed(1)}${a.name === p.leader ? " · leader" : ""}`,
+      (a.status !== "up" ? `${a.status} · unreachable` : `${a.host?.os || "?"} · ${a.host?.cpus || 0} cpu · load ${(a.host?.load || 0).toFixed(1)}`) + (a.name === p.leader ? " · leader" : ""),
       plural(threadsOf(a).length, "thread") + (a.host?.guests_max ? ` · ${a.host.guests_used || 0}/${a.host.guests_max} vms` : ""),
       threadsOf(a).reduce((s, t) => (packAct[t.id] || []).map((v, i) => v + (s[i] || 0)), [])));
     const projCards = projIds.map(id => {
@@ -548,14 +552,21 @@ function showPack() {
     });
     const threadCards = projThreads.map(t => card(t.id === packSel.thread, () => { packSel.thread = t.id; focus = 3; draw(); }, t.status, t.title || t.id,
       `${t.status} · ${t.placement?.local ? "local" : "vm"} · $${(t.cost || 0).toFixed(2)}`, plural((t.subagents || []).length, "sub-agent"), packAct[t.id]));
-    const subCards = (thread?.subagents || []).map(s => card(false, () => { location.hash = "#/t/" + encodeURIComponent(thread.id) + "/s/" + encodeURIComponent(s.id); }, s.status, s.name || s.id, s.guest || "no guest", s.status));
+    const subCards = (thread?.subagents || []).map(s => card(false, () => { location.hash = "#/t/" + encodeURIComponent(thread.id) + "/s/" + encodeURIComponent(s.id); }, s.status, s.name || s.id, "on " + (s.authority || thread.authority) + (s.guest ? " · " + s.guest : ""), s.status));
     const col = (i, title, cards, empty) => h("div", { class: "pack-col" + (focus === i ? " focus" : "") + (focus === i ? " show" : ""), "data-col": i }, h("h3", {}, title), ...(cards.length ? cards : [h("div", { class: "pack-empty" }, empty)]));
     const actions = h("div", { class: "pack-actions" },
       focus > 0 ? h("button", { class: "start", onclick: () => { focus--; draw(); } }, "‹ up") : null,
       h("a", { class: "start", href: "#/new/p/" + encodeURIComponent(packSel.project || "scratch"), style: "display:inline-block;text-decoration:none" }, "new thread"),
       thread ? h("a", { class: "start", href: "#/t/" + encodeURIComponent(thread.id), style: "display:inline-block;text-decoration:none" }, "open thread") : null);
+    // The selected node, like the TUI's preview column.
+    const kv = (k, v) => h("div", { class: "kv" }, h("span", {}, k), h("b", {}, String(v)));
+    let detail = [];
+    if (thread) detail = [h("h3", {}, thread.title || thread.id), kv("status", thread.status), kv("on", thread.authority + " · " + (thread.placement?.local ? "local" : "vm")), kv("guest", thread.guest || "none"), kv("cost", "$" + (thread.cost || 0).toFixed(2)), kv("updated", thread.updated ? ago(thread.updated) + " ago" : "-"), kv("sub-agents", (thread.subagents || []).map(s => (s.name || s.id) + " on " + (s.authority || thread.authority)).join(", ") || "none")];
+    else if (host) detail = [h("h3", {}, host.name), kv("status", host.status), kv("os", host.host?.os || "?"), kv("cpus", host.host?.cpus || 0), kv("load", (host.host?.load || 0).toFixed(2)), kv("memory", ((host.host?.mem || 0) / 2 ** 30).toFixed(1) + " GiB"), kv("vms", (host.host?.guests_used || 0) + " / " + (host.host?.guests_max || 0)), kv("role", [host.name === p.leader ? "pack leader" : "", host.name === p.vault_host ? "vault host" : ""].filter(Boolean).join(", ") || "member")];
+    const panel = h("div", { class: "pack-detail" }, ...detail);
     root.replaceChildren(bar, ...banners.filter(Boolean),
       h("div", { class: "pack-grid" }, col(0, "HOSTS", hostCards, "no authorities"), col(1, "PROJECTS", projCards, "no projects"), col(2, "THREADS", threadCards, "no threads"), col(3, "SUB-AGENTS", subCards, "no sub-agents")),
+      panel,
       actions);
   }
   function projName(id) { return !id ? "(no project)" : (projects.find(x => x.id === id) || {}).name || id; }

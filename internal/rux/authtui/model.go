@@ -271,8 +271,11 @@ func (m *Model) column(c int) []node {
 			if a.Name == m.pack.Leader {
 				role = " · leader"
 			}
-			out = append(out, node{kind: colHost, key: a.Name, name: a.Name, host: a, status: a.Status, threads: n,
-				summary: fmt.Sprintf("%s · %d cpu · load %.1f%s", cmpOr(a.Host.OS, "?"), a.Host.CPUs, a.Host.Load, role)})
+			sum := fmt.Sprintf("%s · %d cpu · load %.1f%s", cmpOr(a.Host.OS, "?"), a.Host.CPUs, a.Host.Load, role)
+			if a.Status != "up" {
+				sum = a.Status + " · unreachable" + role
+			}
+			out = append(out, node{kind: colHost, key: a.Name, name: a.Name, host: a, status: a.Status, threads: n, summary: sum})
 		}
 		return out
 	case colProject:
@@ -343,7 +346,7 @@ func (m *Model) column(c int) []node {
 		for i := range t.th.SubAgents {
 			s := &t.th.SubAgents[i]
 			out = append(out, node{kind: colSub, key: s.ID, name: cmpOr(s.Name, s.ID), sub: s, status: s.Status,
-				summary: cmpOr(s.Guest, "no guest")})
+				summary: subSummary(*s)})
 		}
 		return out
 	}
@@ -435,7 +438,7 @@ func (m *Model) applyFeed(e SSE) tea.Cmd {
 	case authapi.EventPack:
 		var p authapi.Pack
 		if json.Unmarshal(data, &p) == nil {
-			m.pack, m.havePack, m.err = p, true, ""
+			m.setPack(p)
 			m.noteUpdates()
 		}
 	case authapi.EventPackDelta:
@@ -537,4 +540,27 @@ func (m *Model) convSlot() string {
 		return m.convID + "/" + m.convSub
 	}
 	return m.convID
+}
+
+// subSummary: where a sub-agent runs, and its guest when it has one.
+func subSummary(s authapi.SubAgentSummary) string {
+	where := "on " + cmpOr(s.Authority, "this host")
+	if s.Guest != "" {
+		return where + " · " + s.Guest
+	}
+	return where
+}
+
+// setPack takes a pack snapshot. The first one selects the authority we're attached to, as the
+// web app does.
+func (m *Model) setPack(p authapi.Pack) {
+	first := !m.havePack
+	m.pack, m.havePack, m.err = p, true, ""
+	if first {
+		for i, a := range p.Authorities {
+			if a.Local {
+				m.sel[colHost] = i
+			}
+		}
+	}
 }
