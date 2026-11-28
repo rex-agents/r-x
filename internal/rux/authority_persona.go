@@ -36,6 +36,9 @@ func checkPersonaName(name string) string {
 	if !personaNameRe.MatchString(name) {
 		return "a name is 1 to 32 lowercase letters, digits and hyphens, like jarvis or dev-box"
 	}
+	if name == "you" { // agents' transcripts call the user "you"
+		return "\"you\" is how agents refer to the user; pick another name"
+	}
 	return ""
 }
 
