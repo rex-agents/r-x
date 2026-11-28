@@ -486,6 +486,8 @@ func TestDeliverRetainsAndRetriesFailedDispatch(t *testing.T) {
 		t.Fatalf("inbox files = %d", len(ents))
 	}
 	if strings.Contains(strings.Join(func() []string {
+		r.mu.Lock() // the delivery loop emits events concurrently
+		defer r.mu.Unlock()
 		var o []string
 		for _, l := range r.lines {
 			o = append(o, string(l))
