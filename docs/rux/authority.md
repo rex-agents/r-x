@@ -106,7 +106,7 @@ The pack view carries three more things, all additive:
 
 Node graph, left to right: **leader → project agents → threads**, with a preview column on the
 right (the selected node's last events, files, cost). rux's existing palette (`harness_palette.go`) and the
-animated T-rex (`harness_logo.go`) at the bottom of the first column. PACK is **LEADER → PROJECT AGENTS → THREADS** (a project's manager and its workers; a thread's sub-agents open one step further right). MONITOR is **CLIENTS → HOSTS → GUESTS**: the UIs connected, every authority, and the rox VMs on the selected host (see [the authority TUI](authority-tui.md)). Header tabs: `PACK` `THREAD` `MONITOR`; header
+animated T-rex (`harness_logo.go`) at the bottom of the first column. PACK is **LEADER → PROJECT AGENTS → THREADS** (a project's manager and its workers; a thread's sub-agents open one step further right). MONITOR is **CLIENTS → HOSTS → GUESTS**: the UIs connected, every authority, and the rox VMs on the selected host (see [the authority TUI](authority-tui.md)). Header tabs: `PACK` `MONITOR` (an open conversation shows as a `PACK › project › thread` breadcrumb); header
 right: live/degraded dot, leader name, term, vault status, uptime. Footer: breadcrumb and key hints
 (`←↑↓→` move, `enter` open, `n` new thread, `tab` monitor, `a` archived, `?` help, `q` quit). `enter` on a
 thread opens it (its conversation, the same as the web app's thread page); `n` creates a thread via

@@ -330,7 +330,7 @@ func TestNavigationAndSelectionPath(t *testing.T) {
 		t.Fatalf("project %v threadSel %d", m.selected(colProject).name, m.sel[colThread])
 	}
 	v := plain(m.View())
-	for _, want := range []string{"PACK", "THREAD", "MONITOR", "● live", "leader mac", "term 3", "vault ok", "LEADER", "PROJECT AGENTS", "THREADS", "pack › mac › scratch", "new thread", "T-REX"} {
+	for _, want := range []string{"PACK", "MONITOR", "● live", "leader mac", "term 3", "vault ok", "LEADER", "PROJECT AGENTS", "THREADS", "pack › mac › scratch", "new thread", "T-REX"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("view lacks %q", want)
 		}
@@ -415,7 +415,7 @@ func TestStartAMissingManager(t *testing.T) {
 		t.Fatalf("enter did not open the manager conversation: form %v mgr %v tab %v", m.form, m.mgr, m.tab)
 	}
 	v := plain(m.View())
-	for _, want := range []string{"manager · api", "not started", "This project has no manager yet", "Tell the manager what to do"} {
+	for _, want := range []string{"PACK › api › manager", "not started", "This project has no manager yet", "Tell the manager what to do"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("view lacks %q\n%s", want, v)
 		}
@@ -472,7 +472,7 @@ func TestStartManagerErrorKeepsTheText(t *testing.T) {
 func TestMonitorColumns(t *testing.T) {
 	m := boot(t, newFake(t), 140, 40)
 	m.opts.Now = func() time.Time { return time.Date(2026, 11, 27, 10, 0, 0, 0, time.UTC) }
-	press(m, "3")
+	press(m, "2")
 	if got := strings.Join(names(m.monitorColumn(mcClient)), ","); got != "laptop,phone" {
 		t.Fatalf("clients %s", got)
 	}
@@ -513,7 +513,7 @@ func TestMonitorColumns(t *testing.T) {
 	if m.tab != tabThread || m.convID != "t5" {
 		t.Fatalf("tab %v conv %q", m.tab, m.convID)
 	}
-	press(m, "esc", "3")
+	press(m, "esc", "2")
 	press(m, "up", "enter") // mac: g-t1
 	m.tab = tabMonitor
 	m.mfocus, m.msel[mcHost], m.msel[mcGuest] = mcGuest, 0, 2
@@ -692,7 +692,7 @@ func TestNarrowTerminals(t *testing.T) {
 	for _, sz := range [][2]int{{160, 45}, {120, 30}, {100, 24}, {80, 24}, {60, 20}, {40, 12}, {24, 7}} {
 		m := boot(t, f, sz[0], sz[1])
 		press(m, "right", "down", "right", "right")
-		for _, tb := range []string{"1", "3", "?"} {
+		for _, tb := range []string{"1", "2", "?"} {
 			press(m, tb)
 			lines := strings.Split(m.View(), "\n")
 			if len(lines) != sz[1] {
@@ -939,7 +939,7 @@ func TestPackRenderSizes(t *testing.T) {
 func TestMonitorCentersSelectedCard(t *testing.T) {
 	for _, w := range []int{160, 100, 60} {
 		m := boot(t, newFake(t), w, 50)
-		press(m, "3", "right", "down") // monitor, hosts column, second row if any
+		press(m, "2", "right", "down") // monitor, hosts column, second row if any
 		if m.tab != tabMonitor {
 			t.Fatalf("tab %v", m.tab)
 		}
@@ -987,6 +987,86 @@ func TestMonitorRenderDump(t *testing.T) {
 		t.Skip("set DUMP=1 to print a rendering")
 	}
 	m := boot(t, newFake(t), 160, 50)
-	press(m, "3", "right")
+	press(m, "2", "right")
 	fmt.Printf("=== monitor 160x50\n%s\n", plain(m.View()))
+}
+
+func TestHeaderBreadcrumb(t *testing.T) {
+	f := newFake(t)
+	m := boot(t, f, 160, 45)
+	head := func() string { return strings.Split(plain(m.View()), "\n")[0] }
+	if h := head(); strings.Contains(h, "THREAD") || !strings.Contains(h, "PACK") || !strings.Contains(h, "MONITOR") {
+		t.Errorf("pack header %q", h)
+	}
+	press(m, "right", "down", "right", "enter") // fix the login bug
+	if m.tab != tabThread {
+		t.Fatalf("tab %v", m.tab)
+	}
+	h := head()
+	if !strings.Contains(h, "PACK › web app › fix the login bug") || strings.Contains(h, "THREAD") || strings.Contains(h, "MONITOR") {
+		t.Errorf("thread header %q", h)
+	}
+	if strings.Contains(plain(m.View()), "pack › ") {
+		t.Error("the footer still has a breadcrumb on the thread view")
+	}
+	// A narrow header drops the middle crumb, then truncates the title.
+	m.w = 70
+	if h := head(); !strings.Contains(h, "PACK › ") || strings.Contains(h, "web app") {
+		t.Errorf("narrow header %q", h)
+	}
+	m.w = 160
+	// tab goes to MONITOR; 1 goes to PACK; 2 to MONITOR; 3 does nothing.
+	press(m, "tab")
+	if m.tab != tabMonitor {
+		t.Fatalf("tab from thread: %v", m.tab)
+	}
+	press(m, "1")
+	if m.tab != tabPack {
+		t.Fatalf("1: %v", m.tab)
+	}
+	press(m, "2")
+	if m.tab != tabMonitor {
+		t.Fatalf("2: %v", m.tab)
+	}
+	press(m, "3")
+	if m.tab != tabMonitor {
+		t.Fatalf("3 changed the tab: %v", m.tab)
+	}
+	press(m, "tab", "right", "down", "right", "right", "enter") // a sub-agent
+	if h := head(); !strings.Contains(h, "› sub-agent ") {
+		t.Errorf("sub-agent header %q", h)
+	}
+	press(m, "esc")
+	if m.tab != tabPack {
+		t.Errorf("esc: %v", m.tab)
+	}
+}
+
+func TestHeaderPackCrumbReturnsToPack(t *testing.T) {
+	m := boot(t, newFake(t), 140, 40)
+	press(m, "right", "down", "right", "enter")
+	m.View()
+	m.zones["crumb:pack"]()
+	if m.tab != tabPack {
+		t.Errorf("tab %v", m.tab)
+	}
+}
+
+func TestHeaderDump(t *testing.T) {
+	if os.Getenv("DUMP") == "" {
+		t.Skip("set DUMP=1")
+	}
+	m := boot(t, newFake(t), 160, 45)
+	first := func(tag string) {
+		l := strings.Split(plain(m.View()), "\n")
+		fmt.Printf("%-8s|%s\n", tag, l[0])
+	}
+	first("pack")
+	press(m, "2")
+	first("monitor")
+	press(m, "1", "right", "down", "right", "enter")
+	first("thread")
+	fmt.Println(strings.Join(strings.Split(plain(m.View()), "\n")[:4], "\n"))
+	press(m, "esc", "right", "right", "enter")
+	first("sub")
 }

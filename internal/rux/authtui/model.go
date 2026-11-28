@@ -28,11 +28,13 @@ type tab int
 
 const (
 	tabPack tab = iota
-	tabThread
 	tabMonitor
+	// tabThread is an open conversation (a thread, a project's manager or a sub-agent). It has no
+	// header tab: the header shows it as a crumb after PACK.
+	tabThread
 )
 
-var tabNames = []string{"PACK", "THREAD", "MONITOR"}
+var tabNames = []string{"PACK", "MONITOR"}
 
 // Messages.
 type (
