@@ -47,7 +47,8 @@ func (m *Model) View() string {
 	out = append(out, m.header())
 	banners := m.banners()
 	out = append(out, banners...)
-	bodyH := m.h - len(out) - 1
+	out = append(out, blank(m.w))   // space under the top bar
+	bodyH := max(m.h-len(out)-2, 1) // the footer, and a blank row above it
 	var body []string
 	switch {
 	case m.pform != nil:
@@ -64,7 +65,7 @@ func (m *Model) View() string {
 		body = m.packView(bodyH)
 	}
 	out = append(out, body...)
-	out = append(out, m.footer())
+	out = append(out, blank(m.w), m.footer())
 	return zone.Scan(strings.Join(out, "\n"))
 }
 
@@ -278,9 +279,9 @@ func (m *Model) threadView(h int) []string {
 			title += stDim.Render("  › sub-agent ") + stBold.Render(m.subLabel(t))
 		}
 	}
-	out := []string{fit(" "+title, m.w)}
+	out := []string{fit(" "+title, m.w), blank(m.w)}
 	m.vp.Width = max(m.w-4, 10)
-	m.vp.Height = max(h-1-boxH, 1)
+	m.vp.Height = max(h-2-boxH, 1)
 	// Each tool call in view opens with a click.
 	slot := m.convSlot()
 	for i, e := range m.conv.entries {

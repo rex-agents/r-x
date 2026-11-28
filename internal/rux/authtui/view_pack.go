@@ -11,14 +11,18 @@ import (
 // ---- the graph ----
 
 type layout struct {
-	cols    []int // visible columns
-	widths  map[int]int
-	logo    bool
-	preview int // preview width, 0 = hidden
+	cols    []int       // visible columns, left to right
+	widths  map[int]int // every column's width
+	xs      map[int]int // every column's left edge in the graph area (may be negative)
+	avail   int         // width of the graph area (everything left of the preview)
+	logo    bool        // there is room for the T-rex, if nothing is in its way
+	preview int         // preview width, 0 = hidden
 }
 
+// plan lays the columns out so the focused one sits in the horizontal middle of the graph area
+// and the rest follow it left and right, gutterW apart. Columns past the edges are clipped.
 func (m *Model) plan(bodyH int) layout {
-	l := layout{widths: map[int]int{}}
+	l := layout{widths: map[int]int{}, xs: map[int]int{}}
 	avail := m.w
 	if avail >= minPrevW {
 		l.preview = previewW
@@ -27,18 +31,28 @@ func (m *Model) plan(bodyH int) layout {
 		}
 		avail -= l.preview + 1
 	}
+	l.avail = avail
 	l.logo = m.opts.Logo != nil && bodyH >= logoH+cardH+2 && avail >= logoW+gutterW+cardW
 	nc := m.packCols()
 	for c := 0; c < nc; c++ {
 		l.widths[c] = cardW
-		if l.logo && c == 0 {
-			l.widths[c] = logoW
-		}
 		if avail < cardW+2 { // a very narrow terminal: one full-width column
 			l.widths[c] = max(avail, 12)
 		}
 	}
-	l.cols = window(l.widths, nc, m.focus, avail)
+	f := min(max(m.focus, 0), nc-1)
+	l.xs[f] = (avail - l.widths[f]) / 2
+	for c := f - 1; c >= 0; c-- {
+		l.xs[c] = l.xs[c+1] - gutterW - l.widths[c]
+	}
+	for c := f + 1; c < nc; c++ {
+		l.xs[c] = l.xs[c-1] + l.widths[c-1] + gutterW
+	}
+	for c := 0; c < nc; c++ {
+		if l.xs[c]+l.widths[c] > 0 && l.xs[c] < avail {
+			l.cols = append(l.cols, c)
+		}
+	}
 	return l
 }
 
@@ -112,16 +126,51 @@ func (m *Model) renderCol(title string, nodes []node, sel int, focused bool, w, 
 	return colRender{lines[:h], mid}
 }
 
-func (m *Model) renderColumn(c, w, h int, logo bool) colRender {
-	// The T-rex sits at the bottom of the first column, under the cards.
-	var logoLines []string
-	if logo && c == 0 {
-		for _, l := range strings.Split(m.opts.Logo(m.phase), "\n") {
-			logoLines = append(logoLines, fit(l, w))
-		}
-		logoLines = logoLines[:min(len(logoLines), max(h-1, 0))]
+// renderColumn draws one PACK column h rows tall. The title is pinned to the top row; the
+// selected card's middle sits on row h/2 and the other cards stack outward from it, clipped
+// at the edges. An empty column puts its "no …" text on that middle row.
+func (m *Model) renderColumn(c, w, h int) colRender {
+	nodes := m.column(c)
+	lines := make([]string, h)
+	for i := range lines {
+		lines[i] = blank(w)
 	}
-	return m.renderCol(colTitles[c], m.column(c), m.sel[c], c == m.focus, w, h, logoLines, emptyText(c))
+	title := stFaint
+	if c == m.focus {
+		title = stAccent
+	}
+	lines[0] = fit(title.Render(colTitles[c]), w)
+	mid := h / 2
+	if len(nodes) == 0 {
+		lines[mid] = fit(stDim.Render(emptyText(c)), w)
+		return colRender{lines, -1}
+	}
+	sel := min(max(m.sel[c], 0), len(nodes)-1)
+	top := mid - cardH/2 - sel*cardH // where card 0 starts
+	for i, n := range nodes {
+		y0 := top + i*cardH
+		if y0+cardH <= 1 || y0 >= h {
+			continue
+		}
+		for j, l := range m.card(n, w, i == sel, c == m.focus) {
+			if y := y0 + j; y >= 1 && y < h {
+				lines[y] = l
+			}
+		}
+	}
+	return colRender{lines, mid}
+}
+
+// logoRows is the T-rex's lines, fitted to its width, or nil if it has none.
+func (m *Model) logoRows(h int) []string {
+	if m.opts.Logo == nil {
+		return nil
+	}
+	var out []string
+	for _, l := range strings.Split(m.opts.Logo(m.phase), "\n") {
+		out = append(out, fit(l, logoW))
+	}
+	return out[:min(len(out), max(h-1, 0))]
 }
 
 func emptyText(c int) string {
@@ -259,13 +308,49 @@ func (m *Model) packView(h int) []string {
 		return center(stDim.Render("connecting to "+m.c.Base+"…"), m.w, h)
 	}
 	l := m.plan(h)
+	rows := make([]string, h)
 	cols := make([]colRender, len(l.cols))
-	linked := make([]bool, len(l.cols))
 	for i, c := range l.cols {
-		cols[i] = m.renderColumn(c, l.widths[c], h, l.logo)
-		linked[i] = m.selected(c) != nil
+		cols[i] = m.renderColumn(c, l.widths[c], h)
 	}
-	rows := joinCols(cols, linked, h)
+	x0 := l.xs[l.cols[0]]
+	for y := range rows {
+		var b strings.Builder
+		if x0 > 0 {
+			b.WriteString(blank(x0))
+		}
+		for i, c := range l.cols {
+			if i > 0 {
+				yr := cols[i].mid
+				if m.selected(c) == nil {
+					yr = -1
+				}
+				b.WriteString(gutter(h, cols[i-1].mid, yr)[y])
+			}
+			b.WriteString(cols[i].lines[y])
+		}
+		line := b.String()
+		if x0 < 0 {
+			line = ansi.Cut(line, -x0, -x0+l.avail)
+		}
+		rows[y] = fit(line, l.avail)
+	}
+	// The T-rex sits at the bottom left of the graph area, if nothing is in its way.
+	if lr := m.logoRows(h); l.logo && len(lr) > 0 {
+		top := h - len(lr)
+		free := true
+		for i := range lr {
+			if strings.TrimSpace(ansi.Strip(ansi.Cut(rows[top+i], 0, logoW+1))) != "" {
+				free = false
+				break
+			}
+		}
+		if free {
+			for i, g := range lr {
+				rows[top+i] = g + ansi.Cut(rows[top+i], logoW, l.avail)
+			}
+		}
+	}
 	if l.preview > 0 {
 		pv := m.previewPanel(l.preview, h)
 		for y := range rows {
