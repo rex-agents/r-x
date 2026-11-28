@@ -117,6 +117,9 @@ func Hook(event, name string, stdin io.Reader, stdout io.Writer) error {
 				return err
 			}
 		}
+		if err := PushGitIdentity(c, &g, out); err != nil {
+			out.warn("Could not set the Git identity in %s (%s)", g.Name, firstLine(err.Error()))
+		}
 		if err := SyncSetup(c, &g, out); err != nil {
 			out.warn("Could not copy your agent setup into %s (%s)", g.Name, firstLine(err.Error()))
 		}

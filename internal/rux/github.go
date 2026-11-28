@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +41,19 @@ type ghRepo struct {
 	Pushed        string `json:"pushed"`
 	DefaultBranch string `json:"default_branch"`
 	Description   string `json:"description,omitempty"`
+}
+
+// hostGitIdentity is the user's global git user.name and user.email on this machine,
+// empty when either is unset. It's a variable so tests can replace it.
+var hostGitIdentity = func() (name, email string) {
+	get := func(key string) string {
+		out, err := exec.Command("git", "config", "--global", "--get", key).Output()
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
+	}
+	return get("user.name"), get("user.email")
 }
 
 func (g *github) enabled() bool { return g != nil && !g.off }
@@ -220,6 +234,10 @@ func (s *server) handleGitCredential(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 502)
 		return
 	}
+	name, email := ident.Name, ident.Email
+	if n, e := hostGitIdentity(); n != "" && e != "" {
+		name, email = n, e // the user's own git config beats the GitHub-derived identity
+	}
 	writeJSONResp(w, 200, map[string]any{"username": "x-access-token", "password": token,
-		"name": ident.Name, "email": ident.Email, "login": ident.Login})
+		"name": name, "email": email, "login": ident.Login})
 }

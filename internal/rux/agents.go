@@ -588,6 +588,7 @@ func agentCommand(a *subAgent) string {
 	if a.Push != "" {
 		brief += fmt.Sprintf("Commit your work and push it to a new branch named %s (never the default branch). ", a.Push)
 	}
+	brief += "Your git identity is already set; don't change git user.name/user.email. "
 	brief += "When you finish, end with a short summary that starts with DONE:. If you can't continue, start your last message with BLOCKED: and say what you need."
 	b64 := func(s string) string {
 		return fmt.Sprintf(`"$(printf %%s %s | base64 -d)"`, base64.StdEncoding.EncodeToString([]byte(s)))
