@@ -44,7 +44,7 @@ jobs:
           version: "~> v2"
           args: release --snapshot --clean --skip=before
         env:
-          HOMEBREW_TAP_TOKEN: ""
+          HOMEBREW_TAP_KEY: ""
       - uses: actions/upload-artifact@v4
         with:
           name: r-x-snapshot

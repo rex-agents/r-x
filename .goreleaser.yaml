@@ -87,9 +87,12 @@ homebrew_casks:
     repository:
       owner: rex-agents
       name: homebrew-tap
-      token: '{{ index .Env "HOMEBREW_TAP_TOKEN" }}'
-    # Without the tap token (a local run), skip the cask. CI refuses to release without it.
-    skip_upload: '{{ if index .Env "HOMEBREW_TAP_TOKEN" }}auto{{ else }}true{{ end }}'
+      # Pushed over SSH with a deploy key that can write only to homebrew-tap.
+      git:
+        url: git@github.com:rex-agents/homebrew-tap.git
+        private_key: '{{ index .Env "HOMEBREW_TAP_KEY" }}'
+    # Without the tap key (a local run), skip the cask. CI refuses to release without it.
+    skip_upload: '{{ if index .Env "HOMEBREW_TAP_KEY" }}auto{{ else }}true{{ end }}'
     homepage: https://github.com/rex-agents/r-x
     description: Rex guests (rox), the vault for their secrets (rix), and agents on them (rux)
     caveats: |

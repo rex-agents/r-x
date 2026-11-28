@@ -54,12 +54,12 @@ jobs:
             echo "::error::$tag isn't a version tag such as v1.2.0 or v1.2.0-rc.1"
             exit 1
           fi
-      - name: Check the Homebrew tap token
+      - name: Check the Homebrew tap key
         env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_KEY: ${{ secrets.HOMEBREW_TAP_KEY }}
         run: |
-          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
-            echo "::error::HOMEBREW_TAP_TOKEN isn't set, so brew install rex-agents/tap/r-x would stay broken. Add a token with contents write on rex-agents/homebrew-tap."
+          if [ -z "$HOMEBREW_TAP_KEY" ]; then
+            echo "::error::HOMEBREW_TAP_KEY isn't set, so brew install rex-agents/tap/r-x would stay broken. Add a write deploy key on rex-agents/homebrew-tap and store its private half as this secret."
             exit 1
           fi
       - uses: actions/setup-go@v5
@@ -71,7 +71,7 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_KEY: ${{ secrets.HOMEBREW_TAP_KEY }}
       - name: Summarize
         run: |
           tag="${{ github.event.inputs.tag || github.ref_name }}"
