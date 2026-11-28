@@ -159,3 +159,8 @@ type Status struct {
 	SSHAgent     string   `json:"ssh_agent"`
 	Degraded     string   `json:"degraded,omitempty"`
 }
+
+// DefaultAllow is the policy a member gets when it joins: the model providers' credentials
+// (Anthropic, Claude Code, OpenAI and Codex) and GitHub. Any other secret is denied until the
+// vault host's operator allows it with rux quorum policy.
+var DefaultAllow = []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "claude", "codex", "github"}

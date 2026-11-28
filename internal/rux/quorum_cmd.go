@@ -41,24 +41,13 @@ func runQuorum(args []string) {
 }
 
 func quorumMain(args []string) error {
-	var url string
-	var force bool
-	var rest []string
-	for i := 0; i < len(args); i++ {
-		switch a := args[i]; {
-		case a == "--url" && i+1 < len(args):
-			url = args[i+1]
-			i++
-		case strings.HasPrefix(a, "--url="):
-			url = strings.TrimPrefix(a, "--url=")
-		case a == "--force":
-			force = true
-		case a == "-h" || a == "--help":
-			fmt.Print(quorumUsage)
-			return nil
-		default:
-			rest = append(rest, a)
-		}
+	url, force, help, rest, err := splitQuorumArgs(args)
+	if err != nil {
+		return err
+	}
+	if help {
+		fmt.Print(quorumUsage)
+		return nil
 	}
 	if len(rest) == 0 {
 		fmt.Fprint(os.Stderr, quorumUsage)
@@ -172,7 +161,10 @@ func quorumMain(args []string) error {
 		if err := needRunning(); err != nil {
 			return err
 		}
-		return admin.Do("POST", "/admin/vault-host", map[string]string{"member": rest[0]}, nil)
+		if err := admin.Do("POST", "/admin/vault-host", map[string]string{"member": rest[0]}, nil); err != nil {
+			return err
+		}
+		fmt.Printf("%s is the vault host now. It serves the pack's keys from its own rix, so make sure it has them (rix auth claude, rix secret set ...). The policy carried over.\n", rest[0])
 	case "policy":
 		if err := needRunning(); err != nil {
 			return err
@@ -275,4 +267,40 @@ func quorumURL(flag string) string {
 		host, _ = os.Hostname()
 	}
 	return fmt.Sprintf("http://%s:%d", host, quorum.DefaultPort)
+}
+
+// splitQuorumArgs separates the flags from the positional arguments wherever they are:
+// `rux quorum join HOST CODE --url X` and `rux quorum --url X join HOST CODE` mean the same.
+// One or two dashes both work, and `--` ends the flags.
+func splitQuorumArgs(args []string) (url string, force, help bool, rest []string, err error) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			rest = append(rest, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(a, "-") || a == "-" {
+			rest = append(rest, a)
+			continue
+		}
+		name, value, hasValue := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		switch name {
+		case "url":
+			if !hasValue {
+				if i+1 >= len(args) {
+					return "", false, false, nil, fmt.Errorf("--url needs a value")
+				}
+				i++
+				value = args[i]
+			}
+			url = value
+		case "force":
+			force = true
+		case "h", "help":
+			help = true
+		default:
+			return "", false, false, nil, fmt.Errorf("unknown flag %s", a)
+		}
+	}
+	return
 }

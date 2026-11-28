@@ -54,13 +54,15 @@ Pinning (`--on NAME`) always goes to that authority. Otherwise the leader picks 
 
 ## The vault host
 
-The vault host is a separate role. It starts as the pack's creator and **never moves on its own**, even when leadership does. Move it with `rux quorum vault-host HOST` (from the vault host or the leader).
+The vault host is a separate role. It starts as the pack's creator and **never moves on its own**, even when leadership does. Move it with `rux quorum vault-host HOST` (on the vault host or on the leader; `HOST` must be a member). This is also the way out when the vault host is gone for good: run it on the leader, naming a member that has its own rix (`rix auth claude`, `rix secret set ...`). The policy is part of the replicated config and carries over; the old host's secrets do not.
+
+A restarted authority, leader or not, rejoins with its membership: it keeps its credential and the member list in `~/.rux/quorum.json` and its Raft log in `~/.rux/raft`, and follows whoever leads by then.
 
 Members with `vault: leader` ask the vault host for each credential: the model keys behind the [model proxy](authority.md#credentials-the-model-proxy-and-the-vault), the GitHub token, and the Claude and Codex credentials rix stores. A member keeps what it fetched in memory only, for 10 minutes. Nothing is written to disk. Members with `vault: local` use their own rix and never ask.
 
 ### Policy
 
-A member can read only what the vault host's policy allows, and nothing by default:
+A member can read only what the vault host's policy allows. A **new member starts with the model providers' credentials and GitHub**: `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY`, `claude`, `codex` and `github`. Every other secret (a `rix secret set NAME`, `ssh-agent`) is denied until you allow it, and `rux quorum policy deny` takes any of the defaults away:
 
 ```sh
 rux quorum policy                                  # show

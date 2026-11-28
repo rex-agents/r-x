@@ -415,6 +415,11 @@ func TestVaultPolicyAuditAndCache(t *testing.T) {
 	nodes := createPack(t, "a", "b")
 	a, b := nodes[0], nodes[1]
 	ctx := context.Background()
+	// Start from a member the operator has denied everything (a new member gets DefaultAllow).
+	if err := a.n.Deny(ctx, "b", DefaultAllow...); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "deny replicated", 10*time.Second, func() bool { return !b.n.Config().Policy.Allows("b", "ANTHROPIC_API_KEY") })
 	if _, err := b.n.Vault().Get(ctx, "t1", "ANTHROPIC_API_KEY"); !errors.Is(err, ErrVaultDenied) {
 		t.Fatalf("no policy should deny: %v", err)
 	}
@@ -630,5 +635,139 @@ func TestPackAdapter(t *testing.T) {
 	}
 	if _, err := ad.Threads(ctx, ""); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// restart brings a stopped node back from its data directory, on the same address.
+func restart(t *testing.T, old *tnode) *tnode {
+	t.Helper()
+	addr := old.srv.Listener.Addr().String()
+	tn := &tnode{name: old.name, dir: old.dir, slots: old.slots, executed: make(chan Placement, 16), vault: old.vault}
+	tn.srv = httptest.NewUnstartedServer(nil)
+	tn.srv.Listener.Close()
+	var l net.Listener
+	var err error
+	waitFor(t, "the old port to free up", 5*time.Second, func() bool { l, err = net.Listen("tcp", addr); return err == nil })
+	tn.srv.Listener = l
+	n, err := New(Config{
+		Dir: tn.dir, Name: tn.name, AdvertiseURL: "http://" + addr, ReportInterval: 100 * time.Millisecond,
+		PlaceTimeout: 10 * time.Second, Vault: tn.vault,
+		LocalReport: func(ctx context.Context) Report { return Report{Host: HostInfo{OS: "linux", CPUs: 4, GuestsMax: tn.slots}} },
+		Execute:     func(ctx context.Context, p Placement) (json.RawMessage, error) { return json.RawMessage(`"started"`), nil },
+		Raft: func(c *raft.Config) {
+			c.HeartbeatTimeout = 150 * time.Millisecond
+			c.ElectionTimeout = 150 * time.Millisecond
+			c.LeaderLeaseTimeout = 100 * time.Millisecond
+			c.CommitTimeout = 20 * time.Millisecond
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tn.n = n
+	tn.srv.Config.Handler = n.Handler()
+	tn.srv.Start()
+	if err := n.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(tn.stop)
+	return tn
+}
+
+// A leader that restarts rejoins the pack with its membership, as a voter.
+func TestLeaderRestartKeepsMembership(t *testing.T) {
+	nodes := createPack(t, "a", "b", "c")
+	a := nodes[0]
+	waitFor(t, "three voters", 10*time.Second, func() bool { return len(a.n.Status().Voters) == 3 })
+	a.stop()
+	rest := nodes[1:]
+	waitFor(t, "a new leader", 15*time.Second, func() bool { return leaderOf(rest) != nil })
+	newLeader := leaderOf(rest)
+
+	a2 := restart(t, a)
+	waitFor(t, "the old leader to know the pack again", 15*time.Second, func() bool {
+		st := a2.n.Status()
+		return st.InPack && st.Leader == newLeader.name && len(st.Members) == 3 && st.VaultHost == "a"
+	})
+	if a2.n.IsLeader() {
+		t.Error("the restarted authority should follow the new leader")
+	}
+	voters := a2.n.Status().Voters
+	if len(voters) != 3 {
+		t.Errorf("voters = %v, want all three", voters)
+	}
+	// The other members can still reach it: the vault answers, and it's seen online.
+	if _, err := rest[0].n.Vault().Get(context.Background(), "t1", "ANTHROPIC_API_KEY"); err != nil && !errors.Is(err, ErrVaultDenied) {
+		t.Errorf("the vault on the restarted host: %v", err)
+	}
+	waitFor(t, "a online in the leader's view", 10*time.Second, func() bool {
+		for _, x := range newLeader.n.Pack().Snapshot().Authorities {
+			if x.Name == "a" && x.Status == "online" {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// A new member can use the model providers' credentials and GitHub; other secrets are denied.
+func TestDefaultPolicyForNewMembers(t *testing.T) {
+	nodes := createPack(t, "a", "b")
+	a, b := nodes[0], nodes[1]
+	a.vault.mu.Lock()
+	a.vault.vals["MY_TOKEN"] = "x"
+	a.vault.mu.Unlock()
+	ctx := context.Background()
+	waitFor(t, "policy replicated", 10*time.Second, func() bool { return b.n.Config().Policy.Allows("b", "ANTHROPIC_API_KEY") })
+	for _, name := range []string{"ANTHROPIC_API_KEY", "github"} {
+		if _, err := b.n.Vault().Get(ctx, "t1", name); err != nil {
+			t.Errorf("%s should be allowed by default: %v", name, err)
+		}
+	}
+	if _, err := b.n.Vault().Get(ctx, "t1", "MY_TOKEN"); !errors.Is(err, ErrVaultDenied) {
+		t.Errorf("a named secret is denied by default: %v", err)
+	}
+	if err := a.n.Allow(ctx, "b", "MY_TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "allow replicated", 10*time.Second, func() bool { return b.n.Config().Policy.Allows("b", "MY_TOKEN") })
+	if !b.n.Config().Policy.Allows("b", "github") {
+		t.Error("allowing one secret must keep the defaults")
+	}
+}
+
+// With the vault host gone for good, the leader moves the role to a member that has its own rix.
+func TestVaultHostEscape(t *testing.T) {
+	nodes := createPack(t, "a", "b", "c")
+	waitFor(t, "three voters", 10*time.Second, func() bool { return len(nodes[0].n.Status().Voters) == 3 })
+	nodes[0].stop() // the vault host
+	rest := nodes[1:]
+	waitFor(t, "a new leader", 15*time.Second, func() bool { return leaderOf(rest) != nil })
+	leader := leaderOf(rest)
+	var follower *tnode
+	for _, x := range rest {
+		if x != leader {
+			follower = x
+		}
+	}
+	ctx := context.Background()
+	if _, err := follower.n.Vault().Get(ctx, "t1", "ANTHROPIC_API_KEY"); !errors.Is(err, ErrVaultUnreachable) {
+		t.Fatalf("with the vault host gone: %v", err)
+	}
+	if err := follower.n.SetVaultHost(ctx, follower.name); err == nil {
+		t.Fatal("a member that is neither the leader nor the vault host must not take the role")
+	}
+	if err := leader.n.SetVaultHost(ctx, "nobody"); !errors.Is(err, ErrUnknownAuthority) {
+		t.Fatalf("an unknown authority: %v", err)
+	}
+	if err := leader.n.SetVaultHost(ctx, follower.name); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the move replicated", 10*time.Second, func() bool {
+		return leader.n.Config().VaultHost == follower.name && follower.n.Config().VaultHost == follower.name
+	})
+	leader.n.Vault().Invalidate()
+	if s, err := leader.n.Vault().Get(ctx, "t2", "ANTHROPIC_API_KEY"); err != nil || s.Value != "sk-test" {
+		t.Fatalf("the new vault host serves the key: %+v %v", s, err)
 	}
 }
