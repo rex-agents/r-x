@@ -83,6 +83,11 @@ func (f *fsm) apply(c command) error {
 			return errors.New("member needs a name")
 		}
 		cfg.Members[c.Member.Name] = *c.Member
+		if _, ok := cfg.Policy.Members[c.Member.Name]; !ok {
+			// A new member may read the model providers' credentials and GitHub; named
+			// secrets stay deny-by-default until `rux quorum policy allow`.
+			cfg.Policy.Members[c.Member.Name] = MemberPolicy{Allow: append([]string(nil), DefaultAllow...)}
+		}
 		if !contains(cfg.Succession, c.Member.Name) {
 			cfg.Succession = append(cfg.Succession, c.Member.Name)
 		}

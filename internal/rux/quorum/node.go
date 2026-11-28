@@ -115,7 +115,7 @@ func New(cfg Config) (*Node, error) {
 	n.pack = newPackHub(n)
 	n.vault = newLeaderVault(n)
 	n.vhost = newVaultHost(n)
-	n.fsm.onChange = func() { n.pack.membershipChanged(); n.NotifyChange() }
+	n.fsm.onChange = func() { n.persistSeed(); n.pack.membershipChanged(); n.NotifyChange() }
 	return n, nil
 }
 
@@ -387,6 +387,9 @@ func (n *Node) authorizeAndApply(from string, c command) error {
 			return fmt.Errorf("vault policy is edited on the vault host, %s", cfg.VaultHost)
 		}
 	case cmdVaultHost:
+		if _, ok := cfg.Members[c.Name]; !ok {
+			return fmt.Errorf("%w: %s", ErrUnknownAuthority, c.Name)
+		}
 		leader := n.Name()
 		if from != cfg.VaultHost && from != leader {
 			return fmt.Errorf("the vault host moves from the vault host, %s, or the leader", cfg.VaultHost)
@@ -798,3 +801,34 @@ func (n *Node) Status() Status {
 func localHost() HostInfo {
 	return HostInfo{OS: runtime.GOOS, CPUs: runtime.NumCPU()}
 }
+
+// persistSeed keeps the members and their credential hashes in quorum.json whenever the
+// replicated config changes. A restarted authority needs them before raft has replayed anything:
+// the other members authenticate to it with credentials only the config knows, and without
+// them a restarted leader (or any member that missed the change) would refuse its own pack.
+func (n *Node) persistSeed() {
+	cfg := n.fsm.get()
+	if len(cfg.Members) == 0 {
+		return
+	}
+	seed := make([]Member, 0, len(cfg.Members))
+	for _, m := range cfg.Members {
+		seed = append(seed, m)
+	}
+	sort.Slice(seed, func(i, j int) bool { return seed[i].Name < seed[j].Name })
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	st := n.state
+	if st == nil {
+		return
+	}
+	if old, _ := json.Marshal(st.Seed); string(old) == mustJSON(seed) {
+		return
+	}
+	st.Seed = seed
+	if err := saveState(n.cfg.Dir, st); err != nil {
+		n.logf("quorum: saving the member list: %v", err)
+	}
+}
+
+func mustJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
