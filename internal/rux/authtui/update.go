@@ -28,6 +28,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setPack(msg.pack)
 		m.clamp()
 		return m, m.wantPreview()
+	case personaMsg:
+		if msg.err == nil {
+			m.persona = msg.p
+			if !msg.p.Setup {
+				m.setup = newSetup(m.c, m.opts, msg.p)
+				return m, m.setup.Init()
+			}
+		}
+	case setupNamedMsg, setupDrawnMsg, setupKeptMsg, setupTickMsg:
+		if m.setup == nil {
+			return m, nil
+		}
+		cmd := m.setup.update(msg)
+		m.finishSetup()
+		return m, cmd
 	case projectsMsg:
 		for _, p := range msg.ps {
 			m.projects[p.ID] = p
@@ -97,6 +112,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		var c tea.Cmd
 		m.tr.Spin, c = m.tr.Spin.Update(msg)
+		if m.setup != nil {
+			c = tea.Batch(c, m.setup.update(msg))
+		}
 		if m.tab == tabThread && m.busy() {
 			m.repaint()
 		}
@@ -132,6 +150,9 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	m.flash = ""
+	if m.setup != nil {
+		return m.setupKey(k)
+	}
 	switch {
 	case m.pform != nil:
 		return m.projKey(k)

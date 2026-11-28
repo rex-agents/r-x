@@ -1,4 +1,8 @@
 {
+  "persona": {"name": "jarvis", "host_name": "mac", "setup": true,
+    "default": {"mask": ["    ##  ##    ", "   ########   ", "  ##########  ", " ## ###### ## ", " ############ ", "  ##########  ", "   ## ## ##   ", "    ##  ##    "], "colors": ["#ff9a3c", "#f472b6", "#a78bfa"]},
+    "mascot": {"prompt": "a small robot butler", "model": "claude-haiku-5-5", "colors": ["#3ee67a", "#38bdf8", "#a78bfa"],
+      "mask": ["      ####      ", "    ########    ", "   ##########   ", "  ############  ", "  ## ###### ##  ", "  ############  ", "   ##########   ", "    ## ## ##    ", "   ####  ####   ", "   ####  ####   "]}},
   "projects": [
     {"id": "p-web", "name": "web app"},
     {"id": "p-api", "name": "billing api"},
