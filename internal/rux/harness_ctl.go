@@ -18,6 +18,7 @@ import (
 type agentInfo struct {
 	ID     string            `json:"id"`
 	Name   string            `json:"name"`
+	Label  string            `json:"label,omitempty"` // what the UI calls it, when not Name
 	Role   string            `json:"role"`
 	Model  string            `json:"model"`
 	Effort string            `json:"effort"`
@@ -31,7 +32,7 @@ type agentInfo struct {
 
 func (r *hrun) info(a *harness.Agent, full bool) agentInfo {
 	snap := a.Snapshot()
-	in := agentInfo{ID: a.ID, Name: a.Name, Role: a.Role, Model: a.ModelName(), Effort: r.effortOf(a), Where: a.Where,
+	in := agentInfo{ID: a.ID, Name: a.Name, Label: a.Label, Role: a.Role, Model: a.ModelName(), Effort: r.effortOf(a), Where: a.Where,
 		Status: snap.Status, Detail: snap.Detail}
 	r.mu.Lock()
 	if s := r.subs[a.Name]; s != nil {

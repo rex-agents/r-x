@@ -51,9 +51,11 @@ type server struct {
 	models     *modelCache
 	tools      *toolHost
 
-	name         string    // this authority's name in the pack
-	selfURL      string    // the authority's own HTTP URL, once listening
-	started      time.Time // when this authority started
+	name         string // this authority's name, from authority.json; "" before the first-run setup
+	nameMu       sync.RWMutex
+	askModel     func(ctx context.Context, system, user string) (reply, model string, err error) // tests: stands in for Claude
+	selfURL      string                                                                          // the authority's own HTTP URL, once listening
+	started      time.Time                                                                       // when this authority started
 	hub          packHub
 	packMu       sync.Mutex
 	pack         PackSource // see authority_pack.go
@@ -1500,6 +1502,11 @@ func (s *server) routes() (app, guest *http.ServeMux) {
 	app.HandleFunc("GET /api/overview/stream", s.handleOverviewStream)
 	app.HandleFunc("GET /api/threads/{id}/subagents/{sub}/events", s.subAgent(s.handleEvents))
 	app.HandleFunc("GET /api/threads/{id}/subagents/{sub}/events/page", s.subAgent(s.handleEventsPage))
+	app.HandleFunc("GET /api/persona", s.handlePersona)
+	app.HandleFunc("PUT /api/persona/name", s.handlePersonaName)
+	app.HandleFunc("POST /api/persona/mascot", s.handleMascotGenerate)
+	app.HandleFunc("PUT /api/persona/mascot", s.handleMascotSave)
+	app.HandleFunc("DELETE /api/persona/mascot", s.handleMascotReset)
 	app.HandleFunc("GET /api/pack", s.handlePack)
 	app.HandleFunc("GET /api/pack/stream", s.handlePackStream)
 
