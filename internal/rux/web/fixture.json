@@ -1,0 +1,37 @@
+{
+  "projects": [
+    {"id": "p-web", "name": "web app"},
+    {"id": "p-api", "name": "billing api"},
+    {"id": "scratch", "name": "scratch"}
+  ],
+  "pack": {
+    "leader": "mac", "term": 7, "vault_host": "mac", "vault_ok": true,
+    "authorities": [
+      {"name": "mac", "url": "http://mac:7777", "status": "up", "local": true, "started": "2026-11-28T06:00:00Z",
+       "host": {"os": "darwin", "cpus": 12, "mem": 34359738368, "load": 2.4, "guests_max": 6, "guests_used": 2},
+       "guests": [
+         {"name": "rv-web-mgr-1a2b", "phase": "running", "backend": "sbx", "cpu": 3.2, "mem_bytes": 805306368, "mem_limit": 4294967296, "thread": "t-mgr-web"},
+         {"name": "rv-web-w1-3c4d", "phase": "running", "backend": "sbx", "cpu": 61.5, "mem_bytes": 2147483648, "mem_limit": 4294967296, "thread": "t-w1"}
+       ],
+       "threads": [
+         {"id": "t-mgr-web", "project": "p-web", "kind": "manager", "title": "web app manager", "status": "running", "authority": "mac", "guest": "rv-web-mgr-1a2b", "placement": {}, "subagents": [], "cost": 1.84, "updated": "2026-11-28T09:58:00Z"},
+         {"id": "t-w1", "project": "p-web", "title": "redesign the pack view", "status": "running", "authority": "mac", "guest": "rv-web-w1-3c4d", "placement": {}, "parent": "t-mgr-web", "parent_authority": "mac", "subagents": [{"id": "t-s1", "name": "reviewer", "status": "running", "authority": "mac", "guest": "rv-web-w1-3c4d"}, {"id": "t-s2", "name": "tester", "status": "idle", "authority": "linux"}], "cost": 0.62, "updated": "2026-11-28T09:59:30Z"},
+         {"id": "t-w2", "project": "p-web", "title": "fix login redirect", "status": "idle", "authority": "linux", "guest": "rv-web-w2-9f", "placement": {"authority": "linux"}, "parent": "t-mgr-web", "parent_authority": "mac", "subagents": [], "cost": 0.31, "updated": "2026-11-28T09:30:00Z"},
+         {"id": "t-hand", "project": "p-web", "title": "try dark theme tweaks", "status": "idle", "authority": "mac", "placement": {"local": true}, "subagents": [], "cost": 0.08, "updated": "2026-11-28T08:00:00Z"},
+         {"id": "t-old", "project": "p-web", "title": "old spike", "status": "archived", "archived": true, "authority": "mac", "placement": {}, "subagents": [], "cost": 0.4, "updated": "2026-11-20T08:00:00Z"},
+         {"id": "t-api1", "project": "p-api", "title": "add invoice export", "status": "failed", "authority": "mac", "placement": {}, "subagents": [], "cost": 0.15, "updated": "2026-11-28T07:00:00Z"},
+         {"id": "t-scr", "title": "quick question about rsync", "status": "idle", "authority": "mac", "placement": {}, "subagents": [], "cost": 0.02, "updated": "2026-11-28T09:00:00Z"}
+       ]},
+      {"name": "linux", "url": "http://linux:7777", "status": "up", "local": false, "started": "2026-11-26T12:00:00Z",
+       "host": {"os": "linux", "cpus": 32, "mem": 137438953472, "load": 11.9, "guests_max": 16, "guests_used": 1},
+       "guests": [
+         {"name": "rv-web-w2-9f", "phase": "paused", "backend": "microvm", "cpu": 0, "mem_bytes": 536870912, "mem_limit": 8589934592, "thread": "t-w2"}
+       ],
+       "threads": []}
+    ],
+    "clients": [
+      {"id": "c1", "kind": "tui", "device": "mac (iTerm)", "authority": "mac", "since": "2026-11-28T08:00:00Z", "last_seen": "2026-11-28T09:59:50Z"},
+      {"id": "c2", "kind": "web", "device": "iPhone Safari", "authority": "linux", "since": "2026-11-28T09:40:00Z", "last_seen": "2026-11-28T09:55:00Z"}
+    ]
+  }
+}
