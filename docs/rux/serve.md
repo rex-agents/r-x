@@ -39,6 +39,13 @@ phone (PWA) ──HTTPS (tailscale serve)──▶ rux serve        (Mac: web ap
 - A thread starts from a repo (picked from your GitHub list, `owner/name`, or an HTTPS URL) or from a
   blank workspace (an empty git repo, for starting something new).
 - A thread's guest is stopped when it has been idle (`--sleep-after`) and started again by the next message.
+- If a guest no longer exists (`rox stop`, `rox start` or `rox exec` says "No managed workspace", for
+  example after the container host was reset), the thread becomes `lost` (event `rux_guest_lost`) and
+  isn't retried. The next message, manager wake-up or UI answer provisions a fresh guest on the same
+  repo, branch, runtime and model (status `provisioning`, then `starting`), with a new agent session.
+  The first message it gets starts with a recap: the original prompt and the last ~10 user and
+  assistant turns (up to 8 KB). Unpushed work from the old guest is gone. A thread in a guest rux
+  didn't start (`--guest`) is never replaced: sending to it returns 409.
 
 Threads are grouped in [projects with managers](projects-and-managers.md). In a thread, agents can [share screenshots and files](screenshots-and-files.md), show [rich UI](rich-ui.md) and trigger [actions](actions.md). GitHub access is described under [credentials](credentials.md#github-access).
 

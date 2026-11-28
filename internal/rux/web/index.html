@@ -64,6 +64,7 @@ aside { background: var(--panel); }
 .dot.idle { background: var(--green-dim); }
 .dot.failed { background: var(--err); }
 .dot.provisioning, .dot.starting, .dot.destroying, .dot.waking, .dot.sleeping { background: var(--warn); animation: blink 1.2s steps(2, start) infinite; }
+.dot.lost { background: var(--warn); }
 .dot.asleep { background: transparent; box-shadow: inset 0 0 0 1px var(--green-dim); }
 @keyframes blink { to { visibility: hidden; } }
 .status { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); white-space: nowrap; }
@@ -396,7 +397,7 @@ const ago = (t) => { const s = (Date.now() - new Date(t)) / 1000;
 const shortRepo = (r) => (r || "").replace(/^https:\/\/github\.com\//, "").replace(/^git@github\.com:/, "").replace(/\.git$/, "");
 const offline = (t) => !t.connected && (t.status === "running" || t.status === "idle");
 const statusText = (t) => offline(t) ? "offline"
-  : ({ provisioning: "setting up", starting: "starting", running: "working", idle: "ready", sleeping: "going to sleep", asleep: "asleep", waking: "waking up", failed: "failed", destroying: "removing", destroyed: "removed" }[t.status] || t.status);
+  : ({ provisioning: "setting up", starting: "starting", running: "working", idle: "ready", sleeping: "going to sleep", asleep: "asleep", lost: "guest gone — next message starts a new one", waking: "waking up", failed: "failed", destroying: "removing", destroyed: "removed" }[t.status] || t.status);
 const dot = (t) => h("span", { class: "dot " + (offline(t) ? "" : t.status) });
 // Grow a textarea with its content; it only scrolls once it hits its max-height.
 const autogrow = (ta) => {
@@ -1258,6 +1259,7 @@ function showThread(id, proj = null, sub = null) {
         }
         break;
       case "rux_interrupt": add(h("div", { class: "done" }, "stopped")); break;
+      case "rux_guest_lost": add(h("div", { class: "done" }, "guest gone · the next message starts a new one")); break;
       case "rux_asleep": add(h("div", { class: "done" }, "asleep · the guest is stopped until the next message")); break;
       case "rux_wake": add(h("div", { class: "done" }, "waking up · starting the guest")); break;
       case "rux_claude_start": stderr = null; break;

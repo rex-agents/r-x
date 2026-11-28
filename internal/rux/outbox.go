@@ -161,8 +161,13 @@ var errNoRunner = errors.New("the thread's runner isn't connected")
 // started for it.
 func (s *server) enqueueUser(t *thread, m wireMsg, anyState bool) (waking bool, err error) {
 	t.mu.Lock()
+	lost := t.meta.Status == "lost"
+	if lost && t.meta.SharedGuest {
+		t.mu.Unlock()
+		return false, errGuestGone
+	}
 	asleep := t.send == nil && asleepStatus(t.meta.Status)
-	if t.send == nil && !asleep && !anyState {
+	if t.send == nil && !asleep && !lost && !anyState {
 		t.mu.Unlock()
 		return false, errNoRunner
 	}
@@ -170,6 +175,10 @@ func (s *server) enqueueUser(t *thread, m wireMsg, anyState bool) (waking bool, 
 	t.mu.Unlock()
 	if err != nil {
 		return false, err
+	}
+	if lost {
+		s.reprovision(t)
+		return true, nil
 	}
 	if asleep || anyState {
 		waking = s.wakeIfAsleep(t)

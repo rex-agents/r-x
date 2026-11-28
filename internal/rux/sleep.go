@@ -91,6 +91,10 @@ func (s *server) sleepThread(t *thread) {
 		return // removed meanwhile
 	}
 	if err != nil {
+		if guestGone(string(out)) {
+			t.markLostLocked()
+			return
+		}
 		t.appendLocked("rux", 0, ruxEv("rux_error", "text", "couldn't stop the guest: "+outputLine(string(out), err)))
 		t.setStatusLocked("idle")
 		return
@@ -135,6 +139,18 @@ func (s *server) wakeThread(t *thread, m threadMeta) {
 	t.event(ruxEv("rux_wake", "text", "starting guest "+m.Guest))
 	fail := func(what string, out []byte, err error) {
 		t.mu.Lock()
+		if guestGone(string(out)) {
+			// The queued message, if any, starts a new guest.
+			lost := t.meta.Status == "waking"
+			if lost {
+				t.markLostLocked()
+			}
+			t.mu.Unlock()
+			if lost {
+				s.reprovision(t)
+			}
+			return
+		}
 		defer t.mu.Unlock()
 		t.appendLocked("rux", 0, ruxEv("rux_error", "text", what+": "+outputLine(string(out), err)+". Send another message to try again."))
 		if t.meta.Status == "waking" {
