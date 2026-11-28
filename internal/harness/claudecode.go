@@ -166,7 +166,7 @@ func (c *ClaudeCode) RunTurn(ctx context.Context, text string, s Sink) (string, 
 		return "", c.deadErr(err)
 	}
 	interrupted := false
-	sawDelta := false
+	var stream StreamParser
 	var final strings.Builder
 	done := ctx.Done()
 	var giveUp <-chan time.Time
@@ -196,53 +196,8 @@ func (c *ClaudeCode) RunTurn(ctx context.Context, text string, s Sink) (string, 
 					c.session = id
 					c.mu.Unlock()
 				}
-			case "stream_event":
-				e, _ := ev["event"].(map[string]any)
-				switch e["type"] {
-				case "message_start":
-					sawDelta = false
-				case "content_block_delta":
-					d, _ := e["delta"].(map[string]any)
-					switch d["type"] {
-					case "text_delta":
-						t, _ := d["text"].(string)
-						sawDelta = true
-						s.Delta(Delta{Kind: "text", Text: t})
-					case "thinking_delta":
-						t, _ := d["thinking"].(string)
-						s.Delta(Delta{Kind: "thinking", Text: t})
-					}
-				}
-			case "assistant":
-				msg, _ := ev["message"].(map[string]any)
-				blocks, _ := msg["content"].([]any)
-				for _, b := range blocks {
-					blk, _ := b.(map[string]any)
-					switch blk["type"] {
-					case "text":
-						if !sawDelta {
-							t, _ := blk["text"].(string)
-							s.Delta(Delta{Kind: "text", Text: t})
-						}
-					case "tool_use":
-						id, _ := blk["id"].(string)
-						name, _ := blk["name"].(string)
-						input, _ := json.Marshal(blk["input"])
-						s.ToolStart(id, ccToolName(name), ccLabel(name, input))
-					}
-				}
-			case "user":
-				msg, _ := ev["message"].(map[string]any)
-				blocks, _ := msg["content"].([]any)
-				for _, b := range blocks {
-					blk, _ := b.(map[string]any)
-					if blk["type"] != "tool_result" {
-						continue
-					}
-					id, _ := blk["tool_use_id"].(string)
-					isErr, _ := blk["is_error"].(bool)
-					s.ToolDone(id, toolResultText(blk["content"]), isErr)
-				}
+			case "stream_event", "assistant", "user":
+				stream.Event(ev, s)
 			case "control_request":
 				c.answer(ev, s)
 			case "result":
@@ -372,4 +327,70 @@ func (l *limitWriter) Write(p []byte) (int, error) {
 		l.n -= k
 	}
 	return len(p), nil
+}
+
+// StreamParser reads Claude Code's stream-json events (stream_event, assistant and user)
+// and reports them to a Sink. A live turn and a replay of stored events use the same one.
+type StreamParser struct {
+	// What the current message already streamed in deltas, so its complete blocks add nothing.
+	sawText, sawThinking bool
+}
+
+// Event handles one event; other types are ignored.
+func (p *StreamParser) Event(ev map[string]any, s Sink) {
+	switch ev["type"] {
+	case "stream_event":
+		e, _ := ev["event"].(map[string]any)
+		switch e["type"] {
+		case "message_start":
+			p.sawText, p.sawThinking = false, false
+		case "content_block_delta":
+			d, _ := e["delta"].(map[string]any)
+			switch d["type"] {
+			case "text_delta":
+				t, _ := d["text"].(string)
+				p.sawText = true
+				s.Delta(Delta{Kind: "text", Text: t})
+			case "thinking_delta":
+				t, _ := d["thinking"].(string)
+				p.sawThinking = true
+				s.Delta(Delta{Kind: "thinking", Text: t})
+			}
+		}
+	case "assistant":
+		msg, _ := ev["message"].(map[string]any)
+		blocks, _ := msg["content"].([]any)
+		for _, b := range blocks {
+			blk, _ := b.(map[string]any)
+			switch blk["type"] {
+			case "text":
+				if !p.sawText {
+					t, _ := blk["text"].(string)
+					s.Delta(Delta{Kind: "text", Text: t})
+				}
+			case "thinking":
+				if !p.sawThinking {
+					t, _ := blk["thinking"].(string)
+					s.Delta(Delta{Kind: "thinking", Text: t})
+				}
+			case "tool_use":
+				id, _ := blk["id"].(string)
+				name, _ := blk["name"].(string)
+				input, _ := json.Marshal(blk["input"])
+				s.ToolStart(id, ccToolName(name), ccLabel(name, input))
+			}
+		}
+	case "user":
+		msg, _ := ev["message"].(map[string]any)
+		blocks, _ := msg["content"].([]any)
+		for _, b := range blocks {
+			blk, _ := b.(map[string]any)
+			if blk["type"] != "tool_result" {
+				continue
+			}
+			id, _ := blk["tool_use_id"].(string)
+			isErr, _ := blk["is_error"].(bool)
+			s.ToolDone(id, toolResultText(blk["content"]), isErr)
+		}
+	}
 }

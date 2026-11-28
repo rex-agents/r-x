@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/rex-agents/r-x/internal/harness"
+	"github.com/rex-agents/r-x/internal/rux/transcript"
 )
 
 // The model picker (ctrl+l, /model, or a click on the model): a few picks with what each is
@@ -283,59 +284,59 @@ func (m *harnessModel) pickerView() string {
 	start := max(0, p.cursor-visible+1)
 	var lines []string
 	if p.agent == nil {
-		lines = append(lines, stDim.Render("For sub-agents started from now on"))
+		lines = append(lines, transcript.StDim.Render("For sub-agents started from now on"))
 	}
 	switch p.mode {
 	case 1:
-		lines = append(lines, stDim.Render("Providers"))
+		lines = append(lines, transcript.StDim.Render("Providers"))
 	case 2:
 		head := p.provider + " models"
 		if p.loading[p.provider] {
-			head += " " + m.tr.spin.View()
+			head += " " + m.tr.Spin.View()
 		}
-		lines = append(lines, stDim.Render(head))
+		lines = append(lines, transcript.StDim.Render(head))
 		if e := p.failed[p.provider]; e != "" {
-			lines = append(lines, lipgloss.NewStyle().Foreground(hYellow).Render(truncate("Couldn't list its models ("+e+"). Type one.", width)))
+			lines = append(lines, lipgloss.NewStyle().Foreground(transcript.Yellow).Render(transcript.Truncate("Couldn't list its models ("+e+"). Type one.", width)))
 		}
 	}
 	for i := start; i < len(rows) && i < start+visible; i++ {
 		r := rows[i]
-		mark, st, descSt := "  ", stText, stDim
+		mark, st, descSt := "  ", transcript.StText, transcript.StDim
 		if i == p.cursor {
-			mark, st, descSt = stText.Render("▸ "), stBold, stText
+			mark, st, descSt = transcript.StText.Render("▸ "), transcript.StBold, transcript.StText
 		}
 		desc := r.desc
 		if r.spec != "" && r.spec == p.current {
 			desc = strings.TrimPrefix(desc+" · current", " · ")
 		}
 		i := i
-		line := mark + st.Render(fmt.Sprintf("%-*s", nameW, truncate(r.name, nameW-1))) + descSt.Render(truncate(desc, width-nameW-2))
+		line := mark + st.Render(fmt.Sprintf("%-*s", nameW, transcript.Truncate(r.name, nameW-1))) + descSt.Render(transcript.Truncate(desc, width-nameW-2))
 		lines = append(lines, m.click(fmt.Sprintf("pick:%d", i), line, func() tea.Cmd {
 			p.cursor = i
 			return m.choose(rows[i])
 		}))
 	}
 	if len(rows) == 0 {
-		lines = append(lines, stDim.Render("  nothing matches"))
+		lines = append(lines, transcript.StDim.Render("  nothing matches"))
 	}
 	if more := len(rows) - (start + visible); more > 0 {
-		lines = append(lines, stFaint.Render(fmt.Sprintf("  … %d more", more)))
+		lines = append(lines, transcript.StFaint.Render(fmt.Sprintf("  … %d more", more)))
 	}
-	lines = append(lines, stFaint.Render(strings.Repeat("─", width)))
+	lines = append(lines, transcript.StFaint.Render(strings.Repeat("─", width)))
 	var opts []string
 	for _, e := range effortOrder {
-		st := stDim
+		st := transcript.StDim
 		if e == p.effort {
-			st = stBold
+			st = transcript.StBold
 		}
 		e := e
 		opts = append(opts, m.click("effort:"+cmpOr(e, "auto"), st.Render(effortNames[e]), func() tea.Cmd { p.effort = e; return nil }))
 	}
-	lines = append(lines, "  "+stText.Render(fmt.Sprintf("%-*s", nameW, "Effort"))+strings.Join(opts, "  "))
+	lines = append(lines, "  "+transcript.StText.Render(fmt.Sprintf("%-*s", nameW, "Effort"))+strings.Join(opts, "  "))
 	hint := "↑↓ model   ←→ effort   type to search"
 	if p.mode > 0 {
 		hint += "   esc back"
 	}
-	lines = append(lines, "  "+stFaint.Render(hint)+"  "+p.filter+stAccent.Render("▏"))
-	return m.panelBox(hFaint, strings.Join(lines, "\n"))
+	lines = append(lines, "  "+transcript.StFaint.Render(hint)+"  "+p.filter+transcript.StAccent.Render("▏"))
+	return m.panelBox(transcript.Faint, strings.Join(lines, "\n"))
 }
