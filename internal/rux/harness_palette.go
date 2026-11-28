@@ -29,14 +29,14 @@ func (m *harnessModel) openPalette() {
 	a := m.selected()
 	p := &palette{}
 	add := func(label, hint string, run func() tea.Cmd) { p.items = append(p.items, paletteItem{label, hint, run}) }
-	add("Model and effort for "+a.Name, "ctrl+l", func() tea.Cmd { return m.openPicker(a) })
+	add("Model and effort for "+a.Display(), "ctrl+l", func() tea.Cmd { return m.openPicker(a) })
 	add("Model for new sub-agents", "/agent-model", func() tea.Cmd { return m.openPicker(nil) })
 	inRex := os.Getenv("REX_SESSION") != ""
 	for _, x := range m.agents() {
 		x := x
-		add("Go to "+x.Name, "tab", func() tea.Cmd { m.selectAgent(x); return nil })
+		add("Go to "+x.Display(), "tab", func() tea.Cmd { m.selectAgent(x); return nil })
 		if inRex {
-			add("Open "+x.Name+" in a Rex pane", "/pane", func() tea.Cmd { m.flash = m.openPane(x); return nil })
+			add("Open "+x.Display()+" in a Rex pane", "/pane", func() tea.Cmd { m.flash = m.openPane(x); return nil })
 		}
 		if x.Role == "sub" {
 			if inRex {
@@ -45,7 +45,7 @@ func (m *harnessModel) openPalette() {
 			add("Stop "+x.Name+" and remove its guest", "/stop", func() tea.Cmd { m.stopAgent(x); return nil })
 		}
 		if x.Busy() {
-			add("Interrupt "+x.Name, "esc", func() tea.Cmd { x.Interrupt(); return nil })
+			add("Interrupt "+x.Display(), "esc", func() tea.Cmd { x.Interrupt(); return nil })
 		}
 	}
 	add(map[bool]string{true: "Close every tool call", false: "Open every tool call"}[m.expandAll], "ctrl+e",

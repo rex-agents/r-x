@@ -50,6 +50,14 @@ var leadTools = []string{
 	"Bash(rix status:*)", "Bash(rex hosts:*)", "Bash(git remote:*)", "Bash(git status:*)", "Bash(git log:*)",
 }
 
+// leadPrompt is the lead's brief, led by its name when its authority has one.
+func leadPrompt(name string) string {
+	if name == "" {
+		return leadBrief
+	}
+	return "You are " + name + ", this user's rux authority and lead agent. Introduce yourself by that name and refer to yourself by it.\n\n" + leadBrief
+}
+
 func runLead(args []string) {
 	fs := flag.NewFlagSet("rux", flag.ExitOnError)
 	model := fs.String("model", "", "model for the lead Claude Code")
@@ -64,6 +72,7 @@ func runLead(args []string) {
 	if err != nil {
 		fail("rux's lead agent is Claude Code, which isn't installed. Install it: %s", "https://code.claude.com/docs/en/setup")
 	}
+	name := loadAuthorityConfig(authorityHome()).Name
 	refreshSkill()
 
 	settings, _ := json.Marshal(map[string]any{
@@ -73,7 +82,7 @@ func runLead(args []string) {
 	if prompt != "" {
 		argv = append(argv, prompt)
 	}
-	argv = append(argv, "-n", "rux", "--append-system-prompt", leadBrief,
+	argv = append(argv, "-n", cmpOr(name, "rux"), "--append-system-prompt", leadPrompt(name),
 		"--allowedTools", strings.Join(leadTools, ","), "--settings", string(settings))
 	if *model != "" {
 		argv = append(argv, "--model", *model)

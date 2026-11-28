@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/rex-agents/r-x/internal/rux/authapi"
 	"io"
 	"os"
 	"os/exec"
@@ -22,11 +23,13 @@ import (
 // each in its own rox guest. Every model loop runs here, so model keys never leave this
 // machine; only tool calls run in the guests.
 type hrun struct {
-	cfg  harnessConfig
-	mcp  *leadMCP
-	sock string // the control socket, for rux view
-	cwd  string
-	repo string // this directory's origin, if any
+	cfg    harnessConfig
+	mcp    *leadMCP
+	sock   string // the control socket, for rux view
+	cwd    string
+	repo   string          // this directory's origin, if any
+	name   string          // the authority's name, which the lead goes by; "" until it has one
+	mascot *authapi.Mascot // its mascot; nil draws the T-rex
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -102,10 +105,12 @@ func newRun(cfg harnessConfig, leadModel string) (*hrun, error) {
 	r := &hrun{cfg: cfg, cwd: cwd, subs: map[string]*subInfo{}, watching: map[string]int{}, effort: map[string]string{},
 		changed: make(chan struct{}, 1), approvals: make(chan *approval)}
 	r.ctx, r.cancel = context.WithCancel(context.Background())
+	r.name, r.mascot = loadPersona(authorityHome())
 	if out, err := exec.Command("git", "-C", cwd, "remote", "get-url", "origin").Output(); err == nil {
 		r.repo = sshRepo(strings.TrimSpace(string(out)))
 	}
 	lead := harness.NewAgent("lead", "lead", "lead")
+	lead.Label = r.name
 	r.wire(lead)
 	r.lead, r.agents = lead, []*harness.Agent{lead}
 	if err := r.attachLead(leadModel); err != nil {
@@ -162,7 +167,9 @@ func (r *hrun) leadSystem(cli string) string {
 	if repo == "" {
 		repo = "(none: this directory has no origin remote)"
 	}
-	return `You are the lead agent in rux, a multi-agent harness. The user talks to you in rux's terminal UI,
+	return r.leadIdentity() + `
+
+You are the lead agent in rux, a multi-agent harness. The user talks to you in rux's terminal UI,
 which shows your conversation and every sub-agent's beside it, live.
 
 You run on the user's machine, in ` + r.cwd + `. This directory's repo: ` + repo + `.
@@ -193,7 +200,7 @@ func (r *hrun) subSystem(name string, s *subInfo) string {
 	if s.Repo != "" {
 		repo = "It holds a clone of " + s.Repo + ", on a new branch rux/" + name + " made from " + cmpOr(s.Branch, "the default branch") + "."
 	}
-	return `You are ` + name + `, a sub-agent in rux. The lead agent gave you a task, and you work on it alone in a
+	return `You are ` + name + `, a sub-agent in rux. ` + r.leadSubject() + ` gave you a task, and you work on it alone in a
 sandboxed Linux guest (a rox guest) with a shell and file tools. ` + where + ` ` + repo + `
 
 - Work until the task is done: read the code, make the change, and check it (build, tests, run it).
@@ -254,7 +261,7 @@ func (r *hrun) leadTools() []harness.Tool {
 				if sub == nil {
 					return "", fmt.Errorf("no sub-agent named %s; agent_status lists them", a.Agent)
 				}
-				if err := sub.TrySend("lead", a.Message); err != nil {
+				if err := sub.TrySend(r.leadName(), a.Message); err != nil {
 					return "", err
 				}
 				return "Sent to " + sub.Name, nil
@@ -435,7 +442,7 @@ func (r *hrun) spawnTool(_ context.Context, in json.RawMessage) (string, error) 
 	r.subs[name] = info
 	r.effort[sub.ID] = effort
 	r.mu.Unlock()
-	sub.Send("lead", a.Task)
+	sub.Send(r.leadName(), a.Task)
 	go sub.Run(r.ctx)
 	go func() {
 		defer close(info.done)

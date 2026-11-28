@@ -27,7 +27,7 @@ branch needs to change here must be called out in its report.
 | `rux` | Starts the local authority if it isn't running (detached, `~/.rux/authority.sock` + HTTP), then opens the **authority TUI** attached to the pack leader (or the local authority when not in a pack). |
 | `rux agent [PROMPT]` | Today's harness TUI (`runHarness`), in the current context: on the host, or inside a VM. Flags unchanged (`--model`, `--agent-model`, `--effort`). |
 | `rux agent spawn\|ls\|read\|send\|wait\|focus\|stop` | Unchanged subcommands. A first argument that is one of these is a subcommand; anything else is a prompt. |
-| `rux authority [start\|stop\|status\|logs]` | Manage the daemon. `start --foreground` is what `rux serve` used to be. `rux serve` stays as a hidden alias of `rux authority start --foreground`. |
+| `rux authority [start\|stop\|status\|logs\|rename\|mascot]` | Manage the daemon, name it (`rename NAME`) and draw its mascot (`mascot "DESCRIPTION"`, `mascot --reset`). `start --foreground` is what `rux serve` used to be. `rux serve` stays as a hidden alias of `rux authority start --foreground`. |
 | `rux quorum create\|join HOST\|leave\|status\|promote HOST\|policy` | Pack membership (see below). |
 | `rux PROMPT...` | Deprecated: prints a one-line notice and runs `rux agent PROMPT...`. |
 
@@ -111,6 +111,25 @@ right: live/degraded dot, leader name, term, vault status, uptime. Footer: bread
 (`←↑↓→` move, `enter` open, `n` new thread, `tab` monitor, `a` archived, `?` help, `q` quit). `enter` on a
 thread opens it (its conversation, the same as the web app's thread page); `n` creates a thread via
 `POST /api/threads`.
+
+## Persona and first run
+
+An authority has a **name** (`authority.json`) and may have a **mascot** (`mascot.json`) that replaces the
+T-rex. Both come from the first-run setup, which the TUI and the web app run through the same endpoints:
+
+| Endpoint | Does |
+| --- | --- |
+| `GET /api/persona` | `authapi.Persona`: `{"name","host_name","setup","mascot","default"}`. `setup` is false while the authority has no name, which is when a client shows the setup screen. `default` is the T-rex mask. A client that gets 404 is talking to an older authority and skips setup. |
+| `PUT /api/persona/name` | `{"name"}`: 1 to 32 lowercase letters, digits and hyphens. Saved to `authority.json` and applied live, including to the pack. 409 when the authority is in a pack (leave it first). |
+| `POST /api/persona/mascot` | `{"prompt","save"}`: the authority asks its model for a mascot, checks it, retries once, and returns it (`authapi.Mascot`: `prompt`, `mask`, `colors`, `model`, `created`). Without `save` it is a preview. 502 when the model can't produce a valid one; the old mascot stays. |
+| `PUT /api/persona/mascot` | keep a mascot (a previewed one the user accepted) |
+| `DELETE /api/persona/mascot` | back to the T-rex |
+
+The TUI's setup is a screen with a name field (default: the host name), a "Describe your agent (blank
+keeps the T-rex)" field, a spinner while the model draws, then a preview you accept, regenerate or drop.
+The web app shows the same steps full-screen. `rux agent` runs the same screen before the harness opens
+when the authority has no name and there is a terminal. The name shows in the TUI header and the web
+app's header, and is what the harness lead calls itself; see [serve](serve.md#your-authoritys-name-and-mascot-first-run).
 
 ## Rex is optional: the rex rox hook
 

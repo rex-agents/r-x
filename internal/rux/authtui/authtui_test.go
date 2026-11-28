@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
@@ -290,6 +291,10 @@ func runCmd(m *Model, cmd tea.Cmd) {
 			}
 		case nil:
 		default:
+			switch msg.(type) {
+			case tickMsg, setupTickMsg, spinner.TickMsg: // timers that would re-arm forever
+				return
+			}
 			if _, ok := msg.(tickMsg); ok {
 				return
 			}
