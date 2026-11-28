@@ -91,7 +91,7 @@ func runView(args []string) {
 	}
 	zone.NewGlobal()
 	ta := textarea.New()
-	ta.Placeholder = "Message " + name
+	ta.Placeholder = "Message " + cmpOr(info.Label, name)
 	ta.ShowLineNumbers, ta.Prompt, ta.CharLimit = false, "", 0
 	ta.SetHeight(1)
 	ta.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+j")
@@ -242,7 +242,7 @@ func (m *viewModel) View() string {
 	if m.gone {
 		status = "rux has ended"
 	}
-	left := transcript.StText.Render(in.Name) + " " + transcript.StFaint.Render(status)
+	left := transcript.StText.Render(cmpOr(in.Label, in.Name)) + " " + transcript.StFaint.Render(status)
 	prompt := transcript.PromptBox(m.w, border, left, model, func(s string) string { return s }, where, m.input.View())
 	if m.flash != "" {
 		prompt = lipgloss.PlaceHorizontal(m.w, lipgloss.Right, transcript.StDim.Render(m.flash)+"  ") + "\n" + prompt

@@ -32,7 +32,7 @@ func (m *Model) plan(bodyH int) layout {
 		avail -= l.preview + 1
 	}
 	l.avail = avail
-	l.logo = m.opts.Logo != nil && bodyH >= logoH+cardH+2 && avail >= logoW+gutterW+cardW
+	l.logo = m.haveLogo() && bodyH >= logoH+cardH+2 && avail >= logoW+gutterW+cardW
 	nc := m.packCols()
 	for c := 0; c < nc; c++ {
 		l.widths[c] = cardW
@@ -140,11 +140,11 @@ func composeGraph(vis []int, xs map[int]int, cols []colRender, linked []bool, av
 
 // logoRows is the T-rex's lines, fitted to its width, or nil if it has none.
 func (m *Model) logoRows(h int) []string {
-	if m.opts.Logo == nil {
+	if !m.haveLogo() {
 		return nil
 	}
 	var out []string
-	for _, l := range strings.Split(m.opts.Logo(m.phase), "\n") {
+	for _, l := range strings.Split(m.logo(m.phase), "\n") {
 		out = append(out, fit(l, logoW))
 	}
 	return out[:min(len(out), max(h-1, 0))]

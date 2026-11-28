@@ -123,3 +123,40 @@ type ThreadEvent struct {
 	Authority string `json:"authority,omitempty"`
 	Event     any    `json:"event"`
 }
+
+// Mascot is the custom logo that replaces the rux T-rex. Mask is the shape, one string per row,
+// "#" where a dot is drawn and " " elsewhere (at most 40 wide and 16 tall). Colors are three
+// "#rrggbb" gradient stops, drawn from the top left to the bottom right.
+type Mascot struct {
+	Prompt  string   `json:"prompt,omitempty"` // what the user asked for
+	Mask    []string `json:"mask"`
+	Colors  []string `json:"colors"`
+	Model   string   `json:"model,omitempty"`   // the model that drew it
+	Created string   `json:"created,omitempty"` // RFC 3339
+}
+
+// Persona is GET /api/persona: who this authority is. Name is empty until the first-run setup
+// has named it (Setup is false then, and clients show the setup screen). Mascot is nil while the
+// authority uses the T-rex.
+type Persona struct {
+	Name     string  `json:"name"`
+	HostName string  `json:"host_name"` // the default name to suggest: this host's name
+	Setup    bool    `json:"setup"`     // the authority has been named
+	Mascot   *Mascot `json:"mascot,omitempty"`
+	// Default is the T-rex, so a client that draws the mascot has a shape when Mascot is nil.
+	Default *Mascot `json:"default,omitempty"`
+}
+
+// PersonaName is the body of PUT /api/persona/name. The name is lowercase letters, digits and
+// hyphens, 1 to 32 characters. An authority that is in a pack can't be renamed (the API answers 409).
+type PersonaName struct {
+	Name string `json:"name"`
+}
+
+// MascotRequest is the body of POST /api/persona/mascot: draw a mascot for Prompt. The answer
+// is the Mascot; with Save it is also kept, otherwise it is only a preview (keep it with
+// PUT /api/persona/mascot). DELETE /api/persona/mascot goes back to the T-rex.
+type MascotRequest struct {
+	Prompt string `json:"prompt"`
+	Save   bool   `json:"save,omitempty"`
+}

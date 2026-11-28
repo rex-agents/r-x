@@ -124,7 +124,23 @@ func (n *Node) Name() string {
 	if st := n.getState(); st != nil {
 		return st.Name
 	}
+	n.mu.RLock()
+	defer n.mu.RUnlock()
 	return n.cfg.Name
+}
+
+// SetName renames this authority before it creates or joins a pack. Once it's in a pack the
+// other members know it by its name, so it has to leave first.
+func (n *Node) SetName(name string) error {
+	n.hostMu.Lock()
+	defer n.hostMu.Unlock()
+	if n.InPack() {
+		return errors.New("this authority is in a pack, so it can't be renamed. Run rux quorum leave first")
+	}
+	n.mu.Lock()
+	n.cfg.Name = name
+	n.mu.Unlock()
+	return nil
 }
 
 func (n *Node) getState() *State {

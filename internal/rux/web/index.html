@@ -1,4 +1,4 @@
-<!doctype html>
+projects = f.projects || []; packState = f.pack; if (f.persona) { persona = f.persona; applyPersona(); }<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -339,6 +339,21 @@ a.mrow:hover, div.mrow[role=button]:hover { background: var(--green-bg); }
   .c-clients .mrow, .c-hosts .mrow, .c-guests .mrow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mon-in { padding: 14px 16px calc(env(safe-area-inset-bottom) + 24px); }
 }
+.pack-mascot { display: flex; justify-content: center; padding: 14px 16px 4px; }
+.pack-mascot canvas { max-width: 100%; height: auto; }
+.setup { position: fixed; inset: 0; z-index: 50; background: var(--bg); display: grid; place-items: center; padding: 16px; overflow: auto; }
+.setup-box { width: 100%; max-width: 560px; border: 1px solid var(--green-dim); border-radius: 8px; background: var(--panel); padding: 24px; display: grid; gap: 14px; }
+.setup-box h1 { font-size: 17px; color: var(--green); text-shadow: var(--glow); }
+.setup-box label { color: var(--text); font-weight: 700; }
+.setup-box .hint { color: var(--faint); font-size: 12px; }
+.setup-box .field { border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; background: var(--bg); }
+.setup-box .field:focus-within { border-color: var(--green-dim); }
+.setup-box .err { color: var(--err); font-size: 12px; }
+.setup-box .acts { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.setup-box .acts .plain { color: var(--muted); }
+.setup-box .acts .plain:hover { color: var(--text); }
+.setup-box .logo { display: flex; justify-content: center; }
+.setup-box .logo canvas { max-width: 100%; height: auto; }
 </style>
 </head>
 <body data-view="home" data-mode="work">
@@ -429,6 +444,112 @@ async function loadList() {
 }
 if (!FIXTURE) { loadList(); setInterval(loadList, 4000); }
 
+
+// ---------- persona: the authority's name and mascot ----------
+// GET /api/persona (wire types: internal/rux/authapi). Until the authority has a name, the app
+// shows the same first-run setup as the TUI: name it, describe the agent, then accept, redraw or
+// drop the mascot a model draws. The mascot is drawn as the TUI draws it: a "#" mask of dots,
+// bigger where the light falls, in a gradient through three colours from top left to bottom right.
+let persona = null;
+function applyPersona() {
+  const name = (persona && persona.name) || "rux";
+  document.querySelectorAll(".brand").forEach(el => { el.textContent = name; });
+  document.title = name;
+}
+async function loadPersona() {
+  try { persona = await api("GET", "/api/persona"); } catch { return; } // an older authority has no persona
+  applyPersona();
+  if (!persona.setup) showSetup();
+}
+function mascotCanvas(m, cw = 9) {
+  const mask = m.mask || [], ch = cw * 2, W = Math.max(1, ...mask.map(r => r.length)), H = mask.length;
+  const cv = h("canvas", { "aria-label": "mascot" });
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = W * cw * dpr; cv.height = H * ch * dpr; cv.style.width = W * cw + "px"; cv.style.height = H * ch + "px";
+  const g = cv.getContext("2d"); g.scale(dpr, dpr);
+  const hex = (c) => [1, 3, 5].map(i => parseInt((c || "#ffffff").slice(i, i + 2), 16) || 0);
+  const stops = (m.colors && m.colors.length === 3 ? m.colors : ["#ff9a3c", "#f472b6", "#a78bfa"]).map(hex);
+  const mixc = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
+  const frame = (phase) => {
+    g.clearRect(0, 0, W * cw, H * ch);
+    for (let y = 0; y < H; y++) for (let x = 0; x < mask[y].length; x++) {
+      if (mask[y][x] !== "#") continue;
+      const fx = x / W, fy = y / H;
+      const light = 1 - (0.65 * fx + 0.55 * fy) + 0.12 * Math.sin(phase - fx * 5);
+      const lvl = Math.max(1, Math.min(4, Math.floor(light * 5.2)));
+      const t = Math.max(0, Math.min(1, 0.55 * fx + 0.45 * fy));
+      const c = t < 0.5 ? mixc(stops[0], stops[1], t * 2) : mixc(stops[1], stops[2], (t - 0.5) * 2);
+      g.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
+      g.beginPath(); g.arc(x * cw + cw / 2, y * ch + ch / 2, cw * [0, .17, .17, .27, .42][lvl], 0, 7); g.fill();
+    }
+  };
+  frame(0);
+  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    let last = 0;
+    const step = (now) => {
+      if (!cv.isConnected) return;
+      if (now - last > 150) { last = now; frame(now / 600); }
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+  return cv;
+}
+// The authority's logo: its mascot, else the T-rex the authority sends as `default`.
+const logoOf = () => persona && (persona.mascot || persona.default);
+
+// First-run setup: a full-screen card over the app.
+function showSetup() {
+  if ($(".setup")) return;
+  const root = h("div", { class: "setup" });
+  document.body.append(root);
+  const suggest = (persona.host_name || "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "rux";
+  let step = "name", name = suggest, desc = "", draft = null, err = "";
+  const finish = () => { root.remove(); applyPersona(); route(); };
+  const draw = async () => {
+    step = "drawing"; err = ""; render();
+    try { draft = await api("POST", "/api/persona/mascot", { prompt: desc }); step = "preview"; }
+    catch (e) { step = "describe"; err = e.message; }
+    render();
+  };
+  function render() {
+    const kids = [h("h1", {}, "Welcome to rux"), h("div", { class: "hint" }, "Let's set up your authority.")];
+    const input = (value, set, ph, onEnter) => h("div", { class: "field" }, h("input", { value, placeholder: ph, autofocus: true, maxlength: step === "name" ? 32 : 300,
+      oninput: (e) => set(e.target.value), onkeydown: (e) => { if (e.key === "Enter") onEnter(); } }));
+    if (step === "name") {
+      kids.push(h("label", {}, "Name your authority"), input(name, v => { name = v; }, "jarvis", saveName),
+        h("div", { class: "hint" }, "lowercase letters, digits and hyphens; your agents call themselves this"));
+    } else {
+      kids.push(h("div", {}, "Name  ", h("b", {}, persona.name)));
+    }
+    if (step === "describe") {
+      kids.push(h("label", {}, "Describe your agent (blank keeps the T-rex)"), input(desc, v => { desc = v; }, "a friendly robot butler with a bow tie", describe),
+        h("div", { class: "hint" }, "a model draws a mascot from this"));
+    }
+    if (step === "drawing") kids.push(h("div", {}, "◌ Drawing your mascot…"), h("div", { class: "hint" }, desc));
+    if (step === "preview") kids.push(h("div", { class: "logo" }, mascotCanvas(draft, 10)), h("div", { class: "hint" }, `${draft.model || ""} · ${(draft.colors || []).join(" ")}`));
+    if (err) kids.push(h("div", { class: "err" }, "▲ " + err));
+    const acts = h("div", { class: "acts" });
+    if (step === "name") acts.append(h("button", { class: "btn", onclick: saveName }, "next"));
+    if (step === "describe") acts.append(h("button", { class: "btn", onclick: describe }, "draw it"), h("button", { class: "plain", onclick: finish }, "keep the T-rex"));
+    if (step === "preview") acts.append(h("button", { class: "btn", onclick: accept }, "accept"), h("button", { class: "plain", onclick: draw }, "regenerate"),
+      h("button", { class: "plain", onclick: finish }, "keep the T-rex"), h("button", { class: "plain", onclick: () => { step = "describe"; render(); } }, "edit"));
+    kids.push(acts);
+    root.replaceChildren(h("div", { class: "setup-box" }, ...kids));
+    root.querySelector("input")?.focus();
+  }
+  async function saveName() {
+    name = name.trim();
+    if (!/^[a-z0-9-]{1,32}$/.test(name)) { err = "a name is 1 to 32 lowercase letters, digits and hyphens, like jarvis or dev-box"; render(); return; }
+    try { persona = await api("PUT", "/api/persona/name", { name }); step = "describe"; err = ""; } catch (e) { err = e.message; }
+    render();
+  }
+  function describe() { desc = desc.trim(); if (!desc) { finish(); return; } draw(); }
+  async function accept() {
+    try { await api("PUT", "/api/persona/mascot", draft); persona.mascot = draft; finish(); } catch (e) { err = e.message; render(); }
+  }
+  render();
+}
 // ---------- routing ----------
 let cleanup = () => {};
 let lastWork = "#/";
@@ -523,6 +644,7 @@ function showPack() {
   $("#hdr").replaceChildren(h("a", { class: "back", href: "#/", "aria-label": "Back" }, "‹"), h("span", { class: "title" }, "pack"));
   const root = h("div", { class: "pack" });
   $("#main").replaceChildren(root);
+  let logoNode = null;
   let live = false;
   const tick = setInterval(() => draw(), 5000);
   const stop = packFeed(() => draw(), (v) => { live = v; });
@@ -585,7 +707,8 @@ function showPack() {
         h("span", { class: "dot " + packDot(s.status) }), h("span", {}, s.name || s.id), h("span", { class: "pack-sub-s" }, `${s.status} · ${s.authority || t.authority}${s.guest ? " · " + s.guest : ""}`)))));
     });
     const newHref = "#/new/p/" + encodeURIComponent(packSel.project || "scratch");
-    root.replaceChildren(bar, ...banners.filter(Boolean),
+    if (!logoNode && logoOf()) logoNode = h("div", { class: "pack-mascot" }, mascotCanvas(logoOf()));
+    root.replaceChildren(bar, ...banners.filter(Boolean), ...(logoNode ? [logoNode] : []),
       h("div", { class: "pack-grid" },
         col("LEADER", [leaderCard], ""),
         col("PROJECT AGENTS", projCards, "no projects"),
@@ -1499,6 +1622,7 @@ function md(src) {
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 if (!location.hash && store.get("rux.mode") === "monitor") location.replace("#/monitor");
+if (!FIXTURE) loadPersona();
 route();
 </script>
 </body>

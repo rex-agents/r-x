@@ -30,6 +30,7 @@ func runHarness(args []string) {
 	effort := fs.String("effort", "", "effort for Claude models: low, medium, high (default), xhigh or max")
 	fs.Usage = func() { help(os.Stderr) }
 	_ = fs.Parse(args)
+	firstRunSetup()
 	cfg := loadHarnessConfig()
 	if *agentModel != "" {
 		cfg.AgentModel = *agentModel
@@ -180,7 +181,7 @@ type harnessModel struct {
 
 func newHarnessModel(r *hrun) *harnessModel {
 	ta := textarea.New()
-	ta.Placeholder = "Tell the lead what to do"
+	ta.Placeholder = "Tell " + r.leadName() + " what to do"
 	ta.ShowLineNumbers = false
 	ta.Prompt = ""
 	ta.CharLimit = 0
@@ -371,7 +372,7 @@ func (m *harnessModel) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		return nil, true
 	case "esc":
 		if m.selected().Interrupt() {
-			m.flash = "Interrupted " + m.selected().Name
+			m.flash = "Interrupted " + m.selected().Display()
 		}
 		return nil, true
 	case "ctrl+e":
@@ -530,9 +531,9 @@ func (m *harnessModel) refresh() {
 	}
 	a := m.selected()
 	if a.Role == "lead" {
-		m.input.Placeholder = "Tell the lead what to do"
+		m.input.Placeholder = "Tell " + m.r.leadName() + " what to do"
 	} else {
-		m.input.Placeholder = "Message " + a.Name
+		m.input.Placeholder = "Message " + a.Display()
 	}
 	if m.welcoming() {
 		return
@@ -620,7 +621,7 @@ func (m *harnessModel) welcome() string {
 		return transcript.StDim.Render(fmt.Sprintf("%-11s", k)) + transcript.StText.Render(v)
 	}
 	info := []string{
-		row("lead", prettyModel(r.lead.ModelName())+effortSuffix(r.effortOf(r.lead))),
+		row(r.leadName(), prettyModel(r.lead.ModelName())+effortSuffix(r.effortOf(r.lead))),
 		row("sub-agents", prettyModel(r.agentModel())),
 		row("directory", tildePath(r.cwd)),
 	}
@@ -628,18 +629,18 @@ func (m *harnessModel) welcome() string {
 		info = append(info, row("repo", repoDisplayName(r.repo)))
 	}
 	text := lipgloss.JoinVertical(lipgloss.Left,
-		lipgloss.NewStyle().Foreground(transcript.Pink).Bold(true).Render("Welcome to rux"),
+		lipgloss.NewStyle().Foreground(transcript.Pink).Bold(true).Render("Welcome to "+r.welcomeName()),
 		m.click("w:palette", key("ctrl+o"), func() tea.Cmd { m.openPalette(); return nil })+transcript.StDim.Render(" for commands · ")+
 			m.click("w:keys", key("?"), func() tea.Cmd { m.panel = panelShortcuts; return nil })+transcript.StDim.Render(" for shortcuts"),
 		"",
 		bar.Render(lipgloss.JoinVertical(lipgloss.Left,
-			transcript.StDim.Render("Tell the lead what to do. It plans, then starts"),
+			transcript.StDim.Render("Tell "+r.leadName()+" what to do. It plans, then starts"),
 			transcript.StDim.Render("sub-agents in their own rox guests."),
 			"",
 			strings.Join(info, "\n"),
 		)),
 	)
-	logo := trexLogo(m.phase)
+	logo := mascotLogo(r.mascot, m.phase)
 	switch {
 	case m.w >= lipgloss.Width(logo)+lipgloss.Width(text)+8:
 		return lipgloss.JoinHorizontal(lipgloss.Center, logo, "    ", text)
@@ -737,9 +738,9 @@ func (m *harnessModel) agentStrip() string {
 	var parts []string
 	for i, a := range agents {
 		snap := a.Snapshot()
-		name := transcript.StDim.Render(a.Name)
+		name := transcript.StDim.Render(a.Display())
 		if i == m.sel {
-			name = lipgloss.NewStyle().Foreground(transcript.Text).Bold(true).Underline(true).Render(a.Name)
+			name = lipgloss.NewStyle().Foreground(transcript.Text).Bold(true).Underline(true).Render(a.Display())
 		}
 		item := m.glyph(snap.Status, snap.Queued) + " " + name
 		if snap.Status == harness.Working && i != m.sel {
@@ -785,7 +786,7 @@ func (m *harnessModel) panelBox(color lipgloss.Color, body string) string {
 
 func (m *harnessModel) approvalPanel() string {
 	req := m.pending[0]
-	head := lipgloss.NewStyle().Foreground(transcript.Yellow).Render(req.agent.Name + " wants to run " + req.tool + " on this machine")
+	head := lipgloss.NewStyle().Foreground(transcript.Yellow).Render(req.agent.Display() + " wants to run " + req.tool + " on this machine")
 	btns := m.click("ap:yes", button("Allow  y", true), func() tea.Cmd { m.answer(allowOnce); return nil }) + " " +
 		m.click("ap:all", button("Allow all this session  a", false), func() tea.Cmd { m.answer(allowAlways); return nil }) + " " +
 		m.click("ap:no", button("Deny  n", false), func() tea.Cmd { m.answer(deny); return nil })

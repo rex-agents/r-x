@@ -20,6 +20,9 @@ type Options struct {
 	// Logo renders the animated T-rex at the given shimmer phase (rux passes trexLogo).
 	// Nil means a plain wordmark.
 	Logo func(phase float64) string
+	// Mascot renders a custom mascot (rux passes mascotLogo); the TUI uses it, in place of Logo,
+	// once the authority has one.
+	Mascot MascotRenderer
 	// Now is the clock (tests set it).
 	Now func() time.Time
 }
@@ -109,6 +112,8 @@ type Model struct {
 	downAsk *guestAsk // the "down this guest? y/n" prompt on the MONITOR tab
 	home    string    // the authority's home directory, once the directory browser has said
 	help    bool
+	persona authapi.Persona // the authority's name and mascot, once fetched
+	setup   *setup          // the first-run screen, until the authority has a name
 
 	feed   chan tea.Msg
 	cancel context.CancelFunc
@@ -174,7 +179,7 @@ func (m *Model) Init() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	go m.follow_(ctx)
-	return tea.Batch(m.fetchPack(), m.fetchProjects(), m.waitFeed(), tick(), m.tr.Spin.Tick)
+	return tea.Batch(m.fetchPack(), m.fetchPersona(), m.fetchProjects(), m.waitFeed(), tick(), m.tr.Spin.Tick)
 }
 
 func tick() tea.Cmd {
