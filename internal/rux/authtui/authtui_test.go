@@ -21,17 +21,18 @@ import (
 )
 
 type fake struct {
-	mu       sync.Mutex
-	pack     authapi.Pack
-	created  []map[string]any
-	sent     []string
-	stopped  []string            // threads interrupted
-	managers []string            // "project:text" of started managers
-	made     []map[string]string // POST /api/projects bodies
-	fsPaths  []string            // GET /api/fs/dirs queries (path + hidden)
-	headers  []http.Header       // of each pack stream request
-	sse      chan string
-	srv      *httptest.Server
+	mu         sync.Mutex
+	pack       authapi.Pack
+	created    []map[string]any
+	sent       []string
+	stopped    []string            // threads interrupted
+	guestCalls []string            // "name:action?query" of guest actions
+	managers   []string            // "project:text" of started managers
+	made       []map[string]string // POST /api/projects bodies
+	fsPaths    []string            // GET /api/fs/dirs queries (path + hidden)
+	headers    []http.Header       // of each pack stream request
+	sse        chan string
+	srv        *httptest.Server
 }
 
 func fixture() authapi.Pack {
@@ -184,6 +185,11 @@ func newFake(t *testing.T) *fake {
 		json.NewDecoder(r.Body).Decode(&b)
 		f.mu.Lock()
 		f.sent = append(f.sent, r.PathValue("id")+":"+b.Text)
+		f.mu.Unlock()
+	})
+	mux.HandleFunc("POST /api/guests/{name}/{action}", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.guestCalls = append(f.guestCalls, r.PathValue("name")+":"+r.PathValue("action")+"?"+r.URL.RawQuery)
 		f.mu.Unlock()
 	})
 	mux.HandleFunc("POST /api/threads/{id}/interrupt", func(w http.ResponseWriter, r *http.Request) {
@@ -1069,4 +1075,78 @@ func TestHeaderDump(t *testing.T) {
 	fmt.Println(strings.Join(strings.Split(plain(m.View()), "\n")[:4], "\n"))
 	press(m, "esc", "right", "right", "enter")
 	first("sub")
+}
+
+func monitorGuest(m *Model, host, guest int) {
+	m.tab = tabMonitor
+	m.mfocus, m.msel[mcHost], m.msel[mcGuest] = mcGuest, host, guest
+}
+
+func (f *fake) guestLog() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return strings.Join(f.guestCalls, " ")
+}
+
+func TestMonitorGuestSleepWakeDown(t *testing.T) {
+	f := newFake(t)
+	m := boot(t, f, 160, 50)
+	// s on a running guest sleeps it; on a stopped one wakes it.
+	monitorGuest(m, 0, 2) // spare: running, no thread
+	if !strings.Contains(plain(m.View()), "s  sleep") && !strings.Contains(plain(m.View()), "sleep") {
+		t.Error("no sleep chip")
+	}
+	press(m, "s")
+	monitorGuest(m, 0, 1) // g-t2: stopped
+	m.flash = ""
+	if !strings.Contains(plain(m.View()), "wake") {
+		t.Error("no wake chip on a stopped guest")
+	}
+	press(m, "s")
+	if got := f.guestLog(); got != "spare:sleep? g-t2:wake?" {
+		t.Fatalf("calls %q", got)
+	}
+	if !strings.Contains(m.flash, "waking g-t2") {
+		t.Errorf("flash %q", m.flash)
+	}
+	// d asks first; n and esc cancel without a request.
+	monitorGuest(m, 0, 2)
+	press(m, "d")
+	v := plain(m.View())
+	if m.downAsk == nil || !strings.Contains(v, "down spare? y/n") {
+		t.Fatalf("no prompt:\n%s", v)
+	}
+	press(m, "n")
+	press(m, "d", "esc")
+	if m.downAsk != nil || strings.Contains(f.guestLog(), "down") {
+		t.Fatalf("cancel sent %q", f.guestLog())
+	}
+	// y downs it.
+	press(m, "d", "y")
+	if got := f.guestLog(); !strings.HasSuffix(got, "spare:down?") {
+		t.Fatalf("calls %q", got)
+	}
+	// A guest whose thread is working: the prompt names the thread and the request forces.
+	monitorGuest(m, 0, 0) // g-t1: thread t1 is running
+	press(m, "d")
+	if v := plain(m.View()); !strings.Contains(v, "down g-t1 (thread t1), which is working right now? y/n") {
+		t.Fatalf("prompt:\n%s", v)
+	}
+	press(m, "y")
+	if got := f.guestLog(); !strings.HasSuffix(got, "g-t1:down?force=1") {
+		t.Fatalf("calls %q", got)
+	}
+	// A guest on another authority names it.
+	monitorGuest(m, 1, 0) // nuc: g-t5
+	press(m, "s")
+	if got := f.guestLog(); !strings.HasSuffix(got, "g-t5:sleep?authority=nuc") {
+		t.Fatalf("calls %q", got)
+	}
+	// Other columns ignore the keys.
+	n := len(f.guestCalls)
+	m.mfocus = mcHost
+	press(m, "s", "d")
+	if len(f.guestCalls) != n || m.downAsk != nil {
+		t.Error("s/d acted outside the guests column")
+	}
 }

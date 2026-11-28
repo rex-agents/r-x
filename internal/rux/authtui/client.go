@@ -311,3 +311,20 @@ func (c *Client) identify(req *http.Request) {
 	}
 	req.Header.Set("X-Rux-Device", c.Device)
 }
+
+// GuestAction is POST /api/guests/{name}/{sleep|wake|down}. authority names the host the guest is
+// on ("" for the one attached); force downs a guest whose thread is mid-turn.
+func (c *Client) GuestAction(authority, name, action string, force bool) error {
+	q := url.Values{}
+	if authority != "" {
+		q.Set("authority", authority)
+	}
+	if force {
+		q.Set("force", "1")
+	}
+	p := "/api/guests/" + url.PathEscape(name) + "/" + action
+	if len(q) > 0 {
+		p += "?" + q.Encode()
+	}
+	return c.do("POST", p, nil, nil)
+}

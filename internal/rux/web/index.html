@@ -324,7 +324,12 @@ body:not([data-mode="monitor"]) #monitor { display: none; }
 .mhead { color: var(--faint); font-size: 11px; }
 .c-clients .mrow { grid-template-columns: 70px 1.4fr 1fr 1fr; }
 .c-hosts .mrow { grid-template-columns: 1.6fr 1fr .8fr .8fr 1fr .8fr; }
-.c-guests .mrow { grid-template-columns: 1.6fr .9fr .9fr .7fr 1.1fr 1.6fr; }
+.c-guests .mrow { grid-template-columns: 1.6fr .9fr .9fr .7fr 1.1fr 1.6fr 112px; }
+.gact { display: flex; gap: 6px; justify-content: flex-end; }
+.gact button { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 4px; font: inherit; font-size: 11px; padding: 1px 8px; cursor: pointer; }
+.gact button:hover { color: var(--green); border-color: var(--green-dim); }
+.gact button.danger:hover { color: var(--err); border-color: var(--err); }
+.gact button:disabled { opacity: .5; cursor: default; }
 .mrow.sel { background: var(--green-bg); }
 div.mrow[role=button] { cursor: pointer; }
 a.mrow:hover, div.mrow[role=button]:hover { background: var(--green-bg); }
@@ -1400,6 +1405,26 @@ function showThread(id, proj = null, sub = null) {
 
 
 // ---------- monitor ----------
+// guestActions are a guest row's sleep/wake and down buttons: sleep keeps the disk (like rox stop),
+// down removes the guest (like rox down). A guest on another host of the pack goes there with ?authority=.
+function guestActions(g, a, threadStatus) {
+  const asleep = g.phase === "stopped" || g.phase === "exited" || g.phase === "asleep";
+  const busy = threadStatus === "running";
+  const call = async (btn, action, q) => {
+    btn.disabled = true;
+    try { await api("POST", `/api/guests/${encodeURIComponent(g.name)}/${action}` + (q.length ? "?" + q.join("&") : "")); }
+    catch (err) { alert(err.message); btn.disabled = false; }
+  };
+  const mk = (label, cls, title, fn) => h("button", { class: cls, title, onclick: (e) => { e.preventDefault(); e.stopPropagation(); fn(e.currentTarget); } }, label);
+  const q = a.local ? [] : ["authority=" + encodeURIComponent(a.name)];
+  return h("div", { class: "gact" },
+    asleep ? mk("wake", "", "start the guest again", (b) => call(b, "wake", q))
+           : mk("sleep", "", "stop the guest and keep its disk (like rox stop)", (b) => call(b, "sleep", q)),
+    mk("down", "danger", "remove the guest (like rox down)", (b) => {
+      if (!confirm(`Remove guest ${g.name}?` + (g.thread ? " Its thread keeps its transcript but loses the guest's files." : " Its disk is deleted.") + (busy ? " A turn is running in it right now." : ""))) return;
+      call(b, "down", busy ? [...q, "force=1"] : q);
+    }));
+}
 // CLIENTS (pack.clients), HOSTS (pack.authorities) and GUESTS (authority.guests), from the pack feed.
 const fmtGB = (b) => b >= 1 << 30 ? (b / (1 << 30)).toFixed(1) + "G" : Math.round((b || 0) / (1 << 20)) + "M";
 function showMonitor() {
@@ -1427,6 +1452,7 @@ function showMonitor() {
       h("span", {}, h("span", { class: "dot " + packDot(a.status) }), " " + a.name, a.name === p.leader ? h("span", { class: "tag-kind" }, "★ leader") : null),
       a.status !== "up" ? a.status : a.host?.os || "?", a.status === "up" ? plural(a.host?.cpus || 0, "cpu") : "-", a.status === "up" ? "load " + (a.host?.load || 0).toFixed(1) : "-",
       a.host?.guests_max ? `${a.host.guests_used || 0}/${a.host.guests_max} slots` : "-", uptime(a.started)));
+    const threadStatus = new Map(allThreads(p).map(t => [t.id, t.status]));
     const shown = auths.filter(a => !packSel.host || a.name === packSel.host);
     const guestRows = shown.flatMap(a => (a.guests || []).map(g => {
       const frac = g.mem_limit ? Math.min(1, g.mem_bytes / g.mem_limit) : 0;
@@ -1440,7 +1466,7 @@ function showMonitor() {
     mon.replaceChildren(h("div", { class: "mon-in" },
       panel("clients", plural(clients.length, "client"), clients.length ? h("div", { class: "mtable c-clients" }, head("kind", "device", "authority", "last seen"), ...clientRows) : none("no clients reported")),
       panel("hosts", plural(auths.length, "host") + (packSel.host ? " · tap again to show all guests" : " · tap one to filter guests"), auths.length ? h("div", { class: "mtable c-hosts" }, head("host", "os", "cpus", "load", "guests", "uptime"), ...hostRows) : none("no authorities")),
-      panel("guests", packSel.host ? "on " + packSel.host : "all hosts", guestRows.length ? h("div", { class: "mtable c-guests" }, head("guest", "phase", "backend", "cpu", "memory", "thread"), ...guestRows) : none("no guests running"))));
+      panel("guests", packSel.host ? "on " + packSel.host : "all hosts", guestRows.length ? h("div", { class: "mtable c-guests" }, head("guest", "phase", "backend", "cpu", "memory", "thread", ""), ...guestRows) : none("no guests running"))));
     mon.scrollTop = scroll;
   }
   draw();

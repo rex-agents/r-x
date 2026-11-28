@@ -171,6 +171,7 @@ var threadPath = regexp.MustCompile(`^/api/threads/([^/]+)(/|$)`)
 // authority that does (events, events/page, messages, interrupt, sub-agent paths, archive,
 // destroy: everything under /api/threads/{id}/), over the quorum link.
 func (s *server) federate(app http.Handler) http.Handler {
+	app = s.forwardGuest(app)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if m := threadPath.FindStringSubmatch(r.URL.Path); m != nil && s.node != nil && s.node.InPack() && s.get(m[1]) == nil {
 			if owner := s.ownerOf(r.Context(), m[1]); owner != "" && owner != s.authName() {
@@ -244,7 +245,7 @@ func (s *server) handleQuorumProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/quorum/proxy")
-	if !strings.HasPrefix(path, "/api/threads/") {
+	if !strings.HasPrefix(path, "/api/threads/") && !strings.HasPrefix(path, "/api/guests/") {
 		http.NotFound(w, r)
 		return
 	}

@@ -77,6 +77,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.openThread(msg.id))
 		}
 		return m, tea.Batch(cmds...)
+	case guestActMsg:
+		if msg.err != nil {
+			m.flash = "guest: " + errMessage(msg.err)
+		} else {
+			m.flash = msg.done
+		}
+		return m, m.fetchPack()
 	case sentMsg:
 		if msg.err != nil {
 			m.flash = "send failed: " + msg.err.Error()
@@ -127,6 +134,8 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case m.help:
 		m.help = false
 		return m, nil
+	case m.downAsk != nil:
+		return m, m.downKey(s)
 	case m.tab == tabThread:
 		return m.convKey(k)
 	}
@@ -233,6 +242,8 @@ func (m *Model) monitorKey(s string) tea.Cmd {
 		if m.mfocus+1 < numMCols && len(m.monitorColumn(m.mfocus+1)) > 0 {
 			m.mfocus++
 		}
+	case "s", "d":
+		return m.guestKey(s)
 	case "enter":
 		if n := m.mselected(m.mfocus); n != nil {
 			if n.guest != nil && n.guest.Thread != "" {
