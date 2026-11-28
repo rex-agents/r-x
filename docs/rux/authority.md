@@ -83,20 +83,28 @@ the other can't see. The web app's existing `/api/*` endpoints stay and gain:
 
 | Endpoint | Returns |
 | --- | --- |
-| `GET /api/pack` | `{"leader","term","vault_host","vault_ok","authorities":[{"name","url","status","host":{...},"local":bool}]}` |
-| `GET /api/pack/stream` | SSE: `pack` snapshots, then `pack.delta` and `thread.*` events. The single live feed both clients render from. |
+| `GET /api/pack` | `{"leader","term","vault_host","vault_ok","authorities":[{"name","url","status","host":{...},"local":bool,"guests":[...]}],"clients":[...]}` |
+| `GET /api/pack/stream` | SSE: `pack` snapshots, then `pack.delta`, `pack.clients` and `thread.*` events. The single live feed both clients render from. Each open stream is a connected client (see below). |
 | `GET /api/threads?authority=NAME` | Threads across the pack (each with `authority`, `guest`, `placement`, `subagents`). |
 | `POST /api/threads` | Gains `placement` and `vault`. |
 
 The leader serves the pack-wide view; a member's `/api/pack*` proxies to the leader (or serves its local
 view, flagged `"degraded": true`, when there is none). Every mutating action in the TUI is a call to this
 API; anything the TUI can do, the web app gets the same endpoint for, and the web app gains a pack view
-(hosts → projects → threads → sub-agents). Shared Go types live in `internal/rux/authapi` (JSON tags are
+(leader → project agents → threads). Shared Go types live in `internal/rux/authapi` (JSON tags are
 the wire format; the web app mirrors them).
+
+### Manager, guests and clients
+
+The pack view carries three more things, all additive:
+
+- **Thread `kind`.** A thread summary has `"kind": "manager"` when it is a project's manager (see [projects and managers](projects-and-managers.md)); it is omitted for every other thread. A manager's workers are the threads whose `parent` is the manager's id. `POST /api/projects/{id}/manager` with `{"text": ...}` starts a project's manager when it has none.
+- **Guests.** Each authority in the pack lists the rox guests on its host in `guests`: `{"name","phase","backend","cpu","mem_bytes","mem_limit","thread"}`. `phase` is `running`, `stopped`, `starting`, and so on; `backend` is `container`, `linux`, `macos`, `fly` or `railway`; `cpu` is a percent of one CPU; `thread` is the id of the thread whose `guest` is this one, if any. CPU and memory come from the host's container stats, which refresh while a pack stream or the overview is open. Guests travel in `pack.delta` with the rest of the authority.
+- **Clients.** `clients` lists the UIs connected to the pack right now, each a live `GET /api/pack/stream` connection: `{"id","kind","device","authority","since","last_seen"}`. `kind` is `tui` or `web`: the TUI sends `X-Rux-Client: tui` and `X-Rux-Device: <host name>`, and anything else is `web`. `device` is `X-Rux-Device`, else the tailnet peer name or remote host. `authority` is the authority the client connected through. `last_seen` is refreshed on every keepalive (20 s). Each authority reports its own clients to the leader with its host report, so the leader lists every client exactly once, under the authority it came through; a member that proxies a stream to the leader sets `X-Rux-Via: <its name>` and the leader uses that name. The `pack.clients` event carries the whole list (`[]ClientInfo`) whenever clients connect or leave (not when only `last_seen` changes).
 
 ## The authority TUI
 
-Node graph, left to right: **pack/hosts → projects → threads → sub-agents**, with a preview column on the
+Node graph, left to right: **leader → project agents → threads**, with a preview column on the
 right (the selected node's last events, files, cost). rux's existing palette (`harness_palette.go`) and the
 animated T-rex (`harness_logo.go`) in the top-left corner. Header tabs: `PACK` `THREAD` `MONITOR`; header
 right: live/degraded dot, leader name, term, vault status, uptime. Footer: breadcrumb and key hints
