@@ -175,7 +175,7 @@ select.sel { appearance: none; -webkit-appearance: none; font: inherit; color: v
 select.sel option { background: var(--raise); color: var(--text); }
 select.sel:disabled { color: var(--faint); cursor: default; }
 select.sel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.field:has(select.sel)::after { content: "▾"; color: var(--muted); font-size: 11px; }
+.field:has(select.sel):not(.mpick)::after { content: "▾"; color: var(--muted); font-size: 11px; }
 .actions { display: flex; align-items: center; gap: 14px; margin-top: 20px; }
 .hint { color: var(--muted); font-size: 12px; }
 .start { background: var(--accent); color: var(--ink); font-weight: 700; padding: 8px 20px; border-radius: 8px; min-height: 36px; display: inline-flex; align-items: center; gap: 10px; }
@@ -222,6 +222,10 @@ select.sel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px
 .run:disabled { opacity: .5; }
 .runsin { text-align: right; padding: 0 6px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .runsin b { font-weight: 400; color: var(--text); }
+.where { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 0 0 0 2px; }
+.where .ddl { height: 28px; font-size: 12px; }
+.where .ddl select.sel { font-size: 12px; color: var(--muted); }
+.where .runsin { padding: 0 6px; }
 .repos-h { display: flex; align-items: center; gap: 12px; padding: 0 4px; }
 .search { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); }
 .search:focus-within { border-color: var(--accent); }
@@ -302,7 +306,9 @@ pre { font: 12.5px/1.55 var(--mono); background: var(--panel); border: 1px solid
 
 /* reply composer (thread and project pages) */
 #ftr { position: relative; flex: none; padding: 10px 0 12px; border-top: 1px solid var(--line); background: var(--bg); }
-.opts { display: flex; gap: 16px; font-size: 12px; color: var(--muted); padding: 0 0 6px 18px; }
+.opts .ddl { height: 28px; padding: 0 4px; font-size: 12px; }
+.opts .ddl select.sel { font-size: 12px; }
+.opts { display: flex; gap: 6px 10px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--muted); padding: 0 0 6px 18px; }
 .opts label { display: inline-flex; align-items: center; gap: 6px; }
 .opts select.sel { width: auto; field-sizing: content; color: var(--text); font-size: 12px; }
 .opts select.sel:hover { color: var(--accent); }
@@ -598,7 +604,9 @@ addEventListener("hashchange", route);
 addEventListener("keydown", (e) => {
   if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || document.querySelector(".lightbox")) return;
   const t = e.target;
-  if (e.key === "Tab" && !e.shiftKey && (!t || t === document.body)) {
+  if (e.key === "Escape") { document.querySelector(".menu-pop")?.remove(); if (typingIn(t)) { t.blur(); e.preventDefault(); } return; } // a way out of an autofocused composer
+  const emptyComposer = t?.matches?.("#ftr textarea") && !t.value;
+  if (e.key === "Tab" && !e.shiftKey && (!t || t === document.body || emptyComposer)) {
     // Only when nothing has focus; focus then moves to the nav so the next tab keeps walking the page.
     const views = [lastWork, "#/pack", "#/monitor"], cur = location.hash === "#/pack" ? 1 : location.hash === "#/monitor" ? 2 : 0;
     e.preventDefault(); location.hash = views[(cur + 1) % 3];
@@ -821,23 +829,69 @@ async function loadRepos() {
     repoNote = !r.enabled ? "github off (start rux serve with --gh)" : r.error ? "couldn't list repos: " + r.error : "";
   } catch (err) { repoList = repoList || []; repoNote = "couldn't list repos: " + err.message; }
 }
-let modelList = null; // [{value, name, description, efforts}]
-async function loadModels() { try { modelList = (await api("GET", "/api/models")).models || []; } catch { modelList = modelList || []; } return modelList; }
+let modelList = null; // legacy flat list: [{value, name, description, efforts}]
+let providerList = null; // [{id, name, engine, models, lazy}] from /api/models: the picker's first step
+const legacyProviders = (ms) => [{ id: "claude-code", name: "Claude Code", models: ms.filter(m => !/^codex/.test(m.value)) }, ...(ms.some(m => /^codex/.test(m.value)) ? [{ id: "codex", name: "Codex", models: ms.filter(m => /^codex/.test(m.value)) }] : [])];
+async function loadModels() {
+  try { const r = await api("GET", "/api/models"); modelList = r.models || []; providerList = r.providers || legacyProviders(modelList); }
+  catch { modelList = modelList || []; providerList = providerList || legacyProviders(modelList); }
+  return modelList;
+}
 const shortModel = (m) => (m || "").replace(/^claude-/, "").replace(/-(\d+)-(\d+)(-\d{8})?$/, " $1.$2");
-// fillModels fills a model <select> and its effort <select>; values "" mean claude's default.
-function fillModels(modelSel, effortSel, model, effort) {
-  const list = modelList || [];
-  const opts = list.map(m => h("option", { value: m.value === "default" ? "" : m.value, title: m.description || "" },
-    m.value === "default" ? "default" + (m.description ? " · " + m.description.split(" · ")[0].toLowerCase() : "") : (m.name || m.value).toLowerCase()));
-  if (model && !list.some(m => m.value === model)) opts.push(h("option", { value: model }, model));
-  if (!opts.length) opts.push(h("option", { value: "" }, "default"));
-  modelSel.replaceChildren(...opts);
-  modelSel.value = model || "";
-  const cur = list.find(m => (m.value === "default" ? "" : m.value) === modelSel.value);
-  const efforts = cur ? cur.efforts || [] : ["low", "medium", "high", "xhigh", "max"];
-  effortSel.replaceChildren(h("option", { value: "" }, "default"), ...efforts.map(e => h("option", { value: e }, e)));
-  effortSel.disabled = !efforts.length;
-  effortSel.value = efforts.includes(effort) ? effort : "";
+// providerOf says which provider type a thread or project model belongs to.
+const providerOf = (model, engine) => { const m = model || ""; return engine === "harness" || /^(anthropic|openai)\//.test(m) ? m.split("/")[0] || "anthropic" : m === "codex" || m.startsWith("codex/") ? "codex" : "claude-code"; };
+// modelPicker is the three-step choice: provider type, then one of its models, then the effort (only when
+// the model takes one). allow limits the providers; lock fixes the provider (a thread keeps its agent).
+// Models of the API providers are fetched when you first pick them. get() gives { provider, engine, model, effort }:
+// model "" is Claude Code's default, "codex" is Codex's; API models are provider/MODEL.
+function modelPicker({ provider, model, effort, allow = null, lock = false, onChange = () => {} }) {
+  const provSel = h("select", { class: "sel", "aria-label": "provider type" }), modelSel = h("select", { class: "sel", "aria-label": "model" }), effortSel = h("select", { class: "sel", "aria-label": "effort" });
+  const provDdl = h("label", { class: "ddl", title: "provider type" }, provSel), modelDdl = h("label", { class: "ddl model" }, modelSel);
+  const effDdl = h("label", { class: "ddl", hidden: true }, h("span", { class: "hint" }, "effort"), effortSel);
+  let cur = { provider: provider || providerOf(model), model: model || "", effort: effort || "" };
+  const provs = () => {
+    const all = providerList || legacyProviders(modelList || []);
+    const ps = lock ? all.filter(p => p.id === cur.provider) : all.filter(p => !allow || allow.includes(p.id) || p.id === cur.provider);
+    return ps.length ? ps : [{ id: cur.provider, name: cur.provider }];
+  };
+  const mval = (m) => m.value === "default" ? "" : m.value;
+  function fill() {
+    const ps = provs(), p = ps.find(x => x.id === cur.provider) || ps[0];
+    cur.provider = p.id;
+    provSel.replaceChildren(...ps.map(x => h("option", { value: x.id }, x.name.toLowerCase())));
+    provSel.value = p.id; provSel.disabled = lock || ps.length < 2;
+    if (p.lazy && !p.models && !p.loading) {
+      p.loading = true;
+      api("GET", "/api/models?provider=" + encodeURIComponent(p.id)).then(r => { p.models = r.models || []; p.error = r.error; }).catch(e => { p.models = []; p.error = e.message; })
+        .finally(() => { p.loading = false; if (provSel.isConnected) fill(); });
+    }
+    const ms = p.models || [];
+    if (p.id === "codex" && cur.model === "") cur.model = "codex";
+    const opts = ms.map(m => h("option", { value: mval(m), title: m.description || "" },
+      m.value === "default" ? "default" + (m.description ? " · " + m.description.split(" · ")[0].toLowerCase() : "") : m.value === p.id ? "default" : (m.name || m.value).toLowerCase()));
+    if (cur.model && !ms.some(m => mval(m) === cur.model)) opts.push(h("option", { value: cur.model }, cur.model));
+    if (!opts.length) opts.push(h("option", { value: cur.model }, p.loading ? "loading…" : "default"));
+    modelSel.replaceChildren(...opts);
+    modelSel.value = cur.model;
+    cur.model = modelSel.value;
+    modelDdl.title = p.error ? "couldn't list models: " + p.error : "";
+    const m = ms.find(x => mval(x) === cur.model);
+    const efforts = m ? m.efforts || [] : p.models || p.loading ? [] : ["low", "medium", "high", "xhigh", "max"];
+    effDdl.hidden = !efforts.length;
+    effortSel.replaceChildren(h("option", { value: "" }, "default"), ...efforts.map(e => h("option", { value: e }, e)));
+    cur.effort = efforts.includes(cur.effort) ? cur.effort : "";
+    effortSel.value = cur.effort;
+  }
+  provSel.addEventListener("change", () => { cur = { provider: provSel.value, model: "", effort: "" }; fill(); onChange(); });
+  modelSel.addEventListener("change", () => { cur.model = modelSel.value; fill(); onChange(); });
+  effortSel.addEventListener("change", () => { cur.effort = effortSel.value; onChange(); });
+  fill();
+  if (providerList == null) loadModels().then(() => { if (provSel.isConnected) fill(); });
+  return {
+    els: [provDdl, modelDdl, effDdl],
+    get: () => ({ provider: cur.provider, engine: cur.provider === "anthropic" || cur.provider === "openai" ? "harness" : "", model: cur.model, effort: cur.effort }),
+    set(m, e, eng) { cur = { provider: providerOf(m, eng), model: m || "", effort: e || "" }; fill(); },
+  };
 }
 const SVGNS = "http://www.w3.org/2000/svg";
 function ico(paths, size = 14, extra = {}) {
@@ -905,25 +959,21 @@ function showNew(pid) {
   const branch = h("input", { "aria-label": "branch", placeholder: "default", autocapitalize: "off", autocorrect: "off", spellcheck: "false", value: saved.branch || "" });
   const branchChip = h("label", { class: "chip", title: "branch" }, ico(ICON_BRANCH), branch);
   const start = h("button", { class: "run", type: "submit" }, "run ", h("kbd", {}, "⌘↵"));
-  const modelSel = h("select", { class: "sel", "aria-label": "model" }), effortSel = h("select", { class: "sel", "aria-label": "effort" });
   // Where it runs: a VM by default, "this host" on the authority itself, optionally pinned to an authority of the pack.
   const placeSel = h("select", { class: "sel", "aria-label": "guest type" }, h("option", { value: "vm" }, "vm"), h("option", { value: "local" }, "host (no vm)"));
   const authSel = h("select", { class: "sel", "aria-label": "authority" }, h("option", { value: "" }, "any host"));
   const authDdl = h("label", { class: "ddl", hidden: true }, authSel);
   api("GET", "/api/pack").then(pk => { const as = (pk.authorities || []).filter(a => a.status !== "down"); if (as.length > 1) { authSel.append(...as.map(a => h("option", { value: a.name }, a.name + (a.name === pk.leader ? " · leader" : "")))); authDdl.hidden = false; } }).catch(() => {});
-  const fillNew = (m, e) => fillModels(modelSel, effortSel, m, e);
-  modelSel.addEventListener("change", () => fillNew(modelSel.value, effortSel.value));
-  fillNew(saved.model || "", saved.effort || "");
-  if (modelList == null) loadModels().then(() => form.isConnected && fillNew(modelSel.value || saved.model || "", effortSel.value || saved.effort || ""));
-  const runsin = h("div", { class: "runsin" });
+  const mp = modelPicker({ provider: saved.provider, model: saved.model, effort: saved.effort });
+  const runsin = h("span", { class: "runsin" });
   const form = h("form", { class: "nt" },
     h("h1", {}, h("span", { "aria-hidden": "true" }, "›"), " what should claude do?"),
     proj ? h("div", { class: "inproj" }, "in project ", h("b", {}, proj.name)) : null,
     h("div", { style: "display:flex;flex-direction:column;gap:10px" },
       h("div", { class: "composer-card" }, prompt,
         h("div", { class: "crow" }, repoChip, branchChip, h("span", { class: "spacer" }),
-          h("label", { class: "ddl" }, placeSel), h("label", { class: "ddl model" }, modelSel), h("label", { class: "ddl" }, h("span", { class: "hint" }, "effort"), effortSel), authDdl, start)),
-      runsin),
+          ...mp.els, start)),
+      h("div", { class: "where" }, h("label", { class: "ddl", title: "where the thread runs" }, placeSel), authDdl, h("span", { class: "spacer" }), runsin)),
     h("section", { "aria-label": "Repository" }, picker.head, picker.list));
 
   function update() {
@@ -950,8 +1000,8 @@ function showNew(pid) {
     if (!prompt.value.trim()) { prompt.focus(); return; }
     start.disabled = true; start.textContent = "starting…";
     try {
-      if (!proj) store.set("rux.new", JSON.stringify({ repo: state.repo, branch: branch.value, model: modelSel.value, effort: effortSel.value }));
-      const t = await api("POST", "/api/threads", { repo: state.repo.trim(), branch: branch.value, prompt: prompt.value, model: modelSel.value, effort: effortSel.value, placement: { ...(placeSel.value === "local" ? { local: true } : {}), ...(authSel.value ? { authority: authSel.value } : {}) } });
+      if (!proj) store.set("rux.new", JSON.stringify({ repo: state.repo, branch: branch.value, provider: mp.get().provider, model: mp.get().model, effort: mp.get().effort }));
+      const t = await api("POST", "/api/threads", { repo: state.repo.trim(), branch: branch.value, prompt: prompt.value, ...(({ engine, model, effort }) => ({ model, effort, ...(engine ? { engine } : {}) }))(mp.get()), placement: { ...(placeSel.value === "local" ? { local: true } : {}), ...(authSel.value ? { authority: authSel.value } : {}) } });
       await loadList();
       location.hash = "#/t/" + encodeURIComponent(t.id);
     } catch (err) { alert(err.message); start.disabled = false; start.replaceChildren("run ", h("kbd", {}, "⌘↵")); }
@@ -1030,7 +1080,7 @@ async function showProject(pid) {
   if (location.hash !== hash) return;
   if (p.manager) { showThread(p.manager, p); return; }
 
-  setFoot(["work", p.name], [["enter", "send"]]);
+  setFoot(["work", p.name], [["enter", "send"], ["esc", "leave composer"]]);
   // No manager yet: the first message starts one.
   $("#hdr").replaceChildren(h("a", { class: "back", href: "#/", "aria-label": "Back" }, "‹"), h("span", { class: "title" }, p.name),
     h("a", { class: "btn", href: "#/new/p/" + encodeURIComponent(pid) }, "+ thread"),
@@ -1098,8 +1148,7 @@ function showProjectSettings(pid) {
   const col = h("div", { class: "col" });
   $("#main").replaceChildren(col);
   const dBranch = h("input", { placeholder: "repo default", autocapitalize: "off", autocorrect: "off", spellcheck: "false" });
-  const dModel = h("select", { class: "sel" }), dEffort = h("select", { class: "sel" });
-  dModel.addEventListener("change", () => fillModels(dModel, dEffort, dModel.value, dEffort.value));
+  const dPick = modelPicker({ allow: ["claude-code", "codex"] }); // project defaults carry a model and effort, not an API engine
   const notes = h("textarea", { class: "notes", placeholder: "conventions, how to build and test, what to avoid… every thread in this project (and its manager) gets these" });
   notes.addEventListener("input", () => autogrow(notes));
   const saved = h("span", { class: "saved" });
@@ -1138,8 +1187,7 @@ function showProjectSettings(pid) {
     h("h2", {}, "defaults for new threads"),
     h("div", { class: "fields three" },
       h("div", {}, h("div", { class: "field" }, h("label", {}, "branch"), dBranch)),
-      h("div", {}, h("div", { class: "field" }, h("label", {}, "model"), dModel)),
-      h("div", {}, h("div", { class: "field" }, h("label", {}, "effort"), dEffort))),
+      h("div", { style: "grid-column: span 2" }, h("div", { class: "field mpick" }, h("label", {}, "model"), ...dPick.els))),
     h("h2", { style: "margin-top:28px" }, "notes"),
     notes,
     h("h2", { style: "margin-top:28px" }, "actions"),
@@ -1154,7 +1202,7 @@ function showProjectSettings(pid) {
     e.preventDefault();
     save.disabled = true;
     try {
-      await api("PATCH", `/api/projects/${encodeURIComponent(pid)}`, { branch: dBranch.value, model: dModel.value, effort: dEffort.value, notes: notes.value,
+      await api("PATCH", `/api/projects/${encodeURIComponent(pid)}`, { branch: dBranch.value, model: dPick.get().model, effort: dPick.get().effort, notes: notes.value,
         ...(toolState ? { tools: [...toolState.on], tools_allowed: [...toolState.allowed], tool_settings: toolState.settings } : {}) });
       saved.textContent = "saved"; setTimeout(() => saved.textContent = "", 2000);
       loadList();
@@ -1168,7 +1216,7 @@ function showProjectSettings(pid) {
       titleEl.textContent = p.name + " · settings"; setFoot(["work", p.name, "settings"]);
       repoLine.textContent = p.repo || "blank workspaces · no repo";
       dBranch.value = p.branch || "";
-      fillModels(dModel, dEffort, p.model || "", p.effort || "");
+      dPick.set(p.model || "", p.effort || "");
       notes.value = p.notes || ""; autogrow(notes);
       api("GET", "/api/tools").then(list => drawTools(list, p)).catch(err => toolsBox.replaceChildren(h("div", { class: "pnote" }, err.message)));
     } catch (err) { col.replaceChildren(h("div", { class: "empty" }, err.message)); }
@@ -1226,7 +1274,7 @@ function showThread(id, proj = null, sub = null) {
   main.replaceChildren(h("div", { class: "col" }, panel?.el, tx, working));
 
   const titleEl = h("span", { class: "title" }, proj ? proj.name : "");
-  setFoot(["work", proj ? proj.name : "thread"], [["enter", "send"], ["shift+enter", "newline"]]);
+  setFoot(["work", proj ? proj.name : "thread"], [["enter", "send"], ["esc", "leave composer"]]);
   const statusHolder = h("span");
   const menu = h("div", { class: "menu" }, h("button", { class: "icon-btn", "aria-label": "More", onclick: (e) => { e.stopPropagation(); toggleMenu(); } }, "⋯"));
   $("#hdr").replaceChildren(...[h("a", { class: "back", href: "#/", "aria-label": "Back" }, "‹"), titleEl, statusHolder,
@@ -1236,23 +1284,19 @@ function showThread(id, proj = null, sub = null) {
   const btn = h("button", { class: "send", onclick: () => btn.classList.contains("stop") ? interrupt() : send() }, "send");
   input.addEventListener("input", () => { autogrow(input); syncButton(); });
   input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && (finePointer || e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } });
-  const modelSel = h("select", { class: "sel", "aria-label": "model" }), effortSel = h("select", { class: "sel", "aria-label": "effort" });
   let shownSettings = null;
+  const mp = modelPicker({ lock: true, onChange: saveSettings }); // a thread keeps its agent: its provider is fixed
   function syncSettings(force) {
-    const key = (meta?.model || "") + "|" + (meta?.effort || "");
+    const key = (meta?.model || "") + "|" + (meta?.effort || "") + "|" + (meta?.engine || "");
     if (!force && key === shownSettings) return;
     shownSettings = key;
-    fillModels(modelSel, effortSel, meta?.model || "", meta?.effort || "");
+    mp.set(meta?.model || "", meta?.effort || "", meta?.engine);
   }
   async function saveSettings() {
-    fillModels(modelSel, effortSel, modelSel.value, effortSel.value); // effort list depends on the model
-    try { await api("POST", `/api/threads/${id}/settings`, { model: modelSel.value, effort: effortSel.value }); }
+    const { model, effort } = mp.get();
+    try { await api("POST", `/api/threads/${id}/settings`, { model, effort }); }
     catch (err) { alert(err.message); syncSettings(true); }
   }
-  modelSel.addEventListener("change", saveSettings);
-  effortSel.addEventListener("change", saveSettings);
-  if (modelList == null) loadModels().then(() => syncSettings(true));
-  // Attached images: the 📎 button, paste, or drag and drop.
   const attached = []; // { name, mime, data (base64), url (preview) }
   const strip = h("div", { class: "attach-strip", hidden: true });
   const fileIn = h("input", { type: "file", accept: "image/*", multiple: true, hidden: true });
@@ -1284,7 +1328,7 @@ function showThread(id, proj = null, sub = null) {
   const onDrop = (e) => { if (e.dataTransfer?.files?.length) { e.preventDefault(); addImages(e.dataTransfer.files); } document.body.classList.remove("dropping"); };
   addEventListener("dragover", onDragOver); addEventListener("dragleave", onDragLeave); addEventListener("drop", onDrop);
   $("#ftr-in").replaceChildren(
-    h("div", { class: "opts" }, h("label", {}, "model", modelSel), h("label", {}, "effort", effortSel)),
+    h("div", { class: "opts" }, ...mp.els),
     strip, fileIn,
     h("div", { class: "composer" }, input, attachBtn, btn));
   $("#ftr").hidden = !!sub; // a sub-agent's conversation is read-only
@@ -1299,7 +1343,7 @@ function showThread(id, proj = null, sub = null) {
   function setMeta(m) {
     meta = m;
     if (!proj) {
-      titleEl.textContent = m.title; setFoot(["work", projName(m.project), m.title], [["enter", "send"], ["shift+enter", "newline"]]);
+      titleEl.textContent = m.title; setFoot(["work", projName(m.project), m.title], [["enter", "send"], ["esc", "leave composer"]]);
       if (m.project) $(".back", $("#hdr")).href = "#/p/" + encodeURIComponent(m.project);
     }
     statusHolder.replaceChildren(h("span", { class: "status" }, dot(m), m.archived ? "archived" : statusText(m)));
