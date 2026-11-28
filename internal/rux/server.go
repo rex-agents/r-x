@@ -86,8 +86,9 @@ type threadMeta struct {
 	Replied         time.Time `json:"replied,omitempty"` // when claude last finished a turn
 	Repo            string    `json:"repo"`
 	Branch          string    `json:"branch"`
-	Model           string    `json:"model,omitempty"`  // claude --model; empty for the default
-	Effort          string    `json:"effort,omitempty"` // claude --effort; empty for the default
+	LocalDir        string    `json:"local_dir,omitempty"` // the project's directory on this host, copied into the guest by rox up --local
+	Model           string    `json:"model,omitempty"`     // claude --model; empty for the default
+	Effort          string    `json:"effort,omitempty"`    // claude --effort; empty for the default
 	Prompt          string    `json:"prompt"`
 	Status          string    `json:"status"` // provisioning, starting, running, idle, failed, destroying, destroyed
 	Guest           string    `json:"guest"`
@@ -645,6 +646,10 @@ func (s *server) createThread(req createReq) (*thread, error) {
 		if req.Repo == proj.Repo {
 			req.Branch = cmpOr(req.Branch, proj.Branch)
 		}
+		if proj.Dir != "" {
+			// --local copies the checkout as it is now, so no branch is checked out for the thread.
+			req.Repo, req.Branch = proj.Repo, ""
+		}
 		req.Model, req.Effort = cmpOr(req.Model, proj.Model), cmpOr(req.Effort, proj.Effort)
 	}
 	engine, err := s.resolveEngine(req.Engine, req.Model)
@@ -685,9 +690,17 @@ func (s *server) createThread(req createReq) (*thread, error) {
 	} else if !runtimes[req.Runtime] {
 		return nil, &reqError{400, "runtime must be container, linux, macos, fly or railway"}
 	}
+	if proj.Dir != "" {
+		if err := s.checkDirProjectPlacement(&proj, &req); err != nil {
+			return nil, err
+		}
+	}
 	local, vault, err := s.resolvePlacement(req.Placement, req.Vault)
 	if err != nil {
 		return nil, &reqError{400, err.Error()}
+	}
+	if local && proj.Dir != "" {
+		return nil, &reqError{400, "project " + proj.ID + " is a local directory, which threads get a copy of in a guest; it can't run unsandboxed on the host"}
 	}
 	if local {
 		req.Runtime, req.Guest = "", ""
@@ -696,7 +709,7 @@ func (s *server) createThread(req createReq) (*thread, error) {
 		return nil, &reqError{400, req.Runtime + " guests reach rux over Tailscale, which isn't running on this Mac"}
 	}
 	s.mu.Lock()
-	if req.Project == "" || projectIDFor(req.Repo) != req.Project {
+	if proj.Dir == "" && (req.Project == "" || projectIDFor(req.Repo) != req.Project) {
 		p := s.ensureProjectLocked(req.Repo)
 		req.Project, proj = p.ID, *p
 	}
@@ -720,7 +733,7 @@ func (s *server) createThread(req createReq) (*thread, error) {
 		ID: id, Title: title, Project: req.Project, Kind: req.Kind, Parent: req.Parent, ParentAuthority: req.ParentAuthority, Depth: req.Depth,
 		Repo: req.Repo, Branch: req.Branch, Prompt: req.Prompt, Model: req.Model, Effort: req.Effort,
 		Status: "provisioning", Backend: s.backend, Created: now, Updated: now, Token: randHex(24),
-		Runtime: req.Runtime, Guest: req.Guest, SharedGuest: req.Guest != "", Vault: vault, Engine: engine,
+		Runtime: req.Runtime, Guest: req.Guest, SharedGuest: req.Guest != "", Vault: vault, Engine: engine, LocalDir: proj.Dir,
 	}
 	if local {
 		meta.Backend = "local"
@@ -1228,11 +1241,17 @@ func projectName(repo string) string {
 
 func (s *server) runnerCommand(t *threadMeta, serverHost string) string {
 	extra := ""
-	if t.Repo != "" {
-		extra += " --repo " + shQuote(t.Repo)
-	}
-	if t.Branch != "" {
-		extra += " --branch " + shQuote(t.Branch)
+	if t.LocalDir != "" {
+		// rox up --local already put a copy of the checkout here; the runner finds its .git
+		// and doesn't clone.
+		extra += ` --dir "` + guestCheckoutDir(t.LocalDir) + `"`
+	} else {
+		if t.Repo != "" {
+			extra += " --repo " + shQuote(t.Repo)
+		}
+		if t.Branch != "" {
+			extra += " --branch " + shQuote(t.Branch)
+		}
 	}
 	if t.Engine == "harness" {
 		extra += " --engine harness"
@@ -1275,8 +1294,22 @@ func (s *server) provisionRox(t *thread) {
 	// starts an empty guest. --no-git-agent keeps rox from forwarding the host's SSH
 	// keys into it. --agents installs the thread's agent (Claude Code or Codex), which rix signs in through
 	// rox's hooks before the runner starts.
+	//
+	// A local-directory project is the exception: rox up --local, run in the checkout, copies
+	// it (unpushed commits and uncommitted files too) into the guest, and the runner works there.
 	runtime := cmpOr(m.Runtime, "container")
-	args := []string{"up", runtime, "--no-project", "--no-git-agent", "--agents", s.agentOf(m.Model)}
+	projectFlag, dir := "--no-project", s.dataDir
+	if m.LocalDir != "" {
+		projectFlag, dir = "--local", m.LocalDir
+		if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+			t.mu.Lock()
+			t.appendLocked("rux", 0, ruxEv("rux_error", "text", "the project's directory "+dir+" is gone, so there's nothing to copy into a guest"))
+			t.setStatusLocked("failed")
+			t.mu.Unlock()
+			return
+		}
+	}
+	args := []string{"up", runtime, projectFlag, "--no-git-agent", "--agents", s.agentOf(m.Model)}
 	if s.proxy != nil {
 		// The guest's models go through the authority's proxy, so no real sign-in goes in.
 		args = append(args, "--credentials=false")
@@ -1290,7 +1323,7 @@ func (s *server) provisionRox(t *thread) {
 		args = append(args, "--memory", s.memory)
 	}
 	args = append(args, "--", "bash", "-lc", s.runnerCommand(&m, s.advertiseFor(runtime)))
-	err := s.runLogged(t, s.roxBin, args, func(line string) {
+	err := s.runLoggedIn(t, dir, s.roxBin, args, func(line string) {
 		if name := guestNameRe.FindString(line); name != "" {
 			t.mu.Lock()
 			if t.meta.Guest == "" {
@@ -1336,6 +1369,11 @@ func (s *server) watchConnect(t *thread) {
 
 // runLogged runs a command, streaming its output into the thread as rux_setup events.
 func (s *server) runLogged(t *thread, bin string, args []string, onLine func(string)) error {
+	return s.runLoggedIn(t, s.dataDir, bin, args, onLine)
+}
+
+// runLoggedIn is runLogged with the command's working directory set.
+func (s *server) runLoggedIn(t *thread, dir, bin string, args []string, onLine func(string)) error {
 	shown := strings.Join(args, " ")
 	t.mu.Lock()
 	if tok := t.meta.Token; tok != "" {
@@ -1344,7 +1382,7 @@ func (s *server) runLogged(t *thread, bin string, args []string, onLine func(str
 	t.mu.Unlock()
 	t.event(ruxEv("rux_setup", "text", "$ "+filepath.Base(bin)+" "+shown))
 	cmd := exec.Command(bin, args...)
-	cmd.Dir = s.dataDir
+	cmd.Dir = dir
 	pr, pw := io.Pipe()
 	cmd.Stdout, cmd.Stderr = pw, pw
 	if err := cmd.Start(); err != nil {
@@ -1444,6 +1482,7 @@ func (s *server) routes() (app, guest *http.ServeMux) {
 	app.HandleFunc("POST /api/projects/{id}/cleanup", s.handleProjectCleanup)
 	app.HandleFunc("POST /api/projects/{id}/archive", s.handleProjectArchive)
 	app.HandleFunc("GET /api/repos", s.handleRepos)
+	app.HandleFunc("GET /api/fs/dirs", s.handleFsDirs)
 	app.HandleFunc("GET /api/projects", s.handleProjects)
 	app.HandleFunc("POST /api/projects", s.handleProjectCreate)
 	app.HandleFunc("GET /api/projects/{id}", s.handleProjectGet)

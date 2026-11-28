@@ -112,6 +112,13 @@ func (s *server) executePlacement(ctx context.Context, p quorum.Placement) (json
 // the leader chooses unless the request pins one. It returns the thread as /api/threads does.
 func (s *server) createPlaced(ctx context.Context, req createReq) (any, error) {
 	inPack := s.node != nil && s.node.InPack()
+	if inPack && s.dirProjectOwned(req.Project) {
+		// A local directory only exists on this authority, so its threads run here.
+		if a := strings.TrimSpace(req.Placement.Authority); a != "" && a != s.authName() {
+			return nil, &reqError{400, fmt.Sprintf("project %s is a directory on authority %s; it can't be placed on %s", req.Project, s.authName(), a)}
+		}
+		inPack = false
+	}
 	if !inPack || (req.Placement.Local && req.Placement.Authority == "") {
 		t, err := s.createThread(req)
 		if err != nil {

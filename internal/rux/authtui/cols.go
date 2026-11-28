@@ -121,6 +121,12 @@ func (m *Model) groups() []*projectGroup {
 			}
 		}
 	}
+	// Projects without threads yet, such as one just added, are listed too.
+	for id, p := range m.projects {
+		if by[id] == nil && id != "" && id != "scratch" && !p.Closed {
+			get(id)
+		}
+	}
 	for id := range by {
 		ids = append(ids, id)
 	}
@@ -273,6 +279,9 @@ func (m *Model) projectNode(g *projectGroup) node {
 	default:
 		n.status = "none"
 		n.body = [3]string{"no manager yet", "enter starts one", cost}
+		if p, ok := m.projects[g.id]; ok && p.Dir != "" {
+			n.body[1] = tailFit(tildePath(p.Dir, m.home), cardW-4)
+		}
 	}
 	return n
 }
