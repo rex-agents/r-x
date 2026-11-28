@@ -13,7 +13,7 @@ rux stores no credentials. Everything it needs comes from rix, on the machine ru
 
 | What | From | Set it with |
 | --- | --- | --- |
-| Claude Code in thread guests, Claude Code or Codex in `rux agent` guests | rox's hooks into rix, because rux starts guests with `rox up --agents claude` (or `codex`) | `rix auth claude`, `rix auth codex` |
+| Claude Code or Codex in thread guests, Claude Code or Codex in `rux agent` guests | rox's hooks into rix, because rux starts guests with `rox up --agents claude` (or `codex`) | `rix auth claude`, `rix auth codex` |
 | GitHub, for the repo picker and for git in guests | `rix credential github` | `rix auth github` (a token), or nothing to use `gh`'s login |
 | Secrets that [actions](actions.md) list | `rix secret get` | `rix secret set NAME` |
 | Model API keys for the [harness](models.md) | rix secrets named for the provider | `rix secret set ANTHROPIC_API_KEY`, … |
