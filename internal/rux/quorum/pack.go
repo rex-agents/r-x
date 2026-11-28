@@ -105,7 +105,9 @@ func (h *packHub) snapshotLocked() PackSnapshot {
 	case n.IsLeader():
 		return h.leaderSnapshotLocked()
 	case h.cached != nil && time.Since(h.cachedAt) <= 3*n.cfg.ReportInterval+time.Second:
-		s := *h.cached
+		// A copy: the cached snapshot is shared with every earlier caller, who may still be
+		// reading it, so nothing in it can be written.
+		s := cloneSnapshot(*h.cached)
 		for i := range s.Authorities {
 			s.Authorities[i].Local = s.Authorities[i].Name == n.Name()
 		}
@@ -190,7 +192,8 @@ func (h *packHub) setCached(s PackSnapshot) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	old := h.cached
-	h.cached, h.cachedAt = &s, time.Now()
+	stored := cloneSnapshot(s)
+	h.cached, h.cachedAt = &stored, time.Now()
 	a, _ := json.Marshal(old)
 	s.Seq = 0
 	b, _ := json.Marshal(s)
@@ -303,4 +306,16 @@ func (n *Node) pushReport(ctx context.Context) {
 		return
 	}
 	n.pack.setCached(snap)
+}
+
+// cloneSnapshot copies what a caller might write: the authorities and their thread lists.
+// The raw JSON inside threads is never modified, so it stays shared.
+func cloneSnapshot(s PackSnapshot) PackSnapshot {
+	s.Authorities = append([]AuthorityInfo(nil), s.Authorities...)
+	for i := range s.Authorities {
+		a := &s.Authorities[i]
+		a.Threads = append([]json.RawMessage(nil), a.Threads...)
+		a.Subagents = append([]json.RawMessage(nil), a.Subagents...)
+	}
+	return s
 }
