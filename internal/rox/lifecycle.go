@@ -225,6 +225,9 @@ func Up(o *UpOptions) error {
 	agents := AgentSpec{}
 	if !o.NoAgents {
 		agents = MergeAgents(projectAgents(projectConfig, ProjectConfig), projectAgents(local, LocalConfig), flagAgents)
+		if agents, err = WithConfiguredVersions(agents); err != nil {
+			return err
+		}
 	}
 
 	launcherSettings, err := config.Section(backend)
@@ -785,6 +788,9 @@ func Add(name string, o *UpOptions) error {
 	wanted := AgentSpec{}
 	if !o.NoAgents {
 		wanted = MergeAgents(projectAgents(projectConfig, ProjectConfig), projectAgents(local, LocalConfig), flagAgents)
+		if wanted, err = WithConfiguredVersions(wanted); err != nil {
+			return err
+		}
 	}
 	var project *Project
 	var g *Guest

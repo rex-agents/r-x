@@ -7,11 +7,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/rex-agents/r-x/internal/rix"
 	"github.com/rex-agents/r-x/internal/sys"
 	"github.com/rex-agents/r-x/internal/ui"
 )
@@ -30,7 +30,31 @@ var agentLatest = map[string]string{
 const agentVersionTTL = 6 * time.Hour
 
 // VersionPattern matches agent versions such as 1.2.3 or 1.2.3-beta.1.
-var VersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`)
+var VersionPattern = rix.VersionPattern
+
+// WithConfiguredVersions pins each agent a project asked for at "latest" to the version
+// set in rix's config as agents.NAME.version. A version the project or --agents chose wins.
+func WithConfiguredVersions(spec AgentSpec) (AgentSpec, error) {
+	if len(spec) == 0 {
+		return spec, nil
+	}
+	c, err := rix.LoadConfig("")
+	if err != nil {
+		return nil, err
+	}
+	agents, err := c.Agents()
+	if err != nil {
+		return nil, err
+	}
+	out := AgentSpec{}
+	for agent, version := range spec {
+		if a := agents[agent]; a != nil && a.Version != "" && version == "latest" {
+			version = a.Version
+		}
+		out[agent] = version
+	}
+	return out, nil
+}
 
 // AgentSpec is what a project asks for: each agent with "latest" or a pinned version.
 type AgentSpec map[string]string

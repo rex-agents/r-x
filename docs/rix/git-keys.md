@@ -18,7 +18,7 @@ rix key ls                         # name and path of each key
 
 Keys are stored as `git_keys` in the [config](configuration.md). With **no** `git_keys` setting, guests get ssh's
 default identities that exist in `~/.ssh`: `id_rsa`, `id_ecdsa`, `id_ecdsa_sk`, `id_ed25519`, `id_ed25519_sk`
-(`rix key ls` says so). Removing the last key leaves an empty list, which means *no* keys, not the defaults.
+(`rix key ls` says so). Removing the last key unsets `git_keys`, so guests get those defaults again.
 A launch can override both with `rox up --git-key PATH`.
 
 ## Known hosts
