@@ -83,6 +83,18 @@ authority's threads to that authority. `GET /api/threads` also returns `authorit
 (a manager's workers) and `cost` for each thread; `?authority=NAME` or `?authority=all` lists another
 authority's or the whole pack's threads. The Go types are in `internal/rux/authapi`.
 
+### Projects from a local directory
+
+`POST /api/projects {"dir": PATH}` makes a project from a git checkout on this machine, and
+`GET /api/fs/dirs?path=P&hidden=1` lists the folders under P (default `$HOME`; each has `name`, `path` and
+`git`; at most 500; dot-folders only with `hidden=1`; nothing outside the home directory, and symlinks that
+lead out of it are skipped). Both are **loopback-only**: they work over `~/.rux/authority.sock` or a direct
+connection from 127.0.0.1 or ::1, and answer 403 to anything that arrives through `tailscale serve` (its proxy
+headers give it away; the check doesn't depend on `--allow-user`), from the tailnet, or from another
+authority. A reverse proxy of your own on the same machine that sets no forwarding header would look local, so
+don't put one in front of rux. [Adding a project](projects-and-managers.md#adding-a-project) says what the
+project's threads do.
+
 ### Placement
 
 `POST /api/threads` takes two more fields:

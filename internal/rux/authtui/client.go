@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -53,13 +54,40 @@ func (c *Client) do(method, path string, in, out any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("%s %s: %s %s", method, path, resp.Status, strings.TrimSpace(string(msg)))
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return &APIError{Method: method, Path: path, Status: resp.Status, Body: strings.TrimSpace(string(msg))}
 	}
 	if out == nil {
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// APIError is a non-2xx answer from the authority.
+type APIError struct{ Method, Path, Status, Body string }
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("%s %s: %s %s", e.Method, e.Path, e.Status, e.Body)
+}
+
+// Message is the server's own explanation ({"error": "..."}), else the status.
+func (e *APIError) Message() string {
+	var b struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal([]byte(e.Body), &b) == nil && b.Error != "" {
+		return b.Error
+	}
+	return strings.TrimSpace(e.Status + " " + e.Body)
+}
+
+// errMessage is err as a short sentence for the screen.
+func errMessage(err error) string {
+	var ae *APIError
+	if errors.As(err, &ae) {
+		return ae.Message()
+	}
+	return err.Error()
 }
 
 // Pack is GET /api/pack.
@@ -71,11 +99,14 @@ func (c *Client) Pack() (authapi.Pack, error) {
 
 // Project is the part of GET /api/projects the TUI shows.
 type Project struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Repo     string `json:"repo"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Repo string `json:"repo"`
+	// Dir is the checkout on the authority's machine, for a project made from a local directory.
+	Dir      string `json:"dir,omitempty"`
 	Threads  int    `json:"threads"`
 	Archived int    `json:"archived_threads"`
+	Closed   bool   `json:"archived"` // the project itself is archived
 }
 
 // Projects is GET /api/projects.
@@ -83,6 +114,71 @@ func (c *Client) Projects() ([]Project, error) {
 	var ps []Project
 	err := c.do("GET", "/api/projects", nil, &ps)
 	return ps, err
+}
+
+// Repo is a GitHub repository from GET /api/repos.
+type Repo struct {
+	Name        string `json:"name"` // owner/name
+	Private     bool   `json:"private"`
+	Description string `json:"description"`
+}
+
+// Repos is GET /api/repos: the user's GitHub repositories. Enabled is false when the authority
+// has no GitHub access; Error says why a listing failed.
+func (c *Client) Repos() (repos []Repo, enabled bool, errText string, err error) {
+	var out struct {
+		Enabled bool   `json:"enabled"`
+		Repos   []Repo `json:"repos"`
+		Error   string `json:"error"`
+	}
+	err = c.do("GET", "/api/repos", nil, &out)
+	return out.Repos, out.Enabled, out.Error, err
+}
+
+// DirEntry is a subdirectory in a FsDirs listing.
+type DirEntry struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+	Git  bool   `json:"git"`
+}
+
+// DirListing is GET /api/fs/dirs.
+type DirListing struct {
+	Path      string     `json:"path"`
+	Parent    string     `json:"parent"` // empty at the home directory
+	Home      string     `json:"home"`
+	Git       bool       `json:"git"` // Path is a git checkout
+	Dirs      []DirEntry `json:"dirs"`
+	Truncated bool       `json:"truncated"`
+}
+
+// FsDirs is GET /api/fs/dirs: the subdirectories of path (empty: the home directory) on the
+// authority's machine. Only the local socket and loopback may ask.
+func (c *Client) FsDirs(path string, hidden bool) (DirListing, error) {
+	q := url.Values{}
+	if path != "" {
+		q.Set("path", path)
+	}
+	if hidden {
+		q.Set("hidden", "1")
+	}
+	var out DirListing
+	err := c.do("GET", "/api/fs/dirs?"+q.Encode(), nil, &out)
+	return out, err
+}
+
+// CreateProject is POST /api/projects: the project for a GitHub repo (owner/name or a URL), or,
+// with dir, for a git checkout on the authority's machine.
+func (c *Client) CreateProject(repo, dir string) (Project, error) {
+	var p Project
+	body := map[string]string{}
+	if dir != "" {
+		body["dir"] = dir
+	} else {
+		body["repo"] = repo
+	}
+	err := c.do("POST", "/api/projects", body, &p)
+	return p, err
 }
 
 // Threads is GET /api/threads?authority=NAME (empty name: the whole pack).

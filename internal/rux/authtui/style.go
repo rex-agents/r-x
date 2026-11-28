@@ -40,3 +40,6 @@ func statusColor(s string) lipgloss.Color {
 func dot(status string) string {
 	return lipgloss.NewStyle().Foreground(statusColor(status)).Render("●")
 }
+
+// stGit marks a git checkout in the directory browser.
+var stGit = lipgloss.NewStyle().Foreground(hGreen)

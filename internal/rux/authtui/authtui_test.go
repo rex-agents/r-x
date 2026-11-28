@@ -24,9 +24,11 @@ type fake struct {
 	pack     authapi.Pack
 	created  []map[string]any
 	sent     []string
-	stopped  []string      // threads interrupted
-	managers []string      // "project:text" of started managers
-	headers  []http.Header // of each pack stream request
+	stopped  []string            // threads interrupted
+	managers []string            // "project:text" of started managers
+	made     []map[string]string // POST /api/projects bodies
+	fsPaths  []string            // GET /api/fs/dirs queries (path + hidden)
+	headers  []http.Header       // of each pack stream request
 	sse      chan string
 	srv      *httptest.Server
 }
@@ -87,6 +89,60 @@ func newFake(t *testing.T) *fake {
 	})
 	mux.HandleFunc("GET /api/projects", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `[{"id":"web","name":"web app","repo":"acme/web"},{"id":"api","name":"api","repo":"acme/api"}]`)
+	})
+	mux.HandleFunc("GET /api/repos", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"enabled":true,"repos":[{"name":"acme/web","private":true,"description":"the site"},{"name":"acme/api"},{"name":"acme/newrepo","description":"fresh"},{"name":"zed/webhooks"}]}`)
+	})
+	mux.HandleFunc("POST /api/projects", func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]string
+		json.NewDecoder(r.Body).Decode(&b)
+		f.mu.Lock()
+		f.made = append(f.made, b)
+		f.mu.Unlock()
+		if d := b["dir"]; d != "" {
+			if d == "/home/u/docs" || d == "/home/u" {
+				w.WriteHeader(400)
+				fmt.Fprintf(w, `{"error":"%s is not a git repository; run git init and commit first"}`, d)
+				return
+			}
+			base := d[strings.LastIndex(d, "/")+1:]
+			fmt.Fprintf(w, `{"id":"%s","name":"%s","dir":"%s","repo":"https://github.com/acme/%s.git"}`, base, base, d, base)
+			return
+		}
+		id := strings.ReplaceAll(strings.TrimSuffix(b["repo"], ".git"), "/", "-")
+		fmt.Fprintf(w, `{"id":"%s","name":"%s","repo":"%s"}`, id, b["repo"], b["repo"])
+	})
+	mux.HandleFunc("GET /api/fs/dirs", func(w http.ResponseWriter, r *http.Request) {
+		p, hidden := r.URL.Query().Get("path"), r.URL.Query().Get("hidden") == "1"
+		f.mu.Lock()
+		f.fsPaths = append(f.fsPaths, p+"|"+r.URL.Query().Get("hidden"))
+		f.mu.Unlock()
+		tree := map[string][]string{
+			"":              {"code", "docs", ".config", "notes"},
+			"/home/u":       {"code", "docs", ".config", "notes"},
+			"/home/u/code":  {"app*", "lib*", "misc"},
+			"/home/u/docs":  {},
+			"/home/u/notes": {"a"},
+		}
+		names, ok := tree[p]
+		if !ok {
+			w.WriteHeader(404)
+			fmt.Fprintf(w, `{"error":"%s doesn't exist"}`, p)
+			return
+		}
+		dir := cmpOr(p, "/home/u")
+		parent := ""
+		if dir != "/home/u" {
+			parent = dir[:strings.LastIndex(dir, "/")]
+		}
+		var ents []string
+		for _, n := range names {
+			if strings.HasPrefix(n, ".") && !hidden {
+				continue
+			}
+			ents = append(ents, fmt.Sprintf(`{"name":"%s","path":"%s/%s","git":%v}`, strings.TrimSuffix(n, "*"), dir, strings.TrimSuffix(n, "*"), strings.HasSuffix(n, "*")))
+		}
+		fmt.Fprintf(w, `{"path":"%s","parent":"%s","home":"/home/u","git":false,"dirs":[%s]}`, dir, parent, strings.Join(ents, ","))
 	})
 	mux.HandleFunc("GET /api/pack/stream", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -198,6 +254,10 @@ func press(m *Model, keys ...string) {
 			msg = tea.KeyMsg{Type: tea.KeyCtrlL}
 		case "ctrl+e":
 			msg = tea.KeyMsg{Type: tea.KeyCtrlE}
+		case "ctrl+a":
+			msg = tea.KeyMsg{Type: tea.KeyCtrlA}
+		case "backspace":
+			msg = tea.KeyMsg{Type: tea.KeyBackspace}
 		default:
 			msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 		}
