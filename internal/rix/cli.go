@@ -531,15 +531,19 @@ func Apply(name string) error {
 	}
 	s.End()
 	ui.Header("apply", name)
-	if len(g.Agents) == 0 {
-		ui.Skip("%s has no agent CLIs, so there's nothing to sign in", name)
-		return nil
-	}
 	c, err := LoadConfig("")
 	if err != nil {
 		return err
 	}
 	out := &Outcome{}
+	if err := ui.Run("Setting the Git identity", "Set the Git identity", func(*ui.Step) error { return PushGitIdentity(c, g, out) }); err != nil {
+		return err
+	}
+	if len(g.Agents) == 0 {
+		show(out)
+		ui.Skip("%s has no agent CLIs, so there's nothing to sign in", name)
+		return nil
+	}
 	if err := ui.Run("Signing in agent CLIs", "Pushed credentials", func(*ui.Step) error { return PushCredentials(c, g, out) }); err != nil {
 		return err
 	}
