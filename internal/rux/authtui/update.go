@@ -59,6 +59,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.openThread(msg.id))
 		}
 		return m, tea.Batch(cmds...)
+	case mgrStartedMsg:
+		msg.mgr.starting = false
+		if msg.err != nil {
+			msg.mgr.err = "the manager did not start: " + msg.err.Error()
+			if m.mgr == msg.mgr {
+				m.input.SetValue(msg.mgr.text)
+				m.input.CursorEnd()
+				m.flash = msg.mgr.err
+				m.repaint()
+			}
+			return m, nil
+		}
+		cmds := []tea.Cmd{m.fetchPack()}
+		if m.mgr == msg.mgr && msg.id != "" {
+			m.mgr = nil
+			cmds = append(cmds, m.openThread(msg.id))
+		}
+		return m, tea.Batch(cmds...)
 	case sentMsg:
 		if msg.err != nil {
 			m.flash = "send failed: " + msg.err.Error()
@@ -127,7 +145,7 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "1":
 		m.tab = tabPack
 	case "2":
-		if m.convID != "" {
+		if m.convID != "" || m.mgr != nil {
 			m.tab = tabThread
 		}
 	case "3":
@@ -170,7 +188,7 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case n.th != nil:
 			return m, m.openThread(n.th.ID)
 		case n.kind == colProject && n.noMgr && !n.scratch:
-			m.openManagerForm(n, "")
+			m.openManagerConv(n, "")
 			return m, textinput.Blink
 		case n.sub != nil:
 			if t := m.selected(colThread); t != nil {
@@ -182,7 +200,7 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		// Typing on a project that has no manager starts one with what's typed.
 		if n := m.current(); len(k.Runes) > 0 && m.focus == colProject && n != nil && n.noMgr && !n.scratch && !strings.ContainsRune("q?123an", k.Runes[0]) {
-			m.openManagerForm(n, string(k.Runes))
+			m.openManagerConv(n, string(k.Runes))
 			return m, textinput.Blink
 		}
 	}
@@ -252,7 +270,7 @@ func (m *Model) openThread(id string) tea.Cmd { return m.openConv(id, "") }
 
 // openConv opens a thread's conversation, or one of its sub-agents' (read-only).
 func (m *Model) openConv(id, sub string) tea.Cmd {
-	m.convID, m.convSub, m.tab, m.follow = id, sub, tabThread, true
+	m.convID, m.convSub, m.tab, m.follow, m.mgr = id, sub, tabThread, true, nil
 	m.input.SetValue("")
 	m.input.Focus()
 	m.layoutConversation()
@@ -269,6 +287,11 @@ func (m *Model) openConv(id, sub string) tea.Cmd {
 // convKey takes the harness's keys: esc interrupts a working thread, ctrl+e opens every tool
 // call, pgup, pgdown, home and end scroll. A sub-agent's conversation is read-only.
 func (m *Model) convKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.mgr != nil && k.String() == "esc" {
+		m.mgr, m.tab = nil, tabPack
+		m.input.Blur()
+		return m, nil
+	}
 	switch k.String() {
 	case "esc":
 		if m.working() {
@@ -303,6 +326,19 @@ func (m *Model) convKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		text := trim(m.input.Value())
 		if text == "" || m.convSub != "" {
 			return m, nil
+		}
+		if g := m.mgr; g != nil {
+			if g.starting {
+				return m, nil
+			}
+			g.text, g.starting, g.err = text, true, ""
+			m.input.SetValue("")
+			m.follow = true
+			m.repaint()
+			return m, func() tea.Msg {
+				id, err := m.c.StartManager(g.project, text)
+				return mgrStartedMsg{g, id, err}
+			}
 		}
 		m.input.SetValue("")
 		id := m.convID
@@ -360,42 +396,20 @@ func (m *Model) openForm() {
 	m.form = f
 }
 
-// openManagerForm asks what a project's new manager should do.
-func (m *Model) openManagerForm(n *node, seed string) {
-	in := textinput.New()
-	in.Prompt = "❯ "
-	in.Placeholder = "what should the manager do?"
-	in.SetValue(seed)
-	in.CursorEnd()
-	in.Focus()
-	m.form = &newForm{prompt: in, manager: true, project: n.project, projLabel: n.name, choices: []string{""}}
+// openManagerConv opens the conversation with a project's manager, which has no thread yet;
+// seed goes into the input.
+func (m *Model) openManagerConv(n *node, seed string) {
+	m.mgr = &mgrConv{project: n.project, name: n.name}
+	m.convID, m.convSub, m.tab, m.follow = "", "", tabThread, true
+	m.input.SetValue(seed)
+	m.input.CursorEnd()
+	m.input.Focus()
+	m.layoutConversation()
+	m.repaint()
 }
 
 func (m *Model) formKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	f := m.form
-	if f.manager {
-		switch k.String() {
-		case "esc":
-			m.form = nil
-		case "enter":
-			text := trim(f.prompt.Value())
-			if text == "" {
-				m.flash = "type what the manager should do first"
-				return m, nil
-			}
-			project := f.project
-			m.form = nil
-			return m, func() tea.Msg {
-				id, err := m.c.StartManager(project, text)
-				return createdMsg{id, err}
-			}
-		default:
-			var cmd tea.Cmd
-			f.prompt, cmd = f.prompt.Update(k)
-			return m, cmd
-		}
-		return m, nil
-	}
 	switch k.String() {
 	case "esc":
 		m.form = nil
