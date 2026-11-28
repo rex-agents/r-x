@@ -16,14 +16,18 @@ import (
 // new threads and notes that every thread in it gets in its system prompt.
 // Blank threads belong to the "scratch" project.
 type project struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Repo     string `json:"repo,omitempty"`
-	Branch   string `json:"branch,omitempty"`
-	Model    string `json:"model,omitempty"`
-	Effort   string `json:"effort,omitempty"`
-	Notes    string `json:"notes,omitempty"`
-	Archived bool   `json:"archived,omitempty"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Repo   string `json:"repo,omitempty"`
+	Branch string `json:"branch,omitempty"`
+	// Dir is a checkout on the authority named in Authority: threads get a copy of it
+	// (rox up --local) instead of a clone of Repo, which is then only for display.
+	Dir       string `json:"dir,omitempty"`
+	Authority string `json:"authority,omitempty"`
+	Model     string `json:"model,omitempty"`
+	Effort    string `json:"effort,omitempty"`
+	Notes     string `json:"notes,omitempty"`
+	Archived  bool   `json:"archived,omitempty"`
 	// Host tools turned on for the project, the ones that run without asking,
 	// and per-tool settings.
 	Tools        []string                     `json:"tools,omitempty"`
@@ -214,11 +218,29 @@ func (s *server) handleProjectGet(w http.ResponseWriter, r *http.Request) {
 	httpErr(w, 404, "no such project")
 }
 
-// handleProjectCreate makes (or returns) the project for a repo.
+// handleProjectCreate makes (or returns) the project for a repo, or for a directory on this
+// machine ({"dir": PATH}), which only the local socket and loopback may ask for.
 func (s *server) handleProjectCreate(w http.ResponseWriter, r *http.Request) {
-	var req struct{ Repo string }
+	var req struct{ Repo, Dir string }
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpErr(w, 400, "bad JSON")
+		return
+	}
+	if strings.TrimSpace(req.Dir) != "" {
+		if !localOnly(r) {
+			httpErr(w, 403, "projects from a local directory can only be added from this machine (the rux TUI or loopback), not over the tailnet")
+			return
+		}
+		if strings.TrimSpace(req.Repo) != "" {
+			httpErr(w, 400, "give repo or dir, not both")
+			return
+		}
+		p, err := s.ensureDirProject(req.Dir)
+		if err != nil {
+			httpErr(w, errorCode(err), err.Error())
+			return
+		}
+		writeJSONResp(w, 200, p)
 		return
 	}
 	repo := strings.TrimSpace(req.Repo)

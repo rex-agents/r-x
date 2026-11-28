@@ -70,6 +70,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.repaint()
 		}
 		return m, c
+	case reposMsg, dirsMsg, projectMsg:
+		cmd, _ := m.projUpdate(msg)
+		return m, cmd
 	case tea.MouseMsg:
 		return m, m.mouse(msg)
 	case tea.KeyMsg:
@@ -99,6 +102,8 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	m.flash = ""
 	switch {
+	case m.pform != nil:
+		return m.projKey(k)
 	case m.form != nil:
 		return m.formKey(k)
 	case m.help:
@@ -133,6 +138,10 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n":
 		m.openForm()
 		return m, textinput.Blink
+	case "p":
+		if m.tab == tabPack {
+			return m, m.openProjForm()
+		}
 	case "esc":
 		m.tab = tabPack
 	}
@@ -313,7 +322,7 @@ func (m *Model) convKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // mouse opens a tool call that's clicked, and scrolls the open conversation with the wheel.
 func (m *Model) mouse(msg tea.MouseMsg) tea.Cmd {
-	if m.tab != tabThread || m.form != nil || m.help {
+	if m.tab != tabThread || m.form != nil || m.pform != nil || m.help {
 		return nil
 	}
 	if msg.Action == tea.MouseActionRelease && msg.Button == tea.MouseButtonLeft {

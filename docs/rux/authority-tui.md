@@ -47,6 +47,7 @@ The columns:
 | `↑` `↓` `j` `k` | move within a column (the columns to the right follow) |
 | `enter` | on a thread or a project's manager: open its conversation; on a project with no manager: start one; elsewhere: step into the next column |
 | `n` | new thread in the selected project |
+| `p` | new project, from GitHub or a local directory |
 | `tab` | PACK ↔ MONITOR (`1` `2` `3` jump to PACK, THREAD, MONITOR) |
 | `a` | show or hide archived threads |
 | `?` | help |
@@ -66,6 +67,26 @@ The columns:
 ```
 
 and opens the new thread.
+
+### New project
+
+`p` opens a dialog with two tabs (`tab` switches). `esc` cancels, and errors show inside the dialog.
+
+- **GitHub**: your repositories (`GET /api/repos`), filtered as you type. A name you type that looks like a
+  repo (`owner/name`, a URL, `git@github.com:owner/name`) gets a "use as typed" row on top. `enter` adds the
+  highlighted row.
+- **Local directory**: a browser for the authority's machine, starting at your home directory
+  (`GET /api/fs/dirs`; only folders inside home). Git checkouts are marked `git`. `enter` or `→` opens the
+  highlighted folder, `←` or backspace (with an empty filter) goes up, and typing filters (start with `.` to
+  see dot-folders). `enter` on the first row, "this directory", adds the folder you're in, and `ctrl+a` adds
+  the highlighted one without opening it. To enter a path by hand, type it starting with `/` or `~` and press
+  `enter` on the first row. A folder that isn't a usable checkout comes back with the server's reason in the
+  dialog, for example *not a git repository; run git init and commit first*.
+
+Both end in `POST /api/projects` (`{"repo": ...}` or `{"dir": ...}`; see
+[Adding a project](projects-and-managers.md#adding-a-project)), and the new project is selected in the
+PROJECT AGENTS column. A directory project's card and preview show its path, with `~` for home. Browsing and
+adding directories only work from the machine itself, so the TUI there talks to the authority's unix socket.
 
 ### Monitor
 
@@ -89,6 +110,7 @@ The TUI keeps no state of its own and reads nothing from `~/.rux`: it is only a 
 | Send a message | `POST /api/threads/{id}/messages` |
 | New thread, with `placement` | `POST /api/threads` |
 | Start a project's manager | `POST /api/projects/{id}/manager` |
+| New project | `POST /api/projects` (`{"repo"}` or `{"dir"}`), picked with `GET /api/repos` and `GET /api/fs/dirs?path=&hidden=1` |
 
 The web app's **pack** tab (`#/pack`) has three columns (stacked on a phone), from the same feed: **LEADER** (name, term, vault, authorities up/total, threads working/total), **PROJECT AGENTS** (one card per project with its manager thread, `kind: "manager"`: status, workers working/total, cost; tapping it opens the manager's conversation; a project with threads but no manager says so and opens the manager composer; threads with no project are "scratch"), and **THREADS** (the selected project's workers and hand-started threads, newest first, each with status, authority, guest and a sub-agent count that opens the sub-agent's conversation; archived ones behind the *archived* toggle). The **monitor** tab (`#/monitor`) has **CLIENTS** (`pack.clients`: kind, device, authority, last seen), **HOSTS** (status, leader mark, OS, CPUs, load, guest slots, uptime; tap one to filter the guests) and **GUESTS** (`authority.guests`: phase, backend, CPU %, memory, and the thread using it, which opens when tapped). It no longer reads `/api/overview`. `kind`, `guests` and `clients` are optional (an older authority omits them), and `pack.clients` carries the full client list. Open `/?fixture` to render `web/fixture.json` with no authority. Anything the TUI can do is a call the web app can make, and the wire types live in `internal/rux/authapi`.
 
