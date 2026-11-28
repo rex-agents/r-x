@@ -17,9 +17,6 @@ needs `REX_SESSION` and `REX_BLOCK`, which Rex sets in your terminal, so run it 
 - Check `rux`, `rox` and `rex` are on PATH. Guests get the agent CLI's credentials from rix: if a
   sub-agent's pane says it isn't signed in, tell the user to run `rix auth claude` (or `rix auth codex`)
   instead of working around it.
-- The user watches the sub-agents in `rux monitor`. When you're the lead that `rux` started, it's open in
-  a pane below you; otherwise offer to open it:
-  `rex split -s "$REX_SESSION" -b "$REX_BLOCK" --split=below --ratio 30 --focus=false -- rux monitor`
 - Run from the project's checkout. Sub-agents clone its `origin` by default. Agents can only see what's
   pushed, so if the task depends on local commits or changes, ask the user before you push them anywhere.
 

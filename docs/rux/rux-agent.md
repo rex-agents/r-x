@@ -72,5 +72,3 @@ prints the log, `wait` and `stop` work as usual, and `send` and `focus` need a p
 - `stop` marks the agent stopped first, so a pane that's still setting up can't move it on. If `rox up` is still running, the
   pane lets it finish, learns the guest's name and removes the guest itself (`stop` waits up to ten minutes, then leaves
   it to the pane). If removal fails, run `stop` again. `--keep-guest`, or an existing guest, keeps the guest.
-
-To watch the agents, use [`rux monitor`](monitor.md).

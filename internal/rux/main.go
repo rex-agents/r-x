@@ -4,7 +4,6 @@
 //	rux agent [PROMPT] - the harness: a lead agent that runs sub-agents in rox guests, in this context
 //	rux agent spawn|ls|read|send|wait|focus|stop - sub-agents in Rox guests, in Rex panes, for an orchestrating Claude Code or Codex session
 //	rux lead PROMPT - Claude Code as the lead agent in this Rex pane
-//	rux monitor - sub-agents, guests and the host, from Rex
 //	rux serve   - coordinator + host agent: web app, thread store, launches guests
 //	rux skill   - install the rux skill that teaches Claude Code or Codex to orchestrate with rux agent
 //	rux runner  - runs inside a guest: owns the claude process and dials home
@@ -45,8 +44,6 @@ func Main(version string, args []string) int {
 	case "lead", "claude":
 		// Claude Code as the lead, with sub-agents in Rex panes.
 		runLead(os.Args[2:])
-	case "monitor":
-		runMonitor()
 	case "view":
 		runView(os.Args[2:])
 	case "statusline":
@@ -164,7 +161,6 @@ func help(w io.Writer) {
 		}},
 		{"Claude Code as the lead, in Rex", []cmd{
 			{"rux claude [PROMPT]", "make this Rex pane Claude Code, with sub-agents in panes beside it (alias: lead)"},
-			{"rux monitor", "watch this Rex session's sub-agents, guests and host"},
 			{"rux agent spawn|ls|read|send|wait|focus|stop", "run sub-agents in Rex panes, for an orchestrating Claude Code or Codex"},
 			{"rux skill install|show", "install or print the rux skill for Claude Code or Codex"},
 		}},
