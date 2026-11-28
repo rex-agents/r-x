@@ -221,6 +221,10 @@ func TestNavigationAndSelectionPath(t *testing.T) {
 			t.Errorf("view lacks %q", want)
 		}
 	}
+	// The T-rex sits at the bottom of the first column, under the hosts.
+	if h, r := strings.Index(v, "HOSTS"), strings.Index(v, "T-REX"); h < 0 || r < h {
+		t.Errorf("T-rex should be below HOSTS (HOSTS at %d, T-REX at %d)", h, r)
+	}
 }
 
 func TestConnectorsAndPreview(t *testing.T) {

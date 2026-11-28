@@ -259,11 +259,13 @@ type colRender struct {
 
 func (m *Model) renderColumn(c, w, h int, logo bool) colRender {
 	lines := make([]string, 0, h)
+	// The T-rex sits at the bottom of column 0, under the cards.
+	var logoLines []string
 	if logo && c == 0 {
 		for _, l := range strings.Split(m.opts.Logo(m.phase), "\n") {
-			lines = append(lines, fit(l, w))
+			logoLines = append(logoLines, fit(l, w))
 		}
-		lines = lines[:min(len(lines), h)]
+		logoLines = logoLines[:min(len(logoLines), max(h-1, 0))]
 	}
 	titleStyle := stFaint
 	if c == m.focus {
@@ -271,7 +273,7 @@ func (m *Model) renderColumn(c, w, h int, logo bool) colRender {
 	}
 	lines = append(lines, fit(titleStyle.Render(colTitles[c]), w))
 	nodes := m.column(c)
-	room := h - len(lines)
+	room := h - len(lines) - len(logoLines)
 	rows := max(room/cardH, 1)
 	sel := min(max(m.sel[c], 0), max(len(nodes)-1, 0))
 	off := 0
@@ -289,9 +291,11 @@ func (m *Model) renderColumn(c, w, h int, logo bool) colRender {
 		}
 		lines = append(lines, m.card(nodes[i], w, isSel, c == m.focus)...)
 	}
-	for len(lines) < h {
+	lines = lines[:min(len(lines), h-len(logoLines))]
+	for len(lines) < h-len(logoLines) {
 		lines = append(lines, blank(w))
 	}
+	lines = append(lines, logoLines...)
 	return colRender{lines[:h], mid}
 }
 
